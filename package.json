@@ -1,0 +1,60 @@
+{
+  "name": "dsh-aquasense",
+  "version": "0.1.0",
+  "description": "Aquaculture monitoring plugin for DeepSeek Harness: photo-based fish health analysis (normal/early/disease), IMA knowledge-backed advice and Feishu/Lark Bitable ledger for inspection scenes S1-S9. 鲈鱼养殖 AI 巡检诊断与飞书台账插件。",
+  "license": "MIT",
+  "author": "dsh-AquaSense contributors",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "dsh-aquasense-remind": "./dist/scheduler/daily-reminder.js"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "skills",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "aquaculture",
+    "fish-farming",
+    "feishu",
+    "lark",
+    "bitable",
+    "ima"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "remind": "tsx src/scheduler/daily-reminder.ts",
+    "remind:prod": "node dist/scheduler/daily-reminder.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/G00F000/dsh-aquasense.git"
+  }
+}
