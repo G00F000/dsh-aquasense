@@ -6,7 +6,7 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { searchKnowledge } from '../ima/ima-api.js'
+import { searchKnowledge, type SearchResult, type KnowledgeItem } from '../ima/ima-api.js'
 
 interface AnalysisInput {
   abnormal?: boolean
@@ -44,11 +44,12 @@ export const generateAdvice = defineTool({
     let knowledgeRefs: string[] = []
 
     try {
-      // 根据症状构建搜索关键词
+      // 根据症状构建搜索关键词(IMA 是关键词匹配非语义检索,多词拼接会 0 命中)
       const query = buildKnowledgeQuery(analysis)
       console.log(`[aquasense] 查询知识库:${query}`)
 
-      knowledge = await searchKnowledge(query)
+      // 逐关键词查询再合并去重(解决多词空格拼接 0 命中的问题)
+      knowledge = await searchKnowledgeMerged(query)
 
       if (knowledge.items.length > 0) {
         knowledgeRefs = knowledge.items.map((item) => `《${item.title}》${item.source ? `- ${item.source}` : ''}`)
@@ -141,4 +142,52 @@ function buildKnowledgeQuery(analysis: AnalysisInput): string {
   keywords.push('鲈鱼')
 
   return keywords.join(' ')
+}
+
+/**
+ * 合并多关键词查询结果(IMA 是关键词匹配,多词空格拼接会 0 命中)
+ * 策略:逐词查询 → 按命中数排序 → 合并去重取前 5 条
+ */
+async function searchKnowledgeMerged(rawQuery: string): Promise<SearchResult> {
+  // 拆分原始查询为独立关键词,过滤空串和低价值词
+  const lowValueWords = new Set(['的', '了', '和', '是', '在', '有', '把', '被'])
+  const keywords = rawQuery
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 1 && !lowValueWords.has(w))
+
+  // 去重
+  const uniqueKeywords = [...new Set(keywords)]
+
+  // 如果只有 1 个词,直接查
+  if (uniqueKeywords.length <= 1) {
+    return searchKnowledge(uniqueKeywords[0] || rawQuery)
+  }
+
+  // 逐词查询,收集所有结果
+  const allItems: Map<string, { item: KnowledgeItem; hits: number }> = new Map()
+
+  for (const kw of uniqueKeywords) {
+    try {
+      const result = await searchKnowledge(kw)
+      for (const item of result.items) {
+        const existing = allItems.get(item.media_id)
+        if (existing) {
+          existing.hits++
+        } else {
+          allItems.set(item.media_id, { item, hits: 1 })
+        }
+      }
+    } catch {
+      // 单个词查询失败不影响整体
+    }
+  }
+
+  // 按命中关键词数降序排序,取前 5 条
+  const sorted = [...allItems.values()]
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, 5)
+    .map((entry) => entry.item)
+
+  return { items: sorted, total: sorted.length }
 }

@@ -61,8 +61,8 @@ async function callIMAApi(apiPath: string, body: Record<string, unknown>): Promi
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-IMA-Client-ID': clientId,
-      'X-IMA-API-Key': apiKey
+      'ima-openapi-clientid': clientId,
+      'ima-openapi-apikey': apiKey
     },
     body: JSON.stringify(body)
   })
@@ -89,8 +89,9 @@ export async function searchKnowledge(query: string, kbId?: string): Promise<Sea
       })
 
       // 选择第一个匹配的知识库
-      if (kbList?.knowledge_bases?.length > 0) {
-        kbId = kbList.knowledge_bases[0].knowledge_base_id
+      const kbs = kbList?.info_list ?? []
+      if (kbs.length > 0) {
+        kbId = kbs[0].kb_id
       } else {
         console.log('[ima] 未找到水产养殖知识库')
         return { items: [], total: 0 }
@@ -129,7 +130,8 @@ export async function getMediaInfo(mediaId: string): Promise<any> {
 
 /**
  * 从 get_media_info 的原始返回值中提取正文文本
- * IMA 各媒体类型的正文字段不同,按常见字段名依次尝试,兜底序列化。
+ * IMA 各媒体类型的正文字段不同,按常见字段名依次尝试;
+ * 笔记类文档(url_info.url 为 chrome://note?...)需二次请求获取正文。
  */
 function extractMediaText(raw: unknown): string {
   if (typeof raw === 'string') {
@@ -137,11 +139,28 @@ function extractMediaText(raw: unknown): string {
   }
   if (raw && typeof raw === 'object') {
     const obj = raw as Record<string, unknown>
+    // 1. 直接字段匹配(文档/文本类媒体)
     for (const key of ['content', 'media_content', 'text', 'title', 'abstract']) {
       const value = obj[key]
       if (typeof value === 'string' && value.length > 0) {
         return value
       }
+    }
+    // 2. 笔记类: url_info.url 可能是 chrome://note?... 协议(无法 fetch)
+    //    或 http(s):// 链接(可 fetch 正文)
+    const urlInfo = obj['url_info'] as Record<string, unknown> | undefined
+    if (urlInfo && typeof urlInfo.url === 'string') {
+      const url = urlInfo.url as string
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        return `[需从 URL 获取正文] ${url}`
+      }
+      // chrome://note?docid=... 等不可 fetch 协议
+      return `[笔记协议无法直接读取] ${url}`
+    }
+    // 3. notebook_ext_info 笔记扩展信息
+    const nbExt = obj['notebook_ext_info'] as Record<string, unknown> | undefined
+    if (nbExt?.notebook_id) {
+      return `[笔记内容需要通过 IMA 客户端读取] notebook_id=${nbExt.notebook_id}`
     }
   }
   return JSON.stringify(raw)
