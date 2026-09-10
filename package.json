@@ -36,7 +36,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepare": "npm run build",
     "remind": "tsx src/scheduler/daily-reminder.ts",
-    "remind:prod": "node dist/scheduler/daily-reminder.js"
+    "remind:prod": "node dist/scheduler/daily-reminder.js",
+    "kb:warm": "tsx src/scripts/warm-pdf-cache.ts"
   },
   "dsh": {
     "bundle": {
@@ -57,5 +58,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/G00F000/dsh-aquasense.git"
+  },
+  "dependencies": {
+    "unpdf": "^1.8.1"
   }
 }

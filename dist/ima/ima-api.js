@@ -1,10 +1,16 @@
 /**
  * IMA API 封装模块
  * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)与 daily-reminder(S9 手册读取)调用。
+ *
+ * 正文层:
+ *  - PDF(media_type=1):经 get_media_info 的 url_info 下载,用 unpdf(pdf.js)提取文本层并按 media_id 缓存;
+ *    扫描件(无文本层)留标记,待 OCR 兜底。
+ *  - 笔记/其他类型:沿用字段提取与占位标记(见 extractMediaText)。
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { extractText, getDocumentProxy } from 'unpdf';
 const IMA_BASE_URL = 'https://ima.qq.com';
 /**
  * 获取 IMA API 凭证
@@ -49,25 +55,27 @@ async function callIMAApi(apiPath, body) {
     return result.data;
 }
 /**
+ * 定位知识库 ID:按名称搜索"水产养殖"知识库并取第一个匹配项
+ * (searchKnowledge 与批量预热脚本共用)
+ */
+export async function resolveKnowledgeBaseId(query = '水产养殖') {
+    const kbList = await callIMAApi('openapi/wiki/v1/search_knowledge_base', { query, limit: 10 });
+    const kbs = kbList?.info_list ?? [];
+    return kbs.length > 0 ? kbs[0].kb_id : null;
+}
+/**
  * 搜索知识库:自动定位"水产养殖"知识库后执行关键词搜索
  */
 export async function searchKnowledge(query, kbId) {
     try {
-        // 1. 先获取知识库列表,找到目标知识库
+        // 1. 先定位目标知识库
         if (!kbId) {
-            const kbList = await callIMAApi('openapi/wiki/v1/search_knowledge_base', {
-                query: '水产养殖',
-                limit: 10
-            });
-            // 选择第一个匹配的知识库
-            const kbs = kbList?.info_list ?? [];
-            if (kbs.length > 0) {
-                kbId = kbs[0].kb_id;
-            }
-            else {
+            const resolved = await resolveKnowledgeBaseId();
+            if (!resolved) {
                 console.log('[ima] 未找到水产养殖知识库');
                 return { items: [], total: 0 };
             }
+            kbId = resolved;
         }
         // 2. 搜索知识库内容
         const searchResult = await callIMAApi('openapi/wiki/v1/search_knowledge', {
@@ -91,10 +99,85 @@ export async function searchKnowledge(query, kbId) {
     }
 }
 /**
+ * 浏览知识库内容(单页):供批量预热/巡检脚本逐级遍历使用
+ * 文件夹条目含 folder_id,文件条目含 media_id;cursor 首次传空字符串
+ */
+export async function listKnowledge(kbId, cursor = '', folderId, limit = 50) {
+    const data = await callIMAApi('openapi/wiki/v1/get_knowledge_list', {
+        cursor,
+        limit,
+        knowledge_base_id: kbId,
+        ...(folderId ? { folder_id: folderId } : {})
+    });
+    const items = (data?.knowledge_list ?? []).map((entry) => {
+        if (entry?.folder_id) {
+            return { kind: 'folder', title: entry.name ?? '', folderId: entry.folder_id };
+        }
+        return { kind: 'file', title: entry.title ?? '', mediaId: entry.media_id };
+    });
+    return { items, nextCursor: data?.next_cursor ?? '', isEnd: data?.is_end === true };
+}
+/**
  * 获取媒体详情(原始返回值)
  */
 export async function getMediaInfo(mediaId) {
     return callIMAApi('openapi/wiki/v1/get_media_info', { media_id: mediaId });
+}
+// ========== 正文层:PDF(media_type=1) ==========
+/** 单文件大小上限:IMA 允许 200MB,超限直接跳过,避免内存与耗时失控 */
+const MAX_PDF_BYTES = 50 * 1024 * 1024;
+/** 扫描件判定阈值:页均字符数低于该值视为无文本层(pdf.js 提取不到,需 OCR 兜底) */
+const MIN_CHARS_PER_PAGE = 50;
+/** PDF 文本缓存目录(与 daily-reminder 共用 AQUASENSE_CACHE_DIR 约定) */
+function pdfCacheDir() {
+    const dir = join(process.env.AQUASENSE_CACHE_DIR || './cache', 'pdf');
+    mkdirSync(dir, { recursive: true });
+    return dir;
+}
+/** 字节数格式化(仅用于超限标记文案) */
+function formatSize(bytes) {
+    if (bytes >= 1024 * 1024)
+        return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+    return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
+/**
+ * 下载并解析 PDF 正文(按 media_id 落盘缓存)
+ * 首次访问承担下载+解析开销,其后命中缓存零成本;84 条 PDF 预热一次后运行时全走缓存。
+ * unpdf 内置 pdf.js serverless 构建,Node 下自动配置标准字体与 CJK cMap,降低中文提取乱码风险。
+ */
+async function getPdfContent(mediaId, urlInfo) {
+    const cachePath = join(pdfCacheDir(), `${mediaId}.txt`);
+    if (existsSync(cachePath)) {
+        return readFileSync(cachePath, 'utf8');
+    }
+    // 1. 下载(url_info.headers 如鉴权头必须携带,否则下载失败)
+    console.log(`[ima] 下载 PDF:${mediaId}`);
+    const response = await fetch(urlInfo.url, { headers: urlInfo.headers });
+    if (!response.ok) {
+        throw new Error(`[ima] PDF 下载失败:HTTP ${response.status}`);
+    }
+    const declaredSize = Number(response.headers.get('content-length') ?? 0);
+    if (declaredSize > MAX_PDF_BYTES) {
+        return `[PDF 超限:${formatSize(declaredSize)},已跳过解析]`;
+    }
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    if (buffer.byteLength > MAX_PDF_BYTES) {
+        return `[PDF 超限:${formatSize(buffer.byteLength)},已跳过解析]`;
+    }
+    // 2. 提取文本层
+    const pdf = await getDocumentProxy(buffer);
+    const { totalPages, text } = await extractText(pdf, { mergePages: true });
+    const content = Array.isArray(text) ? text.join('\n') : text;
+    // 3. 扫描件判定:文本层缺失时留标记(缓存写入真实提取结果,后续 OCR 兜底可覆写同名缓存)
+    const avgChars = totalPages > 0 ? content.length / totalPages : 0;
+    let result = content;
+    if (avgChars < MIN_CHARS_PER_PAGE) {
+        console.warn(`[ima] PDF ${mediaId} 疑似扫描件(页均 ${Math.round(avgChars)} 字),需 OCR 兜底`);
+        result = `[扫描件 PDF:共 ${totalPages} 页,无文本层,需 OCR 兜底]\n${content}`;
+    }
+    writeFileSync(cachePath, result, 'utf8');
+    console.log(`[ima] PDF ${mediaId} 解析完成:${totalPages} 页,${content.length} 字`);
+    return result;
 }
 /**
  * 从 get_media_info 的原始返回值中提取正文文本
@@ -135,8 +218,18 @@ function extractMediaText(raw) {
 }
 /**
  * 获取媒体正文文本(如《每日操作手册》条目内容)
+ * PDF(media_type=1)走"下载 + unpdf 解析 + 缓存"的正文层;其余类型沿用字段提取。
  */
 export async function getMediaContent(mediaId) {
     const data = await getMediaInfo(mediaId);
+    // PDF 类:url_info 提供带鉴权头的下载链接
+    const obj = data && typeof data === 'object' ? data : undefined;
+    if (obj?.media_type === 1) {
+        const urlInfo = obj['url_info'];
+        if (urlInfo?.url?.startsWith('http')) {
+            return getPdfContent(mediaId, urlInfo);
+        }
+        return '[PDF 无下载链接,请使用 IMA 客户端查看原文]';
+    }
     return extractMediaText(data);
 }

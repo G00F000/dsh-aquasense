@@ -67,7 +67,9 @@ dsh-aquasense/
 │   │   └── record-ledger.ts           # aquasense_ledger: 飞书 Bitable 追加写入
 │   │   └── train_aquaspecies.py       # 水生物种识别模型训练脚本 (Python)
 │   ├── ima/
-│   │   └── ima-api.ts                 # IMA 知识库 API 封装
+│   │   └── ima-api.ts                 # IMA 知识库 API 封装(含 PDF 正文层)
+│   ├── scripts/
+│   │   └── warm-pdf-cache.ts          # PDF 正文批量预热(npm run kb:warm)
 │   ├── feishu/
 │   │   └── token.ts                   # 飞书 tenant_access_token 缓存
 │   ├── router/
@@ -210,6 +212,13 @@ interface AdviceResult {
 提供两个核心函数:
 - `searchKnowledge(query)` — 搜索"水产养殖"知识库，返回匹配的知识条目
 - `getMediaContent(mediaId)` — 获取知识条目正文文本（如《每日操作手册》内容）
+
+**正文层(按 media_type 分派)**:
+- PDF(`media_type=1`):经 `get_media_info` 的 `url_info` 下载(携带 headers),用 unpdf(pdf.js)提取文本层,按 `media_id` 缓存到 `AQUASENSE_CACHE_DIR/pdf/<media_id>.txt`
+- 扫描件(页均字符数 < 50)留标记待 OCR 兜底;单文件超 50MB 跳过;无下载链接时提示改用 IMA 客户端
+- 笔记/其他类型:沿用字段提取与占位标记
+
+**批量预热**: `npm run kb:warm` 遍历知识库全部条目,对 PDF 执行下载+解析+缓存并输出统计/失败清单(已有缓存自动跳过,可重复执行)
 
 **凭证获取**（两种方式任选）:
 - 环境变量: `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY`

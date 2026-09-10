@@ -125,7 +125,7 @@ FEISHU_BITABLE_TABLE_ID_DISSECTION=xxxxxxxx
 
 # ===== S9 每日任务提醒（启用时必填）=====
 FEISHU_WORKER_GROUP=oc_xxxxxxxx
-AQUASENSE_CACHE_DIR=./cache                   # 可选，默认 ./cache
+AQUASENSE_CACHE_DIR=./cache                   # 可选，默认 ./cache（任务清单与 PDF 正文缓存）
 ```
 
 ### 3.4 构建
@@ -141,6 +141,17 @@ npm run build
 ```bash
 npm run typecheck
 ```
+
+### 3.6 预热知识库 PDF 正文（可选）
+
+知识库中的 PDF 类资料需下载并解析为文本后才能引用正文。首次部署后建议执行一次批量预热:
+
+```bash
+npm run kb:warm               # 全量(已有缓存自动跳过,可重复执行)
+npm run kb:warm -- --limit 5  # 抽样验证文本层覆盖率
+```
+
+解析结果缓存在 `AQUASENSE_CACHE_DIR/pdf/`（默认 `./cache/pdf/`），输出会列出成功/扫描件(需 OCR)/失败清单。
 
 ---
 

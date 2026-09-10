@@ -4,3 +4,4 @@ cache/
 *.tgz
 *.log
 .DS_Store
+.qoder/
