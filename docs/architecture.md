@@ -43,7 +43,7 @@ dsh-aquasense 是一个基于 DeepSeek Harness (DSH) 的水产养殖 AI 巡检�
 │  │          │                 │               │        │    │
 │  │          ▼                 ▼               ▼        │    │
 │  │   DeepSeek Vision    IMA 知识库 API   飞书 Bitable  │    │
-│  │   (VL2 三分类)       (疾病诊疗参考)   (多维表格)    │    │
+│  │   (Vision 三分类)     (疾病诊疗参考)   (多维表格)    │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
@@ -117,7 +117,7 @@ export function apply(ctx: Context) {
 
 **处理流程**:
 1. 下载工人发送的图片，转 base64（30 秒超时）
-2. 构建专家级提示词，调用 DeepSeek Vision 模型（默认 deepseek-vl2）
+2. 构建专家级提示词，调用 DeepSeek Vision 模型（默认 deepseek-flash）
 3. 解析模型输出为结构化 JSON，归一化到三分类白名单
 
 **输出契约**:

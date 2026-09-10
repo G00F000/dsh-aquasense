@@ -53,11 +53,11 @@ export const analyzeImage = defineTool({
   async execute(args) {
     // 参数缺失由 defineTool 按 required 校验拦截,此处直接执行
     // 1. 下载图片并转 base64(30s 超时,避免坏图 URL 挂起)
-    const imageData = await downloadImage(args.image_url)
+    const { data: imageData, mimeType } = await downloadImage(args.image_url)
 
     // 2. 构建提示词并调用视觉模型
     const prompt = buildPrompt(args.description, args.pool_id)
-    const response = await callVisionModel(imageData, prompt)
+    const response = await callVisionModel(imageData, mimeType, prompt)
 
     // 3. 解析结果(失败降级 normal,不阻断巡检流程)
     return parseAnalysisResponse(response)
@@ -67,13 +67,28 @@ export const analyzeImage = defineTool({
 /**
  * 下载图片为 base64
  */
-async function downloadImage(url: string): Promise<string> {
+interface ImageDownloadResult {
+  data: string
+  mimeType: string
+}
+
+async function downloadImage(url: string): Promise<ImageDownloadResult> {
   const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
   if (!response.ok) {
     throw new Error(`图片下载失败: HTTP ${response.status}`)
   }
   const buffer = await response.arrayBuffer()
-  return Buffer.from(buffer).toString('base64')
+  const data = Buffer.from(buffer).toString('base64')
+
+  // 从 Content-Type 推断 MIME 类型,无法识别时降级 image/png
+  const ct = response.headers.get('content-type') || ''
+  let mimeType = 'image/png'
+  if (ct.includes('jpeg') || ct.includes('jpg')) mimeType = 'image/jpeg'
+  else if (ct.includes('png')) mimeType = 'image/png'
+  else if (ct.includes('gif')) mimeType = 'image/gif'
+  else if (ct.includes('webp')) mimeType = 'image/webp'
+
+  return { data, mimeType }
 }
 
 /**
@@ -94,14 +109,14 @@ early=离群、蹭壁、呼吸急促;disease=浮头、烂身、白点。`
 /**
  * 调用 DeepSeek 视觉模型(兼容 OpenAI chat completions 图片输入)
  */
-async function callVisionModel(imageData: string, prompt: string): Promise<string> {
+async function callVisionModel(imageData: string, mimeType: string, prompt: string): Promise<string> {
   const apiKey = process.env.DEEPSEEK_API_KEY
   if (!apiKey) {
     throw new Error('[aquasense] DEEPSEEK_API_KEY 未配置')
   }
 
-  const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1'
-  const model = process.env.DEEPSEEK_VISION_MODEL || 'deepseek-vl2'
+  const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
+  const model = process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash'
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -114,16 +129,18 @@ async function callVisionModel(imageData: string, prompt: string): Promise<strin
       messages: [{
         role: 'user',
         content: [
-          { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageData}` } },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageData}` } },
           { type: 'text', text: prompt }
         ]
       }],
+      max_tokens: 512,
       temperature: 0.1
     })
   })
 
   if (!response.ok) {
-    throw new Error(`视觉模型调用失败: HTTP ${response.status}`)
+    const errBody = await response.text().catch(() => '')
+    throw new Error(`视觉模型调用失败: HTTP ${response.status} - ${errBody}`)
   }
 
   const result = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> }

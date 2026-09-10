@@ -45,7 +45,7 @@ Credentials via environment variables (copy [.env.example](.env.example)); IMA a
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | ✅ | Vision model for `aquasense_analyze` (`DEEPSEEK_VISION_MODEL`, default `deepseek-vl2`) |
+| `DEEPSEEK_API_KEY` | ✅ | Vision model for `aquasense_analyze` (`DEEPSEEK_VISION_MODEL`, default `deepseek-flash`) |
 | `IMA_OPENAPI_CLIENTID` / `IMA_OPENAPI_APIKEY` | ✅ | IMA knowledge base (advice + S9 manual) |
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | ✅ | Feishu app (needs `bitable:app`, `im:message`) |
 | `FEISHU_BITABLE_APP_TOKEN` | ✅ | Bitable base |

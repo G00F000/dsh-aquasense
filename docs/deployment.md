@@ -94,8 +94,8 @@ cp .env.example .env
 ```bash
 # ===== 图像分析（必填）=====
 DEEPSEEK_API_KEY=sk-xxxxxxxx
-DEEPSEEK_VISION_MODEL=deepseek-vl2          # 默认值，可不填
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1  # 默认值，可不填
+DEEPSEEK_VISION_MODEL=deepseek-flash          # 默认值，可不填
+DEEPSEEK_BASE_URL=https://api.deepseek.com  # 默认值，可不填
 
 # ===== IMA 知识库（必填）=====
 # 方式 A: 环境变量
@@ -153,12 +153,34 @@ dsh plugin add dsh-lark
 
 ### 4.2 安装本插件
 
+三种方式任选其一:
+
 ```bash
-# 方式 A: npm 已发布后
+# 方式 A: npm 安装（推荐，需先发布到 npm）
 dsh plugin add dsh-aquasense
 
-# 方式 B: 本地开发安装
+# 方式 B: GitHub 安装（推荐，无需发布 npm）
+dsh plugin add github:G00F000/dsh-aquasense
+
+# 方式 C: 本地路径安装（开发调试用）
 dsh plugin add /path/to/dsh-aquasense
+```
+
+**三种方式对比**:
+
+| 对比项 | npm | GitHub | 本地路径 |
+|--------|-----|--------|----------|
+| 安装命令 | `dsh plugin add dsh-aquasense` | `dsh plugin add github:G00F000/dsh-aquasense` | `dsh plugin add /path/to/dsh-aquasense` |
+| 版本管理 | `npm version` + `npm publish` | git tag | 手动管理 |
+| 前置条件 | npm 账号 + 发布 | GitHub 仓库 | 本地代码 + 构建 |
+| 适用场景 | 正式发布 | 源码分发 | 本地开发调试 |
+
+> **注意**: 插件安装到 Profile 层（全局），所有工作区和飞书消息都会触发，无需每个工作区单独安装。
+
+安装后重启 DSH 使其生效:
+
+```bash
+dsh restart
 ```
 
 ### 4.3 安装专家技能（可选）

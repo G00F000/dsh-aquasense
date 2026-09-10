@@ -39,3 +39,80 @@ export async function getFeishuToken(): Promise<string> {
   cache = { token: result.tenant_access_token, expiresAt: Date.now() + ttlSeconds * 1000 }
   return cache.token
 }
+
+/** 用户显示名称缓存(open_id → name),进程生命周期内有效 */
+const userNameCache = new Map<string, string>()
+
+/**
+ * 根据飞书 open_id 获取用户显示名称
+ * 优先命中进程内缓存,未命中时调用飞书通讯录 API
+ */
+export async function getFeishuUserName(openId: string): Promise<string> {
+  if (!openId) return ''
+  const cached = userNameCache.get(openId)
+  if (cached) return cached
+
+  const token = await getFeishuToken()
+  const response = await fetch(
+    `https://open.feishu.cn/open-apis/contact/v3/users/${openId}?user_id_type=open_id`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  )
+  const result = (await response.json()) as {
+    code: number; msg?: string;
+    data?: { user?: { name?: string } }
+  }
+
+  if (result.code !== 0 || !result.data?.user?.name) {
+    console.error(`[aquasense] 获取飞书用户名失败: open_id=${openId}, ${result.msg || result.code}`)
+    return ''
+  }
+
+  const name = result.data.user.name
+  userNameCache.set(openId, name)
+  return name
+}
+
+/**
+ * 上传图片 URL 到飞书云文档,返回 Bitable 附件格式
+ * 图片先下载为 buffer,再通过 drive/v1/medias/upload_all 上传
+ */
+export async function uploadImageToFeishu(imageUrl: string): Promise<{ file_token: string } | null> {
+  try {
+    // 1. 下载图片(30s 超时)
+    const imgResp = await fetch(imageUrl, { signal: AbortSignal.timeout(30_000) })
+    if (!imgResp.ok) return null
+    const buffer = await imgResp.arrayBuffer()
+    const fileName = imageUrl.split('/').pop()?.split('?')[0] || 'image.jpg'
+
+    // 2. 上传到飞书云文档
+    const token = await getFeishuToken()
+    const form = new FormData()
+    form.append('file_name', fileName)
+    form.append('parent_type', 'bitable_image')
+    form.append('parent_node', process.env.FEISHU_BITABLE_APP_TOKEN || '')
+    form.append('size', String(buffer.byteLength))
+    form.append('file', new Blob([buffer]), fileName)
+
+    const resp = await fetch(
+      'https://open.feishu.cn/open-apis/drive/v1/medias/upload_all',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form
+      }
+    )
+    const result = (await resp.json()) as {
+      code: number; msg?: string;
+      data?: { file_token?: string }
+    }
+
+    if (result.code !== 0 || !result.data?.file_token) {
+      console.error(`[aquasense] 图片上传失败: ${imageUrl}, ${result.msg || result.code}`)
+      return null
+    }
+    return { file_token: result.data.file_token }
+  } catch (err) {
+    console.error(`[aquasense] 图片上传异常: ${imageUrl}`, err)
+    return null
+  }
+}
