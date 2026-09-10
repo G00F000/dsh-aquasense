@@ -142,8 +142,8 @@ interface AnalysisResult {
 
 **处理流程**:
 1. 从 analyze 输出中提取症状关键词
-2. 调用 IMA 知识库搜索疾病诊疗方案（`searchKnowledge`）
-3. 读取命中条目正文（PDF/笔记），摘取与症状相关的原文片段（`getMediaContent`）
+2. 双通道检索：知识库名称检索（`searchKnowledge`）+ 笔记正文检索（`searchNote`），合并去重后 note 命中优先（名称检索不含正文，正文词如“罗茨风机/氨氮”只有 note 通道能命中）
+3. 摘取原文引用：note 命中自带高亮原文（`highlightInfo.format_content`）直接作引用，免下载解析；其余条目读取正文（`getMediaContent`，note 无高亮时走 `getNoteContentByNoteId`）摘取相关片段；扫描件/超限/无权限等不可读条目跳过并继续向后取，直到凑够引用条数或候选遍历完（排名靠前的命中常是扫描大部头，提前截断会导致引用长期为空）
 4. 按「原文引用→逻辑推理→总结」输出，并根据严重程度（critical/high/medium/low）生成分级处置建议
 5. 确定预警级别（P0/P1/P2）
 
@@ -212,13 +212,17 @@ interface AdviceResult {
 
 **文件**: `src/ima/ima-api.ts`
 
-提供两个核心函数:
-- `searchKnowledge(query)` — 搜索"水产养殖"知识库，返回匹配的知识条目
+提供双通道检索与正文读取函数:
+- `searchKnowledge(query)` — 搜索"水产养殖"知识库，返回匹配的知识条目（**仅索引名称**：文件名/文件夹名；正文词命中为 0）
+- `searchNote(query)` — 按正文全文检索笔记（`note/v1/search_note`，`start/end` 相差 ≤ 20），回带命中处高亮原文（`highlightInfo.format_content`，含 `<em>` 标记）；note 命中的标识是 `note_id`，与知识库 `media_id` 不同
 - `getMediaContent(mediaId)` — 获取知识条目正文文本（如《每日操作手册》内容）
+- `getNoteContentByNoteId(noteId)` — note 命中无高亮时按 `note_id` 直读笔记正文（缓存到 `note/<note_id>.txt`）
+
+**检索语料边界**:两通道覆盖不同语料——知识库检索覆盖全部入库文件(84 个 PDF + 入库笔记)，笔记检索覆盖本人全部笔记(含未入库的农场专属笔记，如剖检手册/操作手册)；两者互补，只用其一会出现长期召回缺口（只用知识库检索时，正文相关笔记永远发现不了）。
 
 **正文层(按 media_type 分派)**:
 - PDF(`media_type=1`):经 `get_media_info` 的 `url_info` 下载(携带 headers),用 unpdf(pdf.js)提取文本层,按 `media_id` 缓存到 `AQUASENSE_CACHE_DIR/pdf/<media_id>.txt`
-- 扫描件(页均字符数 < 50)与超限文件(> 50MB)写入标记缓存(避免每次重复下载),待 OCR 兜底;无下载链接时提示改用 IMA 客户端
+- 扫描件(页均字符数 < 50)与超限文件(> 100MB)写入标记缓存(避免每次重复下载),待 OCR 兜底;无下载链接时提示改用 IMA 客户端。上限调高后,缓存中的超限标记会按记录的大小自动重评(过期标记触发重新下载),无需手工清理缓存
 - 笔记(`media_type=11`):经 `notebook_ext_info.notebook_id` 调 notes 接口(`get_doc_content`,纯文本)读取,缓存到 `AQUASENSE_CACHE_DIR/note/<media_id>.txt`;非本人/已删除/共享无权限等确定性失败写标记缓存,临时失败不缓存、下次重试
 - 其他类型:沿用字段提取与占位标记
 

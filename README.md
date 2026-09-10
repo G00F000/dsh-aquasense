@@ -88,7 +88,7 @@ src/
 │   ├── analyze-image.ts           # aquasense_analyze: vision 3-class + normalization
 │   ├── generate-advice.ts         # aquasense_advice: IMA query + tiered actions
 │   └── record-ledger.ts           # aquasense_ledger: Bitable append (7 scene tables)
-├── ima/ima-api.ts                 # IMA wrapper: searchKnowledge / getMediaContent
+├── ima/ima-api.ts                 # IMA wrapper: searchKnowledge (name) + searchNote (full-text) / getMediaContent
 ├── feishu/token.ts                # tenant_access_token with cache (shared)
 ├── router/intent-router.ts        # pure S1-S8 intent detection (for hosts/skills)
 └── scheduler/daily-reminder.ts    # S9 standalone process (not a tool)

@@ -2,6 +2,10 @@
  * IMA API 封装模块
  * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)与 daily-reminder(S9 手册读取)调用。
  *
+ * 检索层(双通道互补):
+ *  - searchKnowledge:知识库检索(wiki/v1/search_knowledge),仅索引名称(文件名/文件夹名),正文词命中为 0。
+ *  - searchNote:笔记正文检索(note/v1/search_note),索引正文并回带命中处高亮原文。
+ *
  * 正文层:
  *  - PDF(media_type=1):经 get_media_info 的 url_info 下载,用 unpdf(pdf.js)提取文本层并按 media_id 缓存;
  *    扫描件(无文本层)留标记,待 OCR 兜底。
@@ -99,7 +103,8 @@ export async function searchKnowledge(query, kbId) {
             media_id: item.media_id,
             title: item.title,
             summary: item.summary,
-            source: item.url_info?.url
+            source: item.url_info?.url,
+            from: 'wiki'
         }));
         return { items, total: items.length };
     }
@@ -108,6 +113,49 @@ export async function searchKnowledge(query, kbId) {
         console.error('[ima] 搜索知识库失败:', error);
         return { items: [], total: 0 };
     }
+}
+/**
+ * 按正文检索笔记(note/v1/search_note)
+ * 与 searchKnowledge 互补:知识库检索只索引名称(文件名/文件夹名),正文词(罗茨风机/氨氮等)命中为 0;
+ * 笔记检索索引正文,并回带命中处高亮原文,可直接作引用、免下载解析。
+ * 实测 search_type=0/1 返回值一致(接口无论如何都搜正文),固定传 1(DOC_CONTENT)。
+ */
+export async function searchNote(query, limit = 10) {
+    try {
+        const data = await callIMAApi('openapi/note/v1/search_note', {
+            search_type: 1,
+            query_info: { content: query },
+            start: 0,
+            // 接口限制 start/end 相差不超过 20
+            end: Math.min(Math.max(limit, 1), 20)
+        });
+        const items = (data?.search_note_infos ?? [])
+            .map((entry) => ({
+            // note 命中的标识是 note_id(与知识库 media_id 不同),可经 notes 接口直接读正文
+            media_id: entry?.note_book_info?.note_id ?? '',
+            title: entry?.note_book_info?.title ?? '',
+            summary: entry?.note_book_info?.summary,
+            from: 'note',
+            highlight: pickHighlight(entry?.highlightInfo)
+        }))
+            .filter((item) => item.media_id && item.title);
+        return { items, total: Number(data?.total_hit_num ?? items.length) };
+    }
+    catch (error) {
+        // 检索失败不影响主流程(wiki 通道结果仍可用)
+        console.error('[ima] 检索笔记失败:', error);
+        return { items: [], total: 0 };
+    }
+}
+/**
+ * 提取高亮原文:highlightInfo 为 map(官方文档标称 key 为 doc_title,实测为 format_content),
+ * 取首个非空文本;含 <em> 标记,展示前由调用方清理。
+ */
+function pickHighlight(highlightInfo) {
+    if (!highlightInfo || typeof highlightInfo !== 'object')
+        return undefined;
+    const texts = Object.values(highlightInfo).filter((value) => typeof value === 'string' && value.length > 0);
+    return texts[0];
 }
 /**
  * 浏览知识库内容(单页):供批量预热/巡检脚本逐级遍历使用
@@ -139,8 +187,12 @@ export async function getMediaInfo(mediaId) {
     return callIMAApi('openapi/wiki/v1/get_media_info', { media_id: mediaId });
 }
 // ========== 正文层:PDF(media_type=1) ==========
-/** 单文件大小上限:IMA 允许 200MB,超限直接跳过,避免内存与耗时失控 */
-const MAX_PDF_BYTES = 50 * 1024 * 1024;
+/**
+ * 单文件大小上限:IMA 允许 200MB,超限直接跳过,避免内存与耗时失控。
+ * 实测 50-100MB 区间仍有带文本层的大部头(如 87.5MB/163 页的养殖专著),
+ * 故上限放到 100MB;>100MB 实测样本均为纯扫描件(无文本层),跳过收益更高。
+ */
+const MAX_PDF_BYTES = 100 * 1024 * 1024;
 /** 扫描件判定阈值:页均字符数低于该值视为无文本层(pdf.js 提取不到,需 OCR 兜底) */
 const MIN_CHARS_PER_PAGE = 50;
 /** 正文缓存子目录(pdf/note;与 daily-reminder 共用 AQUASENSE_CACHE_DIR 约定) */
@@ -156,6 +208,18 @@ function formatSize(bytes) {
     return `${Math.max(1, Math.round(bytes / 1024))}KB`;
 }
 /**
+ * 缓存中的超限标记是否已过期:标记里记录了跳过时的文件大小,
+ * 若该大小已不大于当前上限(说明上限被调高过),应重新下载评估——否则旧标记会永久拦截这些文件。
+ * 解析不出大小时保守沿用标记。
+ */
+function isStaleOversizeMark(cached) {
+    const matched = /^\[PDF 超限:(\d+(?:\.\d+)?)([MK])B/.exec(cached);
+    if (!matched)
+        return false;
+    const bytes = Number(matched[1]) * (matched[2] === 'M' ? 1024 * 1024 : 1024);
+    return bytes <= MAX_PDF_BYTES;
+}
+/**
  * 下载并解析 PDF 正文(按 media_id 落盘缓存)
  * 首次访问承担下载+解析开销,其后命中缓存零成本;84 条 PDF 预热一次后运行时全走缓存。
  * unpdf 内置 pdf.js serverless 构建,Node 下自动配置标准字体与 CJK cMap,降低中文提取乱码风险。
@@ -163,7 +227,10 @@ function formatSize(bytes) {
 async function getPdfContent(mediaId, urlInfo) {
     const cachePath = join(cacheSubdir('pdf'), `${mediaId}.txt`);
     if (existsSync(cachePath)) {
-        return readFileSync(cachePath, 'utf8');
+        const cached = readFileSync(cachePath, 'utf8');
+        // 超限标记可能因上限调高而过期,过期则落空重走下载评估
+        if (!isStaleOversizeMark(cached))
+            return cached;
     }
     // 1. 下载(url_info.headers 如鉴权头必须携带,否则下载失败)
     console.log(`[ima] 下载 PDF:${mediaId}`);
@@ -205,24 +272,24 @@ async function getPdfContent(mediaId, urlInfo) {
 /** 笔记确定性失败错误码:非作者(210005)/已删除(210006)/共享无权限(210011)——缓存标记,避免反复请求 */
 const PERMANENT_NOTE_ERROR_CODES = new Set([210005, 210006, 210011]);
 /**
- * 读取并缓存笔记正文(按 media_id 落盘)
+ * 读取并缓存笔记正文(按 cacheKey 落盘)
  * 路径:get_media_info → notebook_ext_info.notebook_id → notes get_doc_content(target_content_format=0 纯文本)。
  * 注意:笔记内容仅用于内部建议生成与手册读取,不外传到群聊之外的渠道。
  */
-async function getNoteContent(mediaId, notebookId) {
-    const cachePath = join(cacheSubdir('note'), `${mediaId}.txt`);
+async function getNoteContent(noteId, cacheKey) {
+    const cachePath = join(cacheSubdir('note'), `${cacheKey}.txt`);
     if (existsSync(cachePath)) {
         return readFileSync(cachePath, 'utf8');
     }
-    console.log(`[ima] 读取笔记:${mediaId}`);
+    console.log(`[ima] 读取笔记:${noteId}`);
     try {
         const data = await callIMAApi('openapi/note/v1/get_doc_content', {
-            note_id: notebookId,
+            note_id: noteId,
             target_content_format: 0
         });
         const content = typeof data?.content === 'string' ? data.content : '';
         writeFileSync(cachePath, content, 'utf8');
-        console.log(`[ima] 笔记 ${mediaId} 读取完成:${content.length} 字`);
+        console.log(`[ima] 笔记 ${noteId} 读取完成:${content.length} 字`);
         return content;
     }
     catch (error) {
@@ -230,11 +297,18 @@ async function getNoteContent(mediaId, notebookId) {
         if (error instanceof IMAError && PERMANENT_NOTE_ERROR_CODES.has(error.code)) {
             const mark = `[笔记无法读取:${error.message}]`;
             writeFileSync(cachePath, mark, 'utf8');
-            console.warn(`[ima] 笔记 ${mediaId} ${mark}`);
+            console.warn(`[ima] 笔记 ${noteId} ${mark}`);
             return mark;
         }
         throw error;
     }
+}
+/**
+ * 按笔记 ID 直读正文(供 searchNote 命中但无高亮的条目使用)
+ * 注意:note 检索的标识是 note_id,与知识库 media_id 不是同一命名空间,不能复用 getMediaContent。
+ */
+export async function getNoteContentByNoteId(noteId) {
+    return getNoteContent(noteId, noteId);
 }
 /**
  * 从 get_media_info 的原始返回值中提取正文文本
@@ -292,7 +366,7 @@ export async function getMediaContent(mediaId) {
     if (obj?.media_type === 11) {
         const nbExt = obj['notebook_ext_info'];
         if (nbExt?.notebook_id) {
-            return getNoteContent(mediaId, nbExt.notebook_id);
+            return getNoteContent(nbExt.notebook_id, mediaId);
         }
         return '[笔记缺少 notebook_id,请使用 IMA 客户端查看原文]';
     }
