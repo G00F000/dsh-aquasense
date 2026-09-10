@@ -40,13 +40,16 @@ description: 水产养殖巡检专家:鲈鱼状态三分类语义、处置分级
 - `aquasense_advice`:把 analyze 输出原样传入;它内置 IMA 知识库查询,不要自己编造药方。
   - disease 且知识库无命中 → 明确"咨询专业兽医",**不代替兽医开药**。
 - `aquasense_ledger`:
-  - inspection 场景可直接传 analysis/advice/reporter,自动组装巡检表字段。
+  - 每次落表必须传 `open_id`:当前这条消息发送者(发消息的工人)的飞书 open_id,由 dsh-lark 消息上下文提供;工具会自动解析真实姓名填入「巡检人/检测人/汇报人」列。
+  - 上报人只认发消息的人:禁止凭记忆、历史对话或猜测填写 `reporter`(它仅当拿不到发送者 open_id 时兜底)。
+  - inspection 场景可直接传 analysis/advice,自动组装巡检表字段。
   - 其他场景按表格实际列名提供 fields(键=列名,如 `死亡数量`、`药品名称`、`水温(℃)`),缺列名参考插件源码 SCENE_COLUMNS 或仓库 README。
   - 工具返回 success:false 且带 questions 时,把问题原样转述给工人,补齐后再写。
 
 ## 4. 数据准确度
 
 - 池号缺失时必须追问(池1/池2/池3/池4),不写无池号记录。
+- 上报人必须取"发消息的人"(消息发送者 open_id 自动解析),不得沿用记忆中的姓名或替他人署名。
 - 口语/错别字先按语义补全:"溶养"→溶氧,"蔫/没精神"→活动减少,"死了2条"→死亡数量 2。
 - 多信息混杂(如"池3水温26度喂了20kg")→ 拆成温度表 + 喂食表两条记录,分别落表。
 - 工人发"池3死了3条鱼"+ 图:完整链 = analyze → advice → ledger(death 表,fields 含死亡数量 3,预警级别取 advice.alert_level)。

@@ -6,6 +6,7 @@
  *  - inspection 场景:传 analysis/advice 时自动按巡检表列名组装
  *  - 其他场景:由 Agent 按表格实际列名提供 fields(键为表格列名)
  *  - 池号缺失时不落表,返回追问,由 Agent 向工人补充提问
+ *  - 上报人只取当前消息发送者 open_id 解析(禁止凭记忆填写),解析不出时同样追问
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { getFeishuToken, getFeishuUserName, uploadImageToFeishu } from '../feishu/token.js';
@@ -68,8 +69,8 @@ export const recordLedger = defineTool({
         images: { type: 'array', items: { type: 'string' }, description: '图片 URL 列表(支持多张,自动上传至飞书云文档写入图片列)' },
         analysis: { type: 'object', additionalProperties: true, description: 'aquasense_analyze 分析结果(inspection 自动组装用)' },
         advice: { type: 'object', additionalProperties: true, description: 'aquasense_advice 处置建议(inspection 自动组装用)' },
-        reporter: { type: 'string', description: '上报人(工人姓名),优先使用 open_id 自动解析' },
-        open_id: { type: 'string', description: '飞书用户 open_id(dsh-lark 消息桥提供,用于自动获取汇报人姓名)' }
+        reporter: { type: 'string', description: '上报人姓名(兜底):仅在拿不到消息发送者 open_id 时使用,禁止凭记忆/历史对话填写' },
+        open_id: { type: 'string', description: '当前消息发送者的飞书 open_id(dsh-lark 消息上下文提供);上报人以它解析出的姓名为准' }
     },
     output: {
         schema: {
@@ -107,16 +108,31 @@ export const recordLedger = defineTool({
             };
         }
         const poolId = String(rawPoolId);
-        // 自动解析汇报人:open_id → 飞书用户名,reporter 作为显式覆盖
-        let reporterName = args.reporter || '';
-        if (!reporterName && args.open_id) {
+        // 自动解析汇报人:必须以发消息用户的 open_id 为准,防止记忆/猜测中的姓名顶替真实上报人
+        // reporter 仅作兜底:拿不到 open_id 或解析失败时才使用
+        let reporterName = '';
+        if (args.open_id) {
             reporterName = await getFeishuUserName(args.open_id);
+        }
+        if (!reporterName) {
+            reporterName = args.reporter || '';
         }
         // 非 inspection 场景必须提供 fields:缺失时返回列名提示(Agent 补全后重调)
         if (scene !== 'inspection' && !(fields && Object.keys(fields).length > 0)) {
             return {
                 success: false,
                 message: `scene=${scene} 需要提供 fields(键为表格实际列名),可选列:${SCENE_COLUMNS[scene].join('、')}`
+            };
+        }
+        // 上报人仍无法确定(fields 也未显式提供人列):返回追问,不写"未知"等脏数据
+        const reporterCol = REPORTER_COLUMN[scene];
+        const fieldReporter = reporterCol && fields ? fields[reporterCol] : undefined;
+        if (!reporterName && !fieldReporter) {
+            return {
+                success: false,
+                message: `无法识别上报人:缺少当前消息发送者的 open_id,且未提供「${reporterCol ?? '上报人'}」。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
+                missing: ['open_id'],
+                questions: ['请问上报人是谁?(将记入台账)']
             };
         }
         const recordFields = await buildFields(scene, args, poolId, reporterName);
@@ -215,9 +231,9 @@ async function buildFields(scene, args, poolId, reporterName) {
     if (args.fields && Object.keys(args.fields).length > 0) {
         Object.assign(fields, args.fields);
         fields['池号'] = poolId;
-        // 自动填充「人」字段(未显式提供时)
+        // 「人」字段以发消息用户为准:open_id 解析成功时覆盖,防止字段里的记忆/猜测姓名顶替真实上报人
         const reporterCol = REPORTER_COLUMN[scene];
-        if (reporterCol && !(reporterCol in fields) && reporterName) {
+        if (reporterCol && reporterName) {
             fields[reporterCol] = reporterName;
         }
         // 自动填充「图片」字段(未显式提供时)
@@ -236,7 +252,7 @@ async function buildFields(scene, args, poolId, reporterName) {
     return {
         '池号': poolId,
         '巡检时间': Date.now(),
-        '巡检人': reporterName || '未知',
+        '巡检人': reporterName,
         '鱼群状态': analysis?.cls || 'normal',
         '症状描述': analysis?.symptoms?.join('、') || '',
         '严重程度': analysis?.severity || 'low',

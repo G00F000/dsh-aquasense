@@ -103,6 +103,7 @@ src/
 ## Notes
 
 - **Not a veterinary prescription tool.** `medication` always defers to a professional vet when a disease is detected; knowledge-base hits are shown as references only.
+- **Reporter comes from the message sender.** `aquasense_ledger` resolves the reporter name from the current message's `open_id` (Feishu contact lookup) — never from chat memory; `reporter` is only a fallback when `open_id` is unavailable, and when neither can be resolved the tool returns a follow-up question instead of writing a placeholder.
 - Column names in `fields` must match your actual Feishu Bitable columns — the API rejects mismatches with a readable message; adjust the constants in `src/tools/record-ledger.ts` (or pass `fields` explicitly) to fit your table.
 - The scheduler never back-fills tasks whose time already passed after a restart (no spam).
 
