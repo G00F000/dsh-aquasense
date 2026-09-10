@@ -7,6 +7,7 @@
  *  - 其他场景:由 Agent 按表格实际列名提供 fields(键为表格列名)
  *  - 池号缺失时不落表,返回追问,由 Agent 向工人补充提问
  *  - 上报人只取当前消息发送者 open_id 解析(禁止凭记忆填写),解析不出时同样追问
+ *  - dissection 场景:「解剖器官」写入前归一为下拉框选项(可多选),拒绝选项外自由文本
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -58,6 +59,9 @@ const AI_ANALYSIS_COLUMN: Partial<Record<LedgerScene, string>> = {
   death: 'AI分析',
   dissection: 'AI辅助判断'
 }
+
+/** dissection 场景「解剖器官」下拉框选项(多选;须与飞书表格选项一致,写入值只能是其中之一) */
+const DISSECTION_ORGAN_OPTIONS = ['体表', '鳃', '肝', '胆囊', '肠', '脾', '鳔', '肾', '腹腔']
 
 export const recordLedger = defineTool({
   name: 'aquasense_ledger',
@@ -138,6 +142,23 @@ export const recordLedger = defineTool({
         success: false,
         message: `scene=${scene} 需要提供 fields(键为表格实际列名),可选列:${SCENE_COLUMNS[scene].join('、')}`
       }
+    }
+
+    // dissection 场景:「解剖器官」只允许下拉框选项,归一为多选数组,不写入自由文本
+    if (scene === 'dissection' && fields && fields['解剖器官'] !== undefined) {
+      const { organs, unknown } = normalizeDissectionOrgans(fields['解剖器官'])
+      if (organs.length === 0) {
+        return {
+          success: false,
+          message: `「解剖器官」只能从下拉选项中选择(当前值 ${JSON.stringify(fields['解剖器官'])} 无法识别)。合法选项:${DISSECTION_ORGAN_OPTIONS.join('/')}`,
+          missing: ['解剖器官'],
+          questions: [`解剖器官请从以下选项中选(可多选):${DISSECTION_ORGAN_OPTIONS.join('/')}`]
+        }
+      }
+      if (unknown.length > 0) {
+        console.warn(`[aquasense] 解剖器官忽略无法识别的内容:${unknown.join('、')}`)
+      }
+      fields['解剖器官'] = organs
     }
 
     // 上报人仍无法确定(fields 也未显式提供人列):返回追问,不写"未知"等脏数据
@@ -229,6 +250,29 @@ const REPORTER_COLUMN: Partial<Record<LedgerScene, string>> = {
   temperature: '测量人',
   death: '汇报人',
   dissection: '汇报人'
+}
+
+/**
+ * 归一化「解剖器官」:输入可含多个器官与常见异写(腮→鳃、单字"胆"→"胆囊"),
+ * 只保留下拉框选项内的器官,选项外内容记入 unknown。
+ */
+function normalizeDissectionOrgans(value: unknown): { organs: string[]; unknown: string[] } {
+  const parts = (Array.isArray(value) ? value : [value])
+    .filter((v): v is string => typeof v === 'string')
+    .flatMap((v) => v.split(/[、,，/;；\s]+/))
+    .map((v) => v.trim())
+    .filter(Boolean)
+
+  const organs: string[] = []
+  const unknown: string[] = []
+  for (const part of parts) {
+    // 常见异写归一:"腮"(错别字)→鳃;单独出现的"胆"→"胆囊"
+    const text = part.replace(/腮/g, '鳃').replace(/胆(?!囊)/g, '胆囊')
+    const hits = DISSECTION_ORGAN_OPTIONS.filter((opt) => text.includes(opt))
+    if (hits.length > 0) organs.push(...hits)
+    else unknown.push(part)
+  }
+  return { organs: [...new Set(organs)], unknown }
 }
 
 /**
