@@ -3,7 +3,8 @@
 # 安装方式:
 #   dsh plugin add dsh-aquasense        # npm 已发布后
 #   dsh plugin add .                    # 仓库本地开发
-insert:
-  - id: aquasense
-    name: dsh-aquasense
-    config: {}
+# 顶层必须是 loader patch 条目数组(每个条目形如 { insert: [...] })
+- insert:
+    - id: aquasense
+      name: dsh-aquasense
+      config: {}

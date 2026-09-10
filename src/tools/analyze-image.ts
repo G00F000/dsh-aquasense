@@ -12,7 +12,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 /** 模型输出 JSON 契约(与技术方案 YOLO 三分类语义一致) */
 export interface AnalysisResult {
   abnormal: boolean
-  cls: 'normal' | 'early' | 'disease'
+  cls: 'normal' | 'early' | 'disease' | 'unknown'
   symptoms: string[]
   severity: 'low' | 'medium' | 'high' | 'critical'
   confidence: number
@@ -42,7 +42,7 @@ export const analyzeImage = defineTool({
       additionalProperties: false,
       properties: {
         abnormal: { type: 'boolean' },
-        cls: { type: 'string', enum: ['normal', 'early', 'disease'] },
+        cls: { type: 'string', enum: ['normal', 'early', 'disease', 'unknown'] },
         symptoms: { type: 'array', items: { type: 'string' } },
         severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
         confidence: { type: 'number' }
@@ -133,7 +133,7 @@ async function callVisionModel(imageData: string, mimeType: string, prompt: stri
           { type: 'text', text: prompt }
         ]
       }],
-      max_tokens: 512,
+      max_tokens: 4096,
       temperature: 0.1
     })
   })
@@ -162,15 +162,19 @@ async function callVisionModel(imageData: string, mimeType: string, prompt: stri
  * 归一化保证输出始终满足 output.schema(enum/类型/多余键),避免注册表校验失败
  */
 function parseAnalysisResponse(response: string): AnalysisResult {
-  const fallback: AnalysisResult = { abnormal: false, cls: 'normal', symptoms: [], severity: 'low', confidence: 0.3 }
+  const fallback: AnalysisResult = { abnormal: false, cls: 'unknown', symptoms: ['AI分析失败,请人工复核'], severity: 'low', confidence: 0.3 }
 
   let raw: Record<string, unknown>
   try {
     const json = response.match(/\{[\s\S]*\}/)?.[0]
-    if (!json) return fallback
+    if (!json) {
+      console.error('[aquasense] 视觉模型返回空内容,降级为 unknown')
+      return fallback
+    }
     const parsed: unknown = JSON.parse(json)
     raw = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
   } catch {
+    console.error('[aquasense] 视觉模型返回无法解析的 JSON,降级为 unknown')
     return fallback
   }
 

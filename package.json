@@ -34,6 +34,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare": "npm run build",
     "remind": "tsx src/scheduler/daily-reminder.ts",
     "remind:prod": "node dist/scheduler/daily-reminder.js"
   },
