@@ -5,7 +5,9 @@
  * 正文层:
  *  - PDF(media_type=1):经 get_media_info 的 url_info 下载,用 unpdf(pdf.js)提取文本层并按 media_id 缓存;
  *    扫描件(无文本层)留标记,待 OCR 兜底。
- *  - 笔记/其他类型:沿用字段提取与占位标记(见 extractMediaText)。
+ *  - 笔记(media_type=11):经 notebook_ext_info.notebook_id 调 notes 接口读纯文本并按 media_id 缓存;
+ *    权限类确定性失败留标记,临时失败(频控/网络)不缓存、下次重试。
+ *  - 其他类型:沿用字段提取与占位标记(见 extractMediaText)。
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -34,6 +36,15 @@ function getCredentials() {
     }
     throw new Error('[aquasense] IMA 凭证未配置:请设置 IMA_OPENAPI_CLIENTID / IMA_OPENAPI_APIKEY,或写入 ~/.config/ima/client_id 与 api_key');
 }
+/** IMA API 业务错误(携带错误码,便于区分确定性失败与临时失败,如笔记权限 vs 频控) */
+class IMAError extends Error {
+    code;
+    constructor(code, msg) {
+        super(`IMA API 错误: ${msg}`);
+        this.name = 'IMAError';
+        this.code = code;
+    }
+}
 /**
  * 调用 IMA API
  */
@@ -50,7 +61,7 @@ async function callIMAApi(apiPath, body) {
     });
     const result = (await response.json());
     if (result.code !== 0) {
-        throw new Error(`IMA API 错误: ${result.msg}`);
+        throw new IMAError(result.code, result.msg);
     }
     return result.data;
 }
@@ -110,8 +121,12 @@ export async function listKnowledge(kbId, cursor = '', folderId, limit = 50) {
         ...(folderId ? { folder_id: folderId } : {})
     });
     const items = (data?.knowledge_list ?? []).map((entry) => {
-        if (entry?.folder_id) {
-            return { kind: 'folder', title: entry.name ?? '', folderId: entry.folder_id };
+        // 文件夹有两种返回形态:显式 folder_id 字段,或 media_id 以 folder_ 开头(此时可作 folder_id 下钻);
+        // 后者若不识别会被误当文件,get_media_info 报错并遗漏整个子树(含笔记/专利 PDF)
+        const folderId = entry?.folder_id ??
+            (typeof entry?.media_id === 'string' && entry.media_id.startsWith('folder_') ? entry.media_id : undefined);
+        if (folderId) {
+            return { kind: 'folder', title: entry.name ?? entry.title ?? '', folderId };
         }
         return { kind: 'file', title: entry.title ?? '', mediaId: entry.media_id };
     });
@@ -128,9 +143,9 @@ export async function getMediaInfo(mediaId) {
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
 /** 扫描件判定阈值:页均字符数低于该值视为无文本层(pdf.js 提取不到,需 OCR 兜底) */
 const MIN_CHARS_PER_PAGE = 50;
-/** PDF 文本缓存目录(与 daily-reminder 共用 AQUASENSE_CACHE_DIR 约定) */
-function pdfCacheDir() {
-    const dir = join(process.env.AQUASENSE_CACHE_DIR || './cache', 'pdf');
+/** 正文缓存子目录(pdf/note;与 daily-reminder 共用 AQUASENSE_CACHE_DIR 约定) */
+function cacheSubdir(sub) {
+    const dir = join(process.env.AQUASENSE_CACHE_DIR || './cache', sub);
     mkdirSync(dir, { recursive: true });
     return dir;
 }
@@ -146,7 +161,7 @@ function formatSize(bytes) {
  * unpdf 内置 pdf.js serverless 构建,Node 下自动配置标准字体与 CJK cMap,降低中文提取乱码风险。
  */
 async function getPdfContent(mediaId, urlInfo) {
-    const cachePath = join(pdfCacheDir(), `${mediaId}.txt`);
+    const cachePath = join(cacheSubdir('pdf'), `${mediaId}.txt`);
     if (existsSync(cachePath)) {
         return readFileSync(cachePath, 'utf8');
     }
@@ -158,11 +173,18 @@ async function getPdfContent(mediaId, urlInfo) {
     }
     const declaredSize = Number(response.headers.get('content-length') ?? 0);
     if (declaredSize > MAX_PDF_BYTES) {
-        return `[PDF 超限:${formatSize(declaredSize)},已跳过解析]`;
+        // 缓存标记:避免后续调用重复下载大文件(扫描类大部头无法提取文本层,跳过代价低于每次重下)
+        const mark = `[PDF 超限:${formatSize(declaredSize)},已跳过解析]`;
+        writeFileSync(cachePath, mark, 'utf8');
+        console.warn(`[ima] PDF ${mediaId} ${mark}`);
+        return mark;
     }
     const buffer = new Uint8Array(await response.arrayBuffer());
     if (buffer.byteLength > MAX_PDF_BYTES) {
-        return `[PDF 超限:${formatSize(buffer.byteLength)},已跳过解析]`;
+        const mark = `[PDF 超限:${formatSize(buffer.byteLength)},已跳过解析]`;
+        writeFileSync(cachePath, mark, 'utf8');
+        console.warn(`[ima] PDF ${mediaId} ${mark}`);
+        return mark;
     }
     // 2. 提取文本层
     const pdf = await getDocumentProxy(buffer);
@@ -178,6 +200,41 @@ async function getPdfContent(mediaId, urlInfo) {
     writeFileSync(cachePath, result, 'utf8');
     console.log(`[ima] PDF ${mediaId} 解析完成:${totalPages} 页,${content.length} 字`);
     return result;
+}
+// ========== 正文层:笔记(media_type=11) ==========
+/** 笔记确定性失败错误码:非作者(210005)/已删除(210006)/共享无权限(210011)——缓存标记,避免反复请求 */
+const PERMANENT_NOTE_ERROR_CODES = new Set([210005, 210006, 210011]);
+/**
+ * 读取并缓存笔记正文(按 media_id 落盘)
+ * 路径:get_media_info → notebook_ext_info.notebook_id → notes get_doc_content(target_content_format=0 纯文本)。
+ * 注意:笔记内容仅用于内部建议生成与手册读取,不外传到群聊之外的渠道。
+ */
+async function getNoteContent(mediaId, notebookId) {
+    const cachePath = join(cacheSubdir('note'), `${mediaId}.txt`);
+    if (existsSync(cachePath)) {
+        return readFileSync(cachePath, 'utf8');
+    }
+    console.log(`[ima] 读取笔记:${mediaId}`);
+    try {
+        const data = await callIMAApi('openapi/note/v1/get_doc_content', {
+            note_id: notebookId,
+            target_content_format: 0
+        });
+        const content = typeof data?.content === 'string' ? data.content : '';
+        writeFileSync(cachePath, content, 'utf8');
+        console.log(`[ima] 笔记 ${mediaId} 读取完成:${content.length} 字`);
+        return content;
+    }
+    catch (error) {
+        // 确定性失败(权限/已删除):写标记缓存;临时失败(频控/网络):不缓存,下次重试
+        if (error instanceof IMAError && PERMANENT_NOTE_ERROR_CODES.has(error.code)) {
+            const mark = `[笔记无法读取:${error.message}]`;
+            writeFileSync(cachePath, mark, 'utf8');
+            console.warn(`[ima] 笔记 ${mediaId} ${mark}`);
+            return mark;
+        }
+        throw error;
+    }
 }
 /**
  * 从 get_media_info 的原始返回值中提取正文文本
@@ -218,18 +275,26 @@ function extractMediaText(raw) {
 }
 /**
  * 获取媒体正文文本(如《每日操作手册》条目内容)
- * PDF(media_type=1)走"下载 + unpdf 解析 + 缓存"的正文层;其余类型沿用字段提取。
+ * PDF(media_type=1)走"下载 + unpdf 解析 + 缓存",笔记(media_type=11)走 notes 接口读取+缓存;其余类型沿用字段提取。
  */
 export async function getMediaContent(mediaId) {
     const data = await getMediaInfo(mediaId);
-    // PDF 类:url_info 提供带鉴权头的下载链接
     const obj = data && typeof data === 'object' ? data : undefined;
+    // PDF 类:url_info 提供带鉴权头的下载链接
     if (obj?.media_type === 1) {
         const urlInfo = obj['url_info'];
         if (urlInfo?.url?.startsWith('http')) {
             return getPdfContent(mediaId, urlInfo);
         }
         return '[PDF 无下载链接,请使用 IMA 客户端查看原文]';
+    }
+    // 笔记类:notebook_ext_info 提供 notebook_id,经 notes 接口读纯文本
+    if (obj?.media_type === 11) {
+        const nbExt = obj['notebook_ext_info'];
+        if (nbExt?.notebook_id) {
+            return getNoteContent(mediaId, nbExt.notebook_id);
+        }
+        return '[笔记缺少 notebook_id,请使用 IMA 客户端查看原文]';
     }
     return extractMediaText(data);
 }

@@ -125,7 +125,7 @@ FEISHU_BITABLE_TABLE_ID_DISSECTION=xxxxxxxx
 
 # ===== S9 每日任务提醒（启用时必填）=====
 FEISHU_WORKER_GROUP=oc_xxxxxxxx
-AQUASENSE_CACHE_DIR=./cache                   # 可选，默认 ./cache（任务清单与 PDF 正文缓存）
+AQUASENSE_CACHE_DIR=./cache                   # 可选，默认 ./cache（任务清单与正文缓存: PDF/笔记）
 ```
 
 ### 3.4 构建
@@ -142,16 +142,18 @@ npm run build
 npm run typecheck
 ```
 
-### 3.6 预热知识库 PDF 正文（可选）
+### 3.6 预热知识库正文（可选）
 
-知识库中的 PDF 类资料需下载并解析为文本后才能引用正文。首次部署后建议执行一次批量预热:
+知识库中的 PDF 与笔记需先建立正文缓存，才能在处置建议中引用原文。首次部署后建议执行一次批量预热:
 
 ```bash
-npm run kb:warm               # 全量(已有缓存自动跳过,可重复执行)
+npm run kb:warm               # 全量(PDF+笔记,已有缓存自动跳过,可重复执行)
 npm run kb:warm -- --limit 5  # 抽样验证文本层覆盖率
 ```
 
-解析结果缓存在 `AQUASENSE_CACHE_DIR/pdf/`（默认 `./cache/pdf/`），输出会列出成功/扫描件(需 OCR)/失败清单。
+缓存位置: `AQUASENSE_CACHE_DIR/pdf/`（PDF 文本）与 `AQUASENSE_CACHE_DIR/note/`（笔记文本），默认在 `./cache/` 下。输出会列出 PDF 成功/扫描件(需 OCR)/超限、笔记成功/不可读及失败清单。
+
+遍历会逐级下钻知识库的嵌套文件夹（含 `folder_` 前缀形式的文件夹条目），统计口径覆盖知识库全部层级，不会因嵌套目录遗漏笔记或 PDF。
 
 ---
 

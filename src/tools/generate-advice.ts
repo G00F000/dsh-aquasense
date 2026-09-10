@@ -1,12 +1,13 @@
 /**
  * 处置建议工具(aquasense_advice,场景 S2/S4/S5/S8 巡检诊断后调用)
  *
- * 自动查询 IMA 知识库获取疾病诊疗参考,按严重程度分级生成处置建议。
+ * 自动查询 IMA 知识库获取疾病诊疗参考,并读取命中条目正文(PDF/笔记)摘取原文引用,
+ * 按「原文引用→逻辑推理→总结」输出分级处置建议。
  * 容错原则:知识库不可用不阻断主流程,降级为内置通用建议模板。
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { searchKnowledge, type SearchResult, type KnowledgeItem } from '../ima/ima-api.js'
+import { searchKnowledge, getMediaContent, type SearchResult, type KnowledgeItem } from '../ima/ima-api.js'
 
 interface AnalysisInput {
   abnormal?: boolean
@@ -17,7 +18,7 @@ interface AnalysisInput {
 
 export const generateAdvice = defineTool({
   name: 'aquasense_advice',
-  description: '基于分析结果和知识库,生成处置建议。自动查询 IMA 知识库获取疾病诊疗方案。',
+  description: '基于分析结果和知识库生成处置建议。自动查询 IMA 知识库,读取命中条目正文(PDF/笔记)摘取原文引用,按严重程度分级。',
   parameters: {
     analysis: { type: 'object', additionalProperties: true, required: true, description: 'aquasense_analyze 的图片分析结果(abnormal/cls/symptoms/severity/confidence)' }
   },
@@ -31,7 +32,9 @@ export const generateAdvice = defineTool({
         follow_up_actions: { type: 'array', items: { type: 'string' } },
         medication: { type: 'string' },
         alert_level: { type: 'string', enum: ['P0', 'P1', 'P2'] },
-        knowledge_refs: { type: 'array', items: { type: 'string' }, description: '知识库参考来源' }
+        knowledge_refs: { type: 'array', items: { type: 'string' }, description: '知识库参考来源' },
+        knowledge_excerpt: { type: 'array', items: { type: 'string' }, description: '知识库正文原文引用(三段式之"原文引用",格式:《标题》:「摘录」)' },
+        reasoning: { type: 'string', description: '逻辑推理说明(三段式之"逻辑推理",含结论边界声明)' }
       }
     },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
@@ -60,7 +63,17 @@ export const generateAdvice = defineTool({
       console.error('[aquasense] 知识库查询失败:', error)
     }
 
-    // ========== 步骤 2:根据严重程度生成建议 ==========
+    // ========== 步骤 2:读取命中条目正文,摘取原文片段(三段式之"原文引用") ==========
+    // 正文由 ima-api 正文层提供:PDF 走下载+unpdf 解析缓存,笔记走 notes 接口缓存,冷启动自动建缓存
+    let excerpts: Array<{ title: string; text: string }> = []
+    if (knowledge && needsExcerpts(analysis)) {
+      excerpts = await extractExcerpts(knowledge.items, buildExcerptKeywords(analysis))
+      if (excerpts.length > 0) {
+        console.log(`[aquasense] 摘取知识库原文 ${excerpts.length} 条`)
+      }
+    }
+
+    // ========== 步骤 3:根据严重程度生成建议 ==========
     const immediateActions: string[] = []
     const followUpActions: string[] = []
     const severity = analysis.severity || 'low'
@@ -87,13 +100,16 @@ export const generateAdvice = defineTool({
     followUpActions.push('持续观察 48 小时')
     followUpActions.push('记录水质变化')
 
-    // ========== 步骤 3:用药建议(知识库仅作参考,具体处方须兽医确认) ==========
+    // ========== 步骤 4:用药建议(知识库仅作参考,具体处方须兽医确认) ==========
     let medication = '暂不需要用药'
 
     if (analysis.cls === 'disease') {
-      // 知识库命中时给出参考标题,便于人工核对;不代替兽医处方
+      // 优先引用正文中治疗/用药相关片段(正文层);无可用正文时退化为标题+摘要参考
+      const treatment = excerpts.find((e) => /用药|药浴|泼洒|拌料|消毒|治疗/.test(e.text))
       const hits = knowledge?.items ?? []
-      if (hits.length > 0) {
+      if (treatment) {
+        medication = `建议咨询专业兽医获取针对性用药方案(知识库《${treatment.title}》原文:「${treatment.text}」)`
+      } else if (hits.length > 0) {
         const first = hits[0]
         const summary = first.summary ? `;摘要:${first.summary.slice(0, 120)}` : ''
         medication = `建议咨询专业兽医,获取针对性用药方案(知识库参考:《${first.title}》${summary})`
@@ -102,7 +118,7 @@ export const generateAdvice = defineTool({
       }
     }
 
-    // ========== 步骤 4:确定预警级别(P0/P1/P2,与飞书告警方案一致) ==========
+    // ========== 步骤 5:确定预警级别(P0/P1/P2,与飞书告警方案一致) ==========
     let alertLevel: 'P0' | 'P1' | 'P2' = 'P2'
     if (analysis.cls === 'disease' && severity === 'critical') alertLevel = 'P0'
     else if (analysis.cls === 'disease' || severity === 'high') alertLevel = 'P1'
@@ -115,7 +131,9 @@ export const generateAdvice = defineTool({
       follow_up_actions: followUpActions,
       medication,
       alert_level: alertLevel,
-      knowledge_refs: knowledgeRefs
+      knowledge_refs: knowledgeRefs,
+      knowledge_excerpt: excerpts.map((e) => `《${e.title}》:「${e.text}」`),
+      reasoning: buildReasoning(analysis, excerpts, knowledgeRefs.length)
     }
   }
 })
@@ -190,4 +208,128 @@ async function searchKnowledgeMerged(rawQuery: string): Promise<SearchResult> {
     .map((entry) => entry.item)
 
   return { items: sorted, total: sorted.length }
+}
+
+// ========== 正文引用:从命中条目正文摘取原文片段(三段式之"原文引用") ==========
+
+/** 单条摘录最大长度(字符) */
+const MAX_EXCERPT_CHARS = 240
+/** 无关键词命中时的退化摘录长度(正文开头) */
+const FALLBACK_EXCERPT_CHARS = 160
+/** 最多读取正文的命中文档数(控制请求与耗时;正文有缓存,冷启动自动下载解析) */
+const MAX_EXCERPT_DOCS = 2
+
+/** 是否需要读取正文:有症状或非 normal 状态(disease/early/知识问答)时需要 */
+function needsExcerpts(analysis: AnalysisInput): boolean {
+  return (analysis.symptoms?.length ?? 0) > 0 || analysis.cls !== 'normal'
+}
+
+/** 摘录定位关键词:症状词优先,叠加类别相关的防治/用药词 */
+function buildExcerptKeywords(analysis: AnalysisInput): string[] {
+  const keywords = [...(analysis.symptoms ?? [])]
+  if (analysis.cls === 'disease') keywords.push('治疗', '用药', '疾病', '防治', '症状')
+  else if (analysis.cls === 'early') keywords.push('预防', '前兆', '应激', '防治')
+  return [...new Set(keywords.filter(Boolean))]
+}
+
+/**
+ * 读取命中文档正文并摘取相关片段;单条失败不影响整体(容错)。
+ * 扫描件/无权限笔记返回占位标记(以 [ 开头),不作为引用依据跳过。
+ */
+async function extractExcerpts(
+  items: KnowledgeItem[],
+  keywords: string[]
+): Promise<Array<{ title: string; text: string }>> {
+  const results: Array<{ title: string; text: string }> = []
+  for (const item of items.slice(0, MAX_EXCERPT_DOCS)) {
+    try {
+      const content = await getMediaContent(item.media_id)
+      if (!content || content.startsWith('[')) continue
+      const text = extractRelevantSnippet(content, keywords)
+      if (text) results.push({ title: item.title, text })
+    } catch (error) {
+      console.warn(`[aquasense] 正文读取失败(《${item.title}》):`, error instanceof Error ? error.message : error)
+    }
+  }
+  return results
+}
+
+/**
+ * 从正文中定位与症状最相关的片段:
+ * 按句切分 → 命中关键词最多的句子取前后各一句作上下文 → 限长截断;
+ * 无关键词命中时退化为正文开头。导出供测试。
+ */
+export function extractRelevantSnippet(content: string, keywords: string[]): string {
+  const normalized = content.replace(/\r/g, '').replace(/\n{2,}/g, '\n').trim()
+  if (!normalized) return ''
+
+  const sentences = normalized
+    .split(/(?<=[。！？!?;；\n])/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (sentences.length === 0) return ''
+
+  // 评分:包含不同关键词的个数,取最高分句
+  // PDF 提取的中文常带字间空格(如"烂 鳃"),匹配时统一去空白,保证关键词命中
+  const flattened = sentences.map((s) => s.replace(/\s+/g, ''))
+  const flatKeywords = keywords.map((kw) => kw.replace(/\s+/g, ''))
+  let bestIndex = -1
+  let bestScore = 0
+  for (let i = 0; i < sentences.length; i++) {
+    const score = flatKeywords.filter((kw) => flattened[i].includes(kw)).length
+    if (score > bestScore) {
+      bestScore = score
+      bestIndex = i
+    }
+  }
+
+  if (bestIndex < 0) {
+    // 无命中:退化为正文开头(限长截断)
+    const head = cleanupDisplay(normalized)
+    return head.length > FALLBACK_EXCERPT_CHARS ? `${head.slice(0, FALLBACK_EXCERPT_CHARS)}…` : head
+  }
+
+  // 命中句 + 前后各一句上下文;超长时围绕命中关键词截断,保证引用里看得到命中词
+  const window = sentences.slice(Math.max(0, bestIndex - 1), Math.min(sentences.length, bestIndex + 2))
+  const snippet = cleanupDisplay(window.join(''))
+  if (snippet.length <= MAX_EXCERPT_CHARS) return snippet
+  return truncateAroundKeyword(snippet, flatKeywords, MAX_EXCERPT_CHARS)
+}
+
+/**
+ * 超长摘录围绕命中的关键词截断(优先保留命中词附近的上下文)。
+ * 关键词语句在技术文档中可能很长,直接从头截会丢掉命中词本身。
+ */
+function truncateAroundKeyword(text: string, flatKeywords: string[], max: number): string {
+  const flat = text.replace(/\s+/g, '')
+  let pos = -1
+  for (const kw of flatKeywords) {
+    const i = flat.indexOf(kw)
+    if (i >= 0 && (pos < 0 || i < pos)) pos = i
+  }
+  if (pos < 0) return `${text.slice(0, max)}…`
+  const start = Math.max(0, pos - Math.floor(max / 3))
+  const end = Math.min(text.length, start + max)
+  return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`
+}
+
+/** 展示清理:压缩换行,并去除中文/中文标点之间的字间空格(PDF 提取特征"加 工 工 艺"→"加工工艺") */
+function cleanupDisplay(text: string): string {
+  return text
+    .replace(/\n+/g, ' ')
+    .replace(/(?<=[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])\s+(?=[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])/g, '')
+    .trim()
+}
+
+/** 三段式之"逻辑推理":说明症状与知识库的比对关系,并声明结论边界(不确诊) */
+function buildReasoning(analysis: AnalysisInput, excerpts: Array<{ title: string }>, hitCount: number): string {
+  const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状'
+  if (excerpts.length > 0) {
+    const titles = excerpts.map((e) => `《${e.title}》`).join('')
+    return `症状「${symptoms}」在知识库${titles}中定位到相关原文(见 knowledge_excerpt);结合视觉分类「${analysis.cls || 'unknown'}」与严重程度「${analysis.severity || 'low'}」按疑似情形处置。知识库比对不构成确诊,重症请兽医到场核实。`
+  }
+  if (hitCount > 0) {
+    return `知识库命中 ${hitCount} 条相关条目,但正文暂不可读(扫描件或无权限),建议按严重程度先行处置,并人工查阅原文确认。`
+  }
+  return `知识库未检索到与「${symptoms}」直接相关的条目,以下建议为通用处置模板,请结合现场情况判断。`
 }

@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 /**
- * 知识库 PDF 正文层批量预热脚本
+ * 知识库正文层批量预热脚本(PDF + 笔记)
  *
- * 遍历 IMA 知识库全部条目,对 PDF(media_type=1)执行
- * "下载 → unpdf 提取文本层 → 按 media_id 落盘缓存",输出统计与失败清单。
+ * 遍历 IMA 知识库全部条目,按媒体类型预热正文缓存:
+ *  - PDF(media_type=1):下载 → unpdf 提取文本层 → 按 media_id 落盘
+ *  - 笔记(media_type=11):notes 接口读纯文本 → 按 media_id 落盘
  * 已缓存条目自动跳过,可重复执行(增量);建议部署后或知识库更新后各跑一次。
  *
  * 启动方式:
  *   npm run kb:warm                 # 全量预热(已缓存自动跳过)
- *   npm run kb:warm -- --limit 10   # 只处理前 10 份 PDF(抽样探测文本层覆盖率)
+ *   npm run kb:warm -- --limit 10   # 只处理前 10 份正文(PDF+笔记,抽样探测覆盖率)
  */
 import { resolveKnowledgeBaseId, listKnowledge, getMediaInfo, getMediaContent } from '../ima/ima-api.js';
 const SLEEP_MS = 300; // 条目间请求间隔,规避 IMA 频控(110021)
@@ -42,7 +43,8 @@ async function collectFiles(kbId) {
 }
 async function main() {
     const limitIndex = process.argv.indexOf('--limit');
-    const limit = limitIndex >= 0 ? Number(process.argv[limitIndex + 1]) : Number.POSITIVE_INFINITY;
+    const limited = limitIndex >= 0;
+    const limit = limited ? Number(process.argv[limitIndex + 1]) : Number.POSITIVE_INFINITY;
     const kbId = await resolveKnowledgeBaseId();
     if (!kbId) {
         console.error('[kb:warm] 未找到"水产养殖"知识库,请检查 IMA 凭证与知识库名称');
@@ -51,38 +53,57 @@ async function main() {
     }
     console.log(`[kb:warm] 知识库 ID:${kbId},开始遍历条目...`);
     const files = await collectFiles(kbId);
-    console.log(`[kb:warm] 共 ${files.length} 个文件条目,开始探测媒体类型(仅 PDF 参与解析)...`);
+    console.log(`[kb:warm] 共 ${files.length} 个文件条目,开始探测媒体类型(PDF/笔记参与正文预热)...`);
+    let processed = 0;
     let pdfTotal = 0;
-    let okCount = 0;
+    let pdfOk = 0;
     let scannedCount = 0;
     let oversizedCount = 0;
+    let noteTotal = 0;
+    let noteOk = 0;
+    let noteUnreadable = 0;
     let skipped = 0;
     const failures = [];
     for (const file of files) {
-        if (pdfTotal >= limit)
+        if (limited && processed >= limit)
             break;
         const mediaId = file.mediaId;
         if (!mediaId)
             continue;
         try {
             const info = await getMediaInfo(mediaId);
-            if (info?.media_type !== 1) {
+            const mediaType = info?.media_type;
+            if (mediaType !== 1 && mediaType !== 11) {
                 skipped++;
                 continue;
             }
-            pdfTotal++;
+            processed++;
             const text = await getMediaContent(mediaId);
-            if (text.startsWith('[扫描件')) {
-                scannedCount++;
-                console.warn(`[kb:warm] 扫描件(需 OCR):${file.title}`);
-            }
-            else if (text.startsWith('[PDF 超限')) {
-                oversizedCount++;
-                console.warn(`[kb:warm] 超限跳过:${file.title}`);
+            if (mediaType === 1) {
+                pdfTotal++;
+                if (text.startsWith('[扫描件')) {
+                    scannedCount++;
+                    console.warn(`[kb:warm] PDF 扫描件(需 OCR):${file.title}`);
+                }
+                else if (text.startsWith('[PDF 超限')) {
+                    oversizedCount++;
+                    console.warn(`[kb:warm] PDF 超限跳过:${file.title}`);
+                }
+                else {
+                    pdfOk++;
+                    console.log(`[kb:warm] PDF OK ${file.title}(${text.length} 字)`);
+                }
             }
             else {
-                okCount++;
-                console.log(`[kb:warm] OK ${file.title}(${text.length} 字)`);
+                noteTotal++;
+                if (text.startsWith('[笔记无法读取')) {
+                    noteUnreadable++;
+                    console.warn(`[kb:warm] 笔记不可读:${file.title}`);
+                }
+                else {
+                    noteOk++;
+                    console.log(`[kb:warm] 笔记 OK ${file.title}(${text.length} 字)`);
+                }
             }
         }
         catch (error) {
@@ -93,8 +114,10 @@ async function main() {
     }
     console.log('');
     console.log('[kb:warm] ===== 汇总 =====');
-    console.log(`[kb:warm] 文件条目 ${files.length}(非 PDF 跳过 ${skipped}),处理 PDF ${pdfTotal}`);
-    console.log(`[kb:warm] 成功 ${okCount},扫描件 ${scannedCount},超限 ${oversizedCount},失败 ${failures.length}`);
+    console.log(`[kb:warm] 文件条目 ${files.length}(其他类型跳过 ${skipped}),处理 ${processed}(PDF ${pdfTotal} + 笔记 ${noteTotal})`);
+    console.log(`[kb:warm] PDF:成功 ${pdfOk},扫描件 ${scannedCount},超限 ${oversizedCount}`);
+    console.log(`[kb:warm] 笔记:成功 ${noteOk},不可读 ${noteUnreadable}`);
+    console.log(`[kb:warm] 失败 ${failures.length}`);
     if (failures.length > 0) {
         console.log('[kb:warm] 失败清单:');
         for (const item of failures) {
@@ -103,6 +126,9 @@ async function main() {
     }
     if (scannedCount > 0) {
         console.log('[kb:warm] 提示:扫描件无文本层,接入 OCR 兜底后覆写对应缓存文件即可生效');
+    }
+    if (noteUnreadable > 0) {
+        console.log('[kb:warm] 提示:不可读笔记(非本人/已删除/共享无权限)已写入标记缓存,如需正文请在 IMA 客户端确认归属');
     }
 }
 main().catch((error) => {

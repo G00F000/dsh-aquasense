@@ -63,13 +63,13 @@ dsh-aquasense/
 │   ├── index.ts                       # Cordis 插件入口 (name/inject/apply)
 │   ├── tools/
 │   │   ├── analyze-image.ts           # aquasense_analyze: 视觉三分类
-│   │   ├── generate-advice.ts         # aquasense_advice: IMA 知识库查询 + 分级建议
+│   │   ├── generate-advice.ts         # aquasense_advice: IMA 知识库查询 + 正文引用 + 分级建议
 │   │   └── record-ledger.ts           # aquasense_ledger: 飞书 Bitable 追加写入
 │   │   └── train_aquaspecies.py       # 水生物种识别模型训练脚本 (Python)
 │   ├── ima/
-│   │   └── ima-api.ts                 # IMA 知识库 API 封装(含 PDF 正文层)
+│   │   └── ima-api.ts                 # IMA 知识库 API 封装(含正文层: PDF/笔记)
 │   ├── scripts/
-│   │   └── warm-pdf-cache.ts          # PDF 正文批量预热(npm run kb:warm)
+│   │   └── warm-kb-cache.ts           # 正文批量预热(PDF+笔记, npm run kb:warm)
 │   ├── feishu/
 │   │   └── token.ts                   # 飞书 tenant_access_token 缓存
 │   ├── router/
@@ -143,18 +143,21 @@ interface AnalysisResult {
 **处理流程**:
 1. 从 analyze 输出中提取症状关键词
 2. 调用 IMA 知识库搜索疾病诊疗方案（`searchKnowledge`）
-3. 根据严重程度（critical/high/medium/low）生成分级处置建议
-4. 确定预警级别（P0/P1/P2）
+3. 读取命中条目正文（PDF/笔记），摘取与症状相关的原文片段（`getMediaContent`）
+4. 按「原文引用→逻辑推理→总结」输出，并根据严重程度（critical/high/medium/low）生成分级处置建议
+5. 确定预警级别（P0/P1/P2）
 
 **输出契约**:
 ```typescript
 interface AdviceResult {
-  diagnosis_summary: string       // 诊断摘要
+  diagnosis_summary: string       // 总结（三段式之"总结"）
   immediate_actions: string[]     // 立即行动
   follow_up_actions: string[]     // 后续观察
   medication: string              // 用药建议（疾病时建议咨询兽医）
   alert_level: 'P0' | 'P1' | 'P2'
-  knowledge_refs: string[]        // 知识库参考来源
+  knowledge_refs: string[]        // 知识库参考来源（出处）
+  knowledge_excerpt: string[]     // 知识库正文原文引用（三段式之"原文引用"）
+  reasoning: string               // 逻辑推理说明（三段式之"逻辑推理"）
 }
 ```
 
@@ -215,10 +218,13 @@ interface AdviceResult {
 
 **正文层(按 media_type 分派)**:
 - PDF(`media_type=1`):经 `get_media_info` 的 `url_info` 下载(携带 headers),用 unpdf(pdf.js)提取文本层,按 `media_id` 缓存到 `AQUASENSE_CACHE_DIR/pdf/<media_id>.txt`
-- 扫描件(页均字符数 < 50)留标记待 OCR 兜底;单文件超 50MB 跳过;无下载链接时提示改用 IMA 客户端
-- 笔记/其他类型:沿用字段提取与占位标记
+- 扫描件(页均字符数 < 50)与超限文件(> 50MB)写入标记缓存(避免每次重复下载),待 OCR 兜底;无下载链接时提示改用 IMA 客户端
+- 笔记(`media_type=11`):经 `notebook_ext_info.notebook_id` 调 notes 接口(`get_doc_content`,纯文本)读取,缓存到 `AQUASENSE_CACHE_DIR/note/<media_id>.txt`;非本人/已删除/共享无权限等确定性失败写标记缓存,临时失败不缓存、下次重试
+- 其他类型:沿用字段提取与占位标记
 
-**批量预热**: `npm run kb:warm` 遍历知识库全部条目,对 PDF 执行下载+解析+缓存并输出统计/失败清单(已有缓存自动跳过,可重复执行)
+**知识库浏览**: `listKnowledge` 支持逐级分页遍历;文件夹条目有两种返回形态(显式 `folder_id` 字段,或 `media_id` 以 `folder_` 开头),两种均归一为 `kind='folder'` 并可作 `folder_id` 下钻,避免把文件夹误当文件导致整棵子树(含笔记/专利 PDF)被遗漏
+
+**批量预热**: `npm run kb:warm` 逐级遍历知识库全部条目(含嵌套文件夹下钻),对 PDF 与笔记执行"下载/读取 + 解析 + 缓存"并输出统计/失败清单(已有缓存自动跳过,可重复执行)
 
 **凭证获取**（两种方式任选）:
 - 环境变量: `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY`

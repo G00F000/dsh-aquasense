@@ -37,7 +37,7 @@
     "prepare": "npm run build",
     "remind": "tsx src/scheduler/daily-reminder.ts",
     "remind:prod": "node dist/scheduler/daily-reminder.js",
-    "kb:warm": "tsx src/scripts/warm-pdf-cache.ts"
+    "kb:warm": "tsx src/scripts/warm-kb-cache.ts"
   },
   "dsh": {
     "bundle": {
