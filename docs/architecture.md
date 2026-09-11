@@ -15,7 +15,7 @@ dsh-aquasense 是一个基于 DeepSeek Harness (DSH) 的水产养殖 AI 巡检�
 
 ---
 
-## 2. 系统架构
+## 2. 系统架构总览
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -55,25 +55,641 @@ dsh-aquasense 是一个基于 DeepSeek Harness (DSH) 的水产养殖 AI 巡检�
 
 ---
 
-## 3. 目录结构
+## 3. 三大核心模块
+
+本章按「图像识别 → 知识库 → 台账登记」的数据流顺序，详细阐述三大核心模块的内部逻辑与协作关系。
+
+### 3.1 图像识别模块 (aquasense_analyze)
+
+**文件**: `src/tools/analyze-image.ts`
+**适用场景**: S1/S2/S4/S5/S8（所有需要图片分析的场景共用同一个工具）
+
+#### 3.1.1 处理流程
+
+```
+图片 URL 输入
+    │
+    ▼
+┌──────────────────┐
+│ 1. 下载图片       │ fetch(url, 30s 超时)
+│    转 base64      │ Content-Type → MIME 推断
+└───────┬──────────┘
+        │ imageData + mimeType
+        ▼
+┌──────────────────┐
+│ 2. 构建专家提示词  │ buildPrompt(description, pool_id)
+│    调用视觉模型    │ DeepSeek Vision API (deepseek-flash)
+│                   │ temperature=0.1, max_tokens=4096
+└───────┬──────────┘
+        │ 模型原始文本
+        ▼
+┌──────────────────┐
+│ 3. JSON 解析      │ 正则提取首个 {} → JSON.parse
+│    白名单归一      │ cls/severity/scene_hint 严格校验
+│    容错降级        │ 解析失败 → unknown, 不阻断流程
+└───────┬──────────┘
+        │ AnalysisResult
+        ▼
+    输出给 advice / ledger
+```
+
+#### 3.1.2 输出契约
+
+```typescript
+interface AnalysisResult {
+  abnormal: boolean               // 是否异常(由 cls 推导: early/disease = true)
+  cls: 'normal' | 'early' | 'disease' | 'unknown'  // 三分类
+  symptoms: string[]              // 症状列表
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  confidence: number              // 置信度 0-1
+  scene_hint: SceneHint           // 图片场景提示(供纯图片路由兜底)
+}
+```
+
+#### 3.1.3 三分类语义
+
+| 分类 | 含义 | 典型表现 | 后续动作 |
+|------|------|----------|----------|
+| `normal` | 正常 | 集群巡游、摄食积极 | 仅登记台账 |
+| `early` | 前兆（领先 12~48h） | 离群独游、蹭壁、呼吸急促 | 重点观察 + 预防建议 |
+| `disease` | 发病 | 浮头、烂身、白点、死亡 | 紧急处置 + P0/P1 预警 |
+
+#### 3.1.4 scene_hint 场景提示
+
+视觉模型在分析健康状态的同时，会判断图片属于哪种业务场景，输出 `scene_hint`。这是**纯图片无文字时**的路由兜底依据：
+
+| scene_hint | 含义 | 对应落表 |
+|------------|------|----------|
+| `death` | 死鱼漂浮/翻白/浮尸 | 死亡记录表 |
+| `water_quality` | 水质检测仪器/试纸/水色 | 水质汇报表 |
+| `medication` | 用药/药瓶/泼洒/消毒 | 用药记录表 |
+| `feeding` | 饲料/投喂/喂食 | 投喂记录表 |
+| `temperature` | 温度计/测温 | 温度汇报表 |
+| `dissection` | 鱼体解剖/内脏/器官 | 解剖记录表 |
+| `inspection` | 其他常规巡检（默认） | 巡检记录表 |
+
+#### 3.1.5 容错设计
+
+- 图片下载失败（30s 超时/HTTP 错误）→ 抛出异常，由 Agent 决定后续
+- 模型返回空内容或非 JSON → 降级为 `{cls: 'unknown', symptoms: ['AI分析失败,请人工复核']}`
+- 模型输出字段越界（如 cls 写成 "sick"）→ 按白名单归一为 `normal`
+- scene_hint 不在合法枚举内 → 降级为 `inspection`
+
+---
+
+### 3.2 知识库模块 (IMA 双通道检索 + 正文引用)
+
+**文件**: `src/ima/ima-api.ts`（API 封装）、`src/tools/generate-advice.ts`（处置建议生成）
+
+#### 3.2.1 检索架构：双通道互补
+
+知识库检索采用**双通道**设计，两通道覆盖不同语料，互补而非替代：
+
+```
+                    ┌─────────────────────────────┐
+                    │   IMA 知识库(84个PDF+笔记)    │
+                    │   + 用户全部笔记(含未入库)     │
+                    └──────────┬──────────────────┘
+                               │
+            ┌──────────────────┼──────────────────┐
+            ▼                                     ▼
+   ┌─────────────────┐                  ┌─────────────────┐
+   │ 通道A:知识库检索  │                  │ 通道B:笔记检索    │
+   │ searchKnowledge  │                  │ searchNote       │
+   │                  │                  │                  │
+   │ 接口:wiki/v1/    │                  │ 接口:note/v1/    │
+   │  search_knowledge│                  │  search_note     │
+   │                  │                  │                  │
+   │ 索引范围:         │                  │ 索引范围:         │
+   │  仅名称(文件名/   │                  │  正文全文(含用户   │
+   │  文件夹名)        │                  │  专属笔记,如剖检   │
+   │                  │                  │  手册/操作手册)    │
+   │ 命中特征:         │                  │                  │
+   │  条目标题匹配     │                  │ 命中特征:         │
+   │  无高亮原文       │                  │  正文关键词匹配    │
+   │  from='wiki'     │                  │  回带高亮原文      │
+   │                  │                  │  from='note'     │
+   │ 优势:             │                  │ 优势:             │
+   │  覆盖所有入库文件  │                  │  能命中正文词      │
+   │                  │                  │  (如"罗茨风机"     │
+   │                  │                  │  "氨氮")           │
+   └────────┬────────┘                  └────────┬────────┘
+            │                                     │
+            └──────────────────┬──────────────────┘
+                               ▼
+                    ┌─────────────────┐
+                    │ 合并去重 + 排序   │
+                    │ note 优先,        │
+                    │ wiki 补充         │
+                    └─────────────────┘
+```
+
+**关键区别**:
+- 知识库检索（`searchKnowledge`）：只索引文件名/文件夹名，搜索"氨氮"不会命中 PDF 正文中的"氨氮超标处理方案"
+- 笔记检索（`searchNote`）：索引正文全文，搜索"氨氮"能命中笔记中讨论氨氮问题的内容，并返回命中处高亮原文
+
+#### 3.2.2 合并策略（searchKnowledgeMerged）
+
+由于 IMA 是关键词匹配（非语义检索），多词空格拼接会 0 命中，因此采用**逐词拆分 + 双通道查询**策略：
+
+```
+原始查询: "白点 鲈鱼 疾病 治疗"
+    │
+    ▼ 拆分为独立关键词
+["白点", "鲈鱼", "疾病", "治疗"]
+    │
+    ▼ 逐词双通道查询(每个词分别查 wiki + note)
+词1 "白点" → wiki 命中 [条目A]  |  note 命中 [条目X(高亮)]
+词2 "鲈鱼" → wiki 命中 [条目A,条目B]  |  note 命中 [条目X,条目Y]
+词3 "疾病" → wiki 命中 [条目C]  |  note 命中 [条目Y(高亮)]
+词4 "治疗" → wiki 命中 []  |  note 命中 [条目X,条目Z(高亮)]
+    │
+    ▼ 统计命中词数
+wiki: 条目A=2词, 条目B=1词, 条目C=1词
+note: 条目X=3词, 条目Y=2词, 条目Z=1词
+    │
+    ▼ 合并去重(note优先,wiki补充,按命中词数排序)
+最终: [条目X(note,3词), 条目Y(note,2词), 条目Z(note,1词), 条目A(wiki,2词), 条目B(wiki,1词)]
+    │
+    ▼ 去重规则: media_id + 标题双维度去重
+    (同一篇笔记可能被 wiki 和 note 各命中一次,标题相同视为同一来源)
+```
+
+**合并参数**:
+- note 保留上限: 3 条
+- wiki 保留上限: 2 条
+- 合并总上限: 5 条
+
+#### 3.2.3 正文引用提取（三段式之"原文引用"）
+
+命中知识条目后，需要读取正文并摘取与症状最相关的原文片段：
+
+```
+命中条目列表 (最多5条)
+    │
+    ▼ 逐条处理(单条失败不影响整体)
+┌──────────────────────────────────────────────┐
+│ 条目X (from='note', 有高亮)                    │
+│   → 直接使用 highlight 中的 <em> 标记文本       │
+│   → 清理HTML标签 → 压缩空白 → 截断(240字)      │
+│   → 输出: 《标题》:「摘录」                      │
+│   (无需下载解析,不受扫描件/超限影响)             │
+├──────────────────────────────────────────────┤
+│ 条目A (from='wiki', 无高亮)                    │
+│   → getMediaContent(media_id) 读取正文         │
+│   → 按 media_type 分派:                        │
+│     PDF(1) → 下载 + unpdf解析 + 缓存           │
+│     笔记(11) → notes接口读取 + 缓存            │
+│   → extractRelevantSnippet 定位相关片段:        │
+│     按句切分 → 关键词评分 → 取命中句±1上下文     │
+│   → 超长时围绕关键词截断                        │
+├──────────────────────────────────────────────┤
+│ 条目C (扫描件/超限/无权限)                      │
+│   → 内容以 "[" 开头(占位标记)                   │
+│   → 跳过,继续向后取下一条                       │
+│   (不提前截断,因为可读正文可能排在后面)           │
+└──────────────────────────────────────────────┘
+```
+
+**正文缓存策略**:
+- 缓存目录: `AQUASENSE_CACHE_DIR/pdf/` 和 `AQUASENSE_CACHE_DIR/note/`
+- PDF: 按 `media_id.txt` 缓存解析结果；超限标记（`[PDF 超限:xxx]`）也缓存，避免重复下载
+- 笔记: 按 `note_id.txt` 缓存；确定性失败（权限/已删除）缓存标记，临时失败不缓存
+- 超限标记带文件大小，当 `MAX_PDF_BYTES` 上调时自动重评（过期标记触发重新下载）
+- 批量预热: `npm run kb:warm` 遍历全部条目预建缓存
+
+#### 3.2.4 处置建议生成（三段式输出）
+
+`aquasense_advice` 工具将图像分析结果与知识库查询结果融合，按**三段式**结构输出：
+
+```
+┌─────────────────────────────────────────────────┐
+│ 三段式输出结构                                     │
+│                                                   │
+│ ① 原文引用 (knowledge_excerpt)                    │
+│    《鲈鱼养殖技术》:「白点病由小瓜虫引起...」        │
+│    《水产疾病防治手册》:「症状表现为体表白点...」     │
+│                                                   │
+│ ② 逻辑推理 (reasoning)                            │
+│    "症状「白点、蹭壁」在知识库《鲈鱼养殖技术》        │
+│     中定位到相关原文(见 knowledge_excerpt);          │
+│     结合视觉分类「early」与严重程度「medium」         │
+│     按疑似情形处置。知识库比对不构成确诊,              │
+│     重症请兽医到场核实。"                            │
+│                                                   │
+│ ③ 总结 (diagnosis_summary + 立即行动/后续观察)      │
+│    状态:early, 症状:白点、蹭壁                      │
+│    立即行动:减料50%, 密切观察24小时                   │
+│    后续观察:持续观察48小时, 记录水质变化               │
+└─────────────────────────────────────────────────┘
+```
+
+**分级处置规则**（按严重程度）:
+
+| 严重程度 | 立即行动 | 预警级别 |
+|----------|----------|----------|
+| `critical` | 通知负责人 + 隔离病鱼 + 紧急检测水质 | P0 |
+| `high` | 加强巡塘(每日3次) + 检测溶氧氨氮 + 减料50% | P1 |
+| `medium` | 减料50% + 密切观察24小时 | P2 |
+| `low` | 保持观察 | P2 |
+
+**用药安全原则**: disease 场景下知识库仅作参考，输出"建议咨询专业兽医获取针对性用药方案"，绝不代替兽医开药。
+
+---
+
+### 3.3 9 场景多维表格台账模块
+
+**文件**: `src/tools/record-ledger.ts`（台账写入）、`src/router/intent-router.ts`（场景识别）
+
+#### 3.3.1 9 场景总览
+
+系统覆盖 9 个业务场景，其中 8 个落表（S3 知识询问不落表）：
+
+| 编号 | 场景 | 场景标识 | 落表 | 触发条件 |
+|------|------|----------|------|----------|
+| S1 | 水质汇报 | `water_quality` | 水质汇报表 | 溶氧/氨氮/pH/亚硝酸/水色 |
+| S2 | 巡检（默认） | `inspection` | 巡检记录表 | 带图消息（兜底场景） |
+| S3 | 知识询问 | `knowledge` | **不落表** | 怎么/如何/为什么/咨询 |
+| S4 | 死亡汇报（紧急） | `death` | 死亡记录表 | 死亡/死了/死鱼/浮尸/翻白 |
+| S5 | 用药记录 | `medication` | 用药记录表 | 用药/药品/泼洒/拌料/消毒 |
+| S6 | 投喂记录 | `feeding` | 投喂记录表 | 喂食/投喂/吃料/饲料 |
+| S7 | 温度汇报 | `temperature` | 温度汇报表 | 水温/棚温/温度 |
+| S8 | 解剖汇报 | `dissection` | 解剖记录表 | 解剖/内脏/肝/胆/肠/鳃 |
+| S9 | 每日提醒 | — | **不落表** | 定时触发（独立调度器） |
+
+#### 3.3.2 意图路由：文字优先 + 视觉兜底
+
+消息到达后，场景识别遵循**两级合并**策略：
+
+```
+工人消息 (文字 + 图片)
+    │
+    ▼
+┌───────────────────────────────────────────────────┐
+│ 第一级: 文字关键词识别 (detectIntent)               │
+│                                                   │
+│ 优先级从高到低匹配:                                 │
+│  1. S4 死亡  → 死亡/死了/死鱼/浮尸/翻白  (0.95)   │
+│  2. S7 温度  → 水温/棚温/温度/摄氏       (0.9)    │
+│  3. S6 喂食  → 喂食/投喂/吃料/饲料       (0.9)    │
+│  4. S5 用药  → 用药/药品/泼洒/消毒       (0.85)   │
+│  5. S8 解剖  → 解剖/内脏/肝/胆/肠/鳃    (0.85)   │
+│  6. S1 水质  → 水质/溶氧/氨氮/pH        (0.85)   │
+│  7. S3 知识  → 怎么/如何/为什么/咨询     (0.8)    │
+│  8. S2 巡检  → 带图消息                  (0.7)    │
+│  9. S2 巡检  → 兜底                      (0.5)    │
+└───────────────────┬───────────────────────────────┘
+                    │
+                    ▼
+┌───────────────────────────────────────────────────┐
+│ 第二级: 视觉 scene_hint 融合 (detectIntentWithVision)│
+│                                                   │
+│ 文字置信度 ≥ 0.85 → 直接采用文字结果(不看视觉)      │
+│ 文字置信度 < 0.85 → 视觉辅助:                       │
+│   视觉与文字一致 → 置信度 +0.1                      │
+│   视觉与文字不一致 + 纯图片 → 采用视觉结果           │
+│   其他 → 保持文字结果                               │
+└───────────────────┬───────────────────────────────┘
+                    │
+                    ▼
+              最终 Scene + 是否需要落表(needsTable)
+```
+
+**设计原则**: 文字语义明确（工人知道自己在汇报什么），视觉仅作纯图片无文字时的兜底。当文字与视觉冲突时，以文字为准。
+
+#### 3.3.3 台账写入逻辑
+
+```
+scene 确定 + 参数传入
+    │
+    ▼
+┌──────────────────────────────────────────────────┐
+│ 1. 校验环境变量                                     │
+│    FEISHU_BITABLE_APP_TOKEN + 对应 scene 的 TABLE_ID │
+│    缺失 → 返回明确错误信息                           │
+└──────────────────┬───────────────────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────────────────┐
+│ 2. 池号校验                                        │
+│    从 fields['池号'] 或 args.pool_id 取值           │
+│    缺失 → 返回追问 ["请问是哪个池子?(池1/池2/池3/池4)"]│
+│    不写无池号脏数据                                  │
+└──────────────────┬───────────────────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────────────────┐
+│ 3. 解析上报人                                       │
+│    优先: open_id → getFeishuUserName → 飞书通讯录姓名 │
+│    兜底: args.reporter(禁止凭记忆/历史对话填写)       │
+│    仍无法确定 → 返回追问,不写"未知"等脏数据           │
+└──────────────────┬───────────────────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────────────────┐
+│ 4. 组装字段 (buildFields)                           │
+│                                                    │
+│ ┌─ inspection 便捷路径(传 analysis + advice 时):    │
+│ │  自动按巡检表列名组装:                              │
+│ │  池号 / 巡检时间 / 巡检人 / 鱼群状态(三分类)        │
+│ │  / 症状描述 / 严重程度 / AI诊断 / 处置建议          │
+│ │  / 知识来源 / 是否预警 / 图片                       │
+│ │                                                    │
+│ └─ 其他场景(非 inspection):                          │
+│    Agent 按表格实际列名提供 fields                     │
+│    自动覆盖: 池号 / 人字段(open_id解析) / 图片上传     │
+│    AI诊断文本自动落入对应列(水-quality→AI分析等)        │
+└──────────────────┬───────────────────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────────────────┐
+│ 5. 30 分钟编辑窗口                                  │
+│    查询同池号 30 分钟内是否已有记录                     │
+│    有 → PUT 更新(合并字段,保留未覆盖旧值)              │
+│    无 → POST 新增                                    │
+└──────────────────────────────────────────────────┘
+```
+
+#### 3.3.4 8 张多维表格的列定义
+
+每张表通过环境变量配置对应的飞书 Bitable table_id：
+
+**巡检记录表** (`inspection`, `TABLE_ID_INSPECTION`):
+
+| 列名 | 说明 | 来源 |
+|------|------|------|
+| 池号 | 池1/池2/池3/池4 | 必填校验 |
+| 巡检时间 | 写入时间戳 | 自动生成 |
+| 巡检人 | 发消息工人姓名 | open_id → 飞书通讯录 |
+| 鱼群状态 | normal/early/disease | analyze.cls |
+| 症状描述 | 症状列表 | analyze.symptoms |
+| 严重程度 | low/medium/high/critical | analyze.severity |
+| AI诊断 | 诊断总结 | advice.diagnosis_summary |
+| 处置建议 | 立即行动 | advice.immediate_actions |
+| 知识来源 | 参考条目 | advice.knowledge_refs |
+| 是否预警 | true/false | analyze.abnormal |
+| 图片 | 附件 | 自动上传飞书云文档 |
+
+**水质汇报表** (`water_quality`, `TABLE_ID_WATER_QUALITY`):
+
+| 列名 | 说明 |
+|------|------|
+| 池号 | 池1-池4 |
+| 检测时间 | 写入时间戳 |
+| 检测人 | open_id → 飞书通讯录 |
+| 溶氧(mg/L) | Agent 提供 |
+| 氨氮(mg/L) | Agent 提供 |
+| pH值 | Agent 提供 |
+| 亚硝酸盐(mg/L) | Agent 提供 |
+| 二氧化碳(mg/L) | Agent 提供（可选） |
+| 硝酸盐(mg/L) | Agent 提供（可选） |
+| 水色描述 | Agent 提供（可选） |
+| AI分析 | advice.diagnosis_summary |
+| 异常标记 | Agent 提供 |
+| 图片 | 附件 |
+
+**死亡记录表** (`death`, `TABLE_ID_DEATH`):
+
+| 列名 | 说明 |
+|------|------|
+| 池号 | 池1-池4 |
+| 汇报时间 | 写入时间戳 |
+| 汇报人 | open_id → 飞书通讯录 |
+| 死亡数量 | Agent 提供（工人上报） |
+| 死亡状态 | Agent 提供 |
+| 死鱼外观 | Agent 提供（可选） |
+| AI分析 | advice.diagnosis_summary |
+| 预警级别 | P0/P1/P2 |
+| 是否通知负责人 | Agent 提供 |
+| 图片 | 附件 |
+
+**用药记录表** (`medication`, `TABLE_ID_MEDICATION`):
+
+| 列名 | 说明 |
+|------|------|
+| 池号 | 池1-池4 |
+| 用药时间 | 写入时间戳 |
+| 用药人 | open_id → 飞书通讯录 |
+| 药品名称 | Agent 提供 |
+| 用药剂量 | Agent 提供 |
+| 用药方式 | Agent 提供 |
+| 用药原因 | Agent 提供（可选） |
+| 备注 | Agent 提供（可选） |
+| 图片 | 附件 |
+
+**投喂记录表** (`feeding`, `TABLE_ID_FEEDING`):
+
+| 列名 | 说明 |
+|------|------|
+| 池号 | 池1-池4 |
+| 喂食时间 | 写入时间戳 |
+| 喂食人 | open_id → 飞书通讯录 |
+| 饲料种类 | Agent 提供 |
+| 投喂量(kg) | Agent 提供 |
+| 摄食情况 | Agent 提供 |
+| 备注 | Agent 提供（可选） |
+| 图片 | 附件 |
+
+**温度汇报表** (`temperature`, `TABLE_ID_TEMPERATURE`):
+
+| 列名 | 说明 |
+|------|------|
+| 池号 | 池1-池4 |
+| 测量时间 | 写入时间戳 |
+| 测量人 | open_id → 飞书通讯录 |
+| 水温(℃) | Agent 提供 |
+| 棚温(℃) | Agent 提供 |
+| 备注 | Agent 提供（可选） |
+| 图片 | 附件 |
+
+**解剖记录表** (`dissection`, `TABLE_ID_DISSECTION`):
+
+| 列名 | 说明 |
+|------|------|
+| 池号 | 池1-池4 |
+| 汇报时间 | 写入时间戳 |
+| 汇报人 | open_id → 飞书通讯录 |
+| 解剖器官 | 下拉框多选: 体表/鳃/肝/胆囊/肠/脾/鳔/肾/腹腔 |
+| 异常信号 | Agent 提供 |
+| AI辅助判断 | advice.diagnosis_summary |
+| 备注 | Agent 提供（可选） |
+| 图片 | 附件 |
+
+**特殊处理**:
+- `dissection` 的「解剖器官」字段做归一化：自动纠正异写（如"腮"→"鳃"、单独的"胆"→"胆囊"），只保留下拉框选项内的值，选项外内容丢弃并 warn 日志
+- 30 分钟编辑窗口：同池号 30 分钟内的重复写入自动合并更新（PUT），避免短时间内多次上报产生多条冗余记录
+- 图片自动上传：传入的图片 URL 自动下载并上传到飞书云文档，返回 Bitable 附件格式的 `file_token`
+
+#### 3.3.5 人字段自动填充
+
+台账中的"人"字段（巡检人/检测人/用药人/喂食人/测量人/汇报人）统一由 `open_id` 自动解析：
+
+```
+当前消息发送者的 open_id (dsh-lark 消息上下文提供)
+    │
+    ▼
+getFeishuUserName(open_id)
+    │ → 飞书通讯录 API 获取真实姓名
+    │ → 进程内缓存(同一 open_id 只查一次)
+    ▼
+填入对应 scene 的人字段列
+    (inspection→巡检人, water_quality→检测人, death→汇报人, ...)
+```
+
+**安全约束**: 禁止凭记忆、历史对话或猜测填写上报人姓名。`reporter` 参数仅当拿不到 `open_id` 时兜底使用。
+
+---
+
+## 4. 三大模块协作关系
+
+### 4.1 完整数据流（以 S2 巡检为例）
+
+```
+工人发图+文字: "池3鱼有点蹭壁"
+    │
+    ▼
+dsh-lark 转发消息 (含 image_url + open_id)
+    │
+    ▼
+┌─────────────────── intent-router ───────────────────┐
+│ 文字匹配: "蹭壁" 无直接关键词 → hasImage=true         │
+│ → scene='inspection', confidence=0.7                │
+│ scene_hint 由 analyze 后补充 → detectIntentWithVision│
+└───────────────────┬────────────────────────────────┘
+                    │ scene = inspection
+                    ▼
+┌─────────────────── aquasense_analyze ────────────────┐
+│ 输入: image_url + description="池3鱼有点蹭壁" + pool_id="池3"│
+│                                                    │
+│ ① 下载图片 → base64 (MIME: image/jpeg)              │
+│ ② 构建提示词 → 调用 DeepSeek Vision                  │
+│ ③ 解析输出:                                         │
+│    { abnormal: true,                                │
+│      cls: "early",                                  │
+│      symptoms: ["蹭壁", "离群独游"],                  │
+│      severity: "medium",                            │
+│      confidence: 0.8,                               │
+│      scene_hint: "inspection" }                     │
+└───────────────────┬────────────────────────────────┘
+                    │ AnalysisResult
+                    ▼
+┌─────────────────── aquasense_advice ─────────────────┐
+│ 输入: analysis (来自 analyze 输出)                    │
+│                                                    │
+│ ① 构建查询词: "蹭壁 离群独游 前兆 预防 鲈鱼"           │
+│ ② 双通道检索(逐词):                                  │
+│    wiki: 《鲈鱼养殖手册》(名称匹配)                    │
+│    note: 《鲈鱼前兆症状记录》(正文命中,带高亮)           │
+│ ③ 合并去重: note优先, wiki补充, 共5条                 │
+│ ④ 正文摘取:                                          │
+│    note 高亮 → 《鲈鱼前兆症状记录》:「蹭壁是应激前兆     │
+│    的典型表现,常见于水质突变...」                       │
+│    PDF 正文 → 《鲈鱼养殖手册》:「前兆期鱼群表现为         │
+│    离群独游、游动迟缓、蹭壁摩擦...」                    │
+│ ⑤ 生成三段式建议:                                     │
+│    原文引用 → 逻辑推理 → 分级处置                       │
+│    alert_level: "P2" (early + medium)                │
+└───────────────────┬────────────────────────────────┘
+                    │ AdviceResult
+                    ▼
+┌─────────────────── aquasense_ledger ─────────────────┐
+│ 输入: scene="inspection", pool_id="池3",             │
+│       open_id="xxx", analysis + advice               │
+│                                                    │
+│ ① 校验池号: "池3" ✓                                  │
+│ ② 解析上报人: open_id → 飞书通讯录 → "张三"            │
+│ ③ 30分钟窗口: 无已有记录 → 新增                        │
+│ ④ 自动组装巡检表字段:                                  │
+│    池号="池3", 巡检时间=时间戳, 巡检人="张三",          │
+│    鱼群状态="early", 症状描述="蹭壁、离群独游",         │
+│    严重程度="medium", AI诊断="状态:early,症状:蹭壁...",  │
+│    处置建议="减料50%;密切观察24小时",                    │
+│    知识来源="《鲈鱼前兆症状记录》;《鲈鱼养殖手册》",       │
+│    是否预警=true, 图片=[file_token]                    │
+│ ⑤ POST → 飞书 Bitable API                            │
+└───────────────────┬────────────────────────────────┘
+                    │
+                    ▼
+Agent 回复工人: "池3鲈鱼为前兆期(蹭壁、离群独游)..."
+```
+
+### 4.2 紧急场景流程（S4 死亡汇报）
+
+```
+工人: "池2死了3条鱼" (+ 图片)
+    │
+    ▼
+intent-router: "死了" → S4 死亡(最高优先级 0.95)
+    │
+    ▼
+analyze: 图片确认死亡状态 → cls="disease", severity="critical"
+    │
+    ▼
+advice: 症状匹配死亡 → P0 预警 + "立即通知负责人 + 隔离病鱼"
+    │
+    ▼
+ledger(scene=death): 死亡数量=3, 预警级别=P0 → 死亡记录表
+    │
+    ▼
+Agent 回复: "⚠️ 紧急! 池2发现3条死鱼...请立即通知负责人"
+```
+
+### 4.3 纯图片路由流程
+
+```
+工人: 只发一张水质检测仪器照片 (无文字)
+    │
+    ▼
+intent-router 文字匹配: 无文字 → hasImage=true → S2 巡检(0.7)
+    │
+    ▼
+analyze: 输出 scene_hint="water_quality"
+    │
+    ▼
+detectIntentWithVision: 文字0.7 < 0.85 + 有图
+    → 视觉 scene_hint="water_quality" → 替换为 S1 水质汇报(0.75)
+    │
+    ▼
+ledger(scene=water_quality): 水质汇报表
+```
+
+### 4.4 S9 每日提醒流程（独立调度器）
+
+```
+daily-reminder 启动 (独立进程,不经过 intent-router)
+    │
+    ▼
+从 IMA 知识库搜索《每日操作手册》
+    │ → searchKnowledge → getMediaContent → 解析 "HH:MM 任务"
+    ▼
+07:00 → 推送当日任务总览到飞书群
+每分钟 tick → 匹配任务时间点 → 推送单条提醒
+    │ → 复用飞书 token 缓存 + 推送 API
+    ▼
+工人按提醒执行 → 发消息汇报 → 进入 S1-S8 流程
+```
+
+---
+
+## 5. 目录结构
 
 ```
 dsh-aquasense/
 ├── src/
 │   ├── index.ts                       # Cordis 插件入口 (name/inject/apply)
 │   ├── tools/
-│   │   ├── analyze-image.ts           # aquasense_analyze: 视觉三分类
-│   │   ├── generate-advice.ts         # aquasense_advice: IMA 知识库查询 + 正文引用 + 分级建议
-│   │   └── record-ledger.ts           # aquasense_ledger: 飞书 Bitable 追加写入
+│   │   ├── analyze-image.ts           # aquasense_analyze: 视觉三分类 + scene_hint
+│   │   ├── generate-advice.ts         # aquasense_advice: IMA 双通道检索 + 三段式建议
+│   │   ├── record-ledger.ts           # aquasense_ledger: 飞书 Bitable 8表写入 + 30分钟窗口
 │   │   └── train_aquaspecies.py       # 水生物种识别模型训练脚本 (Python)
 │   ├── ima/
-│   │   └── ima-api.ts                 # IMA 知识库 API 封装(含正文层: PDF/笔记)
+│   │   └── ima-api.ts                 # IMA 知识库 API 封装(双通道检索 + PDF/笔记正文层)
 │   ├── scripts/
 │   │   └── warm-kb-cache.ts           # 正文批量预热(PDF+笔记, npm run kb:warm)
 │   ├── feishu/
-│   │   └── token.ts                   # 飞书 tenant_access_token 缓存
+│   │   └── token.ts                   # 飞书 token 缓存 + 用户名解析 + 图片上传
 │   ├── router/
-│   │   └── intent-router.ts           # 消息意图识别 (S1-S8 纯函数)
+│   │   └── intent-router.ts           # 消息意图识别 (S1-S8 纯函数,文字+视觉两级合并)
 │   └── scheduler/
 │       └── daily-reminder.ts          # S9 每日任务提醒独立进程
 ├── skills/
@@ -86,231 +702,28 @@ dsh-aquasense/
 ├── .env.example                       # 环境变量模板
 ├── cordis.patch.yml                   # DSH 插件注册补丁
 ├── package.json                       # NPM 包配置
-├── tsconfig.json                      # TypeScript 编译配置
-└── .github/workflows/ci.yml           # GitHub Actions CI
-```
-
----
-
-## 4. 核心模块详解
-
-### 4.1 插件入口 (`src/index.ts`)
-
-Cordis 插件标准入口，负责注册 3 个业务 Tool：
-
-```typescript
-export const name = 'aquasense-plugin'
-export const inject = ['tools']
-
-export function apply(ctx: Context) {
-  ctx.tools.register(analyzeImage)
-  ctx.tools.register(generateAdvice)
-  ctx.tools.register(recordLedger)
-}
-```
-
-- `inject: ['tools']` — 声明依赖 DSH 的 tools 注册表
-- `apply` — 插件激活时调用，注册 3 个工具
-
-### 4.2 视觉分析工具 (`aquasense_analyze`)
-
-**文件**: `src/tools/analyze-image.ts`
-**场景**: S1/S2/S4/S5/S8（需要图片分析的场景共用）
-
-**处理流程**:
-1. 下载工人发送的图片，转 base64（30 秒超时）
-2. 构建专家级提示词，调用 DeepSeek Vision 模型（默认 deepseek-flash）
-3. 解析模型输出为结构化 JSON，归一化到三分类白名单
-
-**输出契约**:
-```typescript
-interface AnalysisResult {
-  abnormal: boolean        // 是否异常
-  cls: 'normal' | 'early' | 'disease'  // 三分类
-  symptoms: string[]       // 症状列表
-  severity: 'low' | 'medium' | 'high' | 'critical'
-  confidence: number       // 置信度 0-1
-}
-```
-
-**容错设计**: 模型输出解析失败时降级为 `normal`，不阻断巡检流程。
-
-### 4.3 处置建议工具 (`aquasense_advice`)
-
-**文件**: `src/tools/generate-advice.ts`
-**场景**: S2/S4/S5/S8（巡检诊断后调用）
-
-**处理流程**:
-1. 从 analyze 输出中提取症状关键词
-2. 双通道检索：知识库名称检索（`searchKnowledge`）+ 笔记正文检索（`searchNote`），合并去重后 note 命中优先（名称检索不含正文，正文词如“罗茨风机/氨氮”只有 note 通道能命中）
-3. 摘取原文引用：note 命中自带高亮原文（`highlightInfo.format_content`）直接作引用，免下载解析；其余条目读取正文（`getMediaContent`，note 无高亮时走 `getNoteContentByNoteId`）摘取相关片段；扫描件/超限/无权限等不可读条目跳过并继续向后取，直到凑够引用条数或候选遍历完（排名靠前的命中常是扫描大部头，提前截断会导致引用长期为空）
-4. 按「原文引用→逻辑推理→总结」输出，并根据严重程度（critical/high/medium/low）生成分级处置建议
-5. 确定预警级别（P0/P1/P2）
-
-**输出契约**:
-```typescript
-interface AdviceResult {
-  diagnosis_summary: string       // 总结（三段式之"总结"）
-  immediate_actions: string[]     // 立即行动
-  follow_up_actions: string[]     // 后续观察
-  medication: string              // 用药建议（疾病时建议咨询兽医）
-  alert_level: 'P0' | 'P1' | 'P2'
-  knowledge_refs: string[]        // 知识库参考来源（出处）
-  knowledge_excerpt: string[]     // 知识库正文原文引用（三段式之"原文引用"）
-  reasoning: string               // 逻辑推理说明（三段式之"逻辑推理"）
-}
-```
-
-**安全原则**: 知识库仅作参考，疾病场景明确建议咨询专业兽医，不代替兽医开药。
-
-### 4.4 台账写入工具 (`aquasense_ledger`)
-
-**文件**: `src/tools/record-ledger.ts`
-**场景**: S1-S8 中所有落表场景（排除 S3 知识询问）
-
-**处理流程**:
-1. 校验池号（缺失时返回追问，不写无池号脏数据）
-2. 根据 scene 选择对应的飞书多维表格
-3. 解析上报人：当前消息发送者 open_id → 飞书通讯录姓名（以发消息用户为准，禁止凭记忆填写；解析不出且未显式提供时返回追问）
-4. 组装字段并调用飞书 Bitable API 追加写入
-
-**场景-表格映射**:
-
-| 场景 | 环境变量 | 表格列 |
-|------|----------|--------|
-| inspection | `TABLE_ID_INSPECTION` | 池号、巡检时间、巡检人、鱼群状态、症状描述、严重程度、AI诊断、处置建议、知识来源、是否预警 |
-| water_quality | `TABLE_ID_WATER_QUALITY` | 池号、检测时间、溶氧、氨氮、pH、亚硝酸盐、AI分析 |
-| medication | `TABLE_ID_MEDICATION` | 池号、用药时间、药品名称、用药剂量、用药方式 |
-| feeding | `TABLE_ID_FEEDING` | 池号、喂食时间、饲料种类、投喂量、摄食情况 |
-| temperature | `TABLE_ID_TEMPERATURE` | 池号、测量时间、水温、棚温 |
-| death | `TABLE_ID_DEATH` | 池号、汇报时间、死亡数量、死亡状态、预警级别 |
-| dissection | `TABLE_ID_DISSECTION` | 池号、汇报时间、解剖器官、异常信号 |
-
-**inspection 便捷路径**: 传入 `analysis` + `advice` 时自动按巡检表列名组装字段，无需手动填写。
-
-### 4.5 意图路由 (`intent-router.ts`)
-
-**文件**: `src/router/intent-router.ts`
-**类型**: 纯函数模块，不注册为 Tool
-
-**场景识别优先级**（从高到低）:
-
-| 优先级 | 场景 | 关键词 |
-|--------|------|--------|
-| 1 | S4 死亡汇报 | 死亡/死了/死鱼/浮尸/翻白 |
-| 2 | S7 温度汇报 | 水温/棚温/温度 |
-| 3 | S6 喂食汇报 | 喂食/投喂/吃料/饲料 |
-| 4 | S5 用药 | 用药/药品/泼洒/拌料/消毒 |
-| 5 | S8 解剖汇报 | 解剖/内脏/肝/胆/肠/鳃 |
-| 6 | S1 水质汇报 | 水质/溶氧/氨氮/pH |
-| 7 | S3 知识询问 | 怎么/如何/为什么/咨询 |
-| 8 | S2 巡检（默认） | 带图消息或兜底 |
-
-由消息宿主（dsh-lark）或 Agent 技能在消息处理前调用，确定场景后再编排工具调用链。
-
-### 4.6 IMA 知识库封装 (`ima-api.ts`)
-
-**文件**: `src/ima/ima-api.ts`
-
-提供双通道检索与正文读取函数:
-- `searchKnowledge(query)` — 搜索"水产养殖"知识库，返回匹配的知识条目（**仅索引名称**：文件名/文件夹名；正文词命中为 0）
-- `searchNote(query)` — 按正文全文检索笔记（`note/v1/search_note`，`start/end` 相差 ≤ 20），回带命中处高亮原文（`highlightInfo.format_content`，含 `<em>` 标记）；note 命中的标识是 `note_id`，与知识库 `media_id` 不同
-- `getMediaContent(mediaId)` — 获取知识条目正文文本（如《每日操作手册》内容）
-- `getNoteContentByNoteId(noteId)` — note 命中无高亮时按 `note_id` 直读笔记正文（缓存到 `note/<note_id>.txt`）
-
-**检索语料边界**:两通道覆盖不同语料——知识库检索覆盖全部入库文件(84 个 PDF + 入库笔记)，笔记检索覆盖本人全部笔记(含未入库的农场专属笔记，如剖检手册/操作手册)；两者互补，只用其一会出现长期召回缺口（只用知识库检索时，正文相关笔记永远发现不了）。
-
-**正文层(按 media_type 分派)**:
-- PDF(`media_type=1`):经 `get_media_info` 的 `url_info` 下载(携带 headers),用 unpdf(pdf.js)提取文本层,按 `media_id` 缓存到 `AQUASENSE_CACHE_DIR/pdf/<media_id>.txt`
-- 扫描件(页均字符数 < 50)与超限文件(> 100MB)写入标记缓存(避免每次重复下载),待 OCR 兜底;无下载链接时提示改用 IMA 客户端。上限调高后,缓存中的超限标记会按记录的大小自动重评(过期标记触发重新下载),无需手工清理缓存
-- 笔记(`media_type=11`):经 `notebook_ext_info.notebook_id` 调 notes 接口(`get_doc_content`,纯文本)读取,缓存到 `AQUASENSE_CACHE_DIR/note/<media_id>.txt`;非本人/已删除/共享无权限等确定性失败写标记缓存,临时失败不缓存、下次重试
-- 其他类型:沿用字段提取与占位标记
-
-**知识库浏览**: `listKnowledge` 支持逐级分页遍历;文件夹条目有两种返回形态(显式 `folder_id` 字段,或 `media_id` 以 `folder_` 开头),两种均归一为 `kind='folder'` 并可作 `folder_id` 下钻,避免把文件夹误当文件导致整棵子树(含笔记/专利 PDF)被遗漏
-
-**批量预热**: `npm run kb:warm` 逐级遍历知识库全部条目(含嵌套文件夹下钻),对 PDF 与笔记执行"下载/读取 + 解析 + 缓存"并输出统计/失败清单(已有缓存自动跳过,可重复执行)
-
-**凭证获取**（两种方式任选）:
-- 环境变量: `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY`
-- 配置文件: `~/.config/ima/client_id` + `~/.config/ima/api_key`
-
-### 4.7 飞书 Token 缓存 (`token.ts`)
-
-**文件**: `src/feishu/token.ts`
-
-获取飞书 `tenant_access_token` 并在进程内缓存，提前 5 分钟过期刷新。供台账写入和 S9 推送共用。
-
-### 4.8 每日任务提醒 (`daily-reminder.ts`)
-
-**文件**: `src/scheduler/daily-reminder.ts`
-**运行方式**: 独立 Node.js 进程，与 DSH 并行运行
-
-**工作流程**:
-1. 启动时从 IMA 知识库拉取《每日操作手册》并按日缓存
-2. 07:00 推送当日任务总览到飞书巡检群
-3. 每分钟 tick，匹配任务时间点推送单条提醒
-4. 重启不补推已过时间点的任务，防止重复打扰
-
-**手册格式要求**: 每行一条任务，格式为 `HH:MM 任务描述`。
-
-### 4.9 Agent 专家技能 (`skills/aquasense-expert/SKILL.md`)
-
-定义 Agent 的行为规范:
-- 三分类语义（normal/early/disease）
-- 场景路由规则
-- 工具编排顺序
-- 数据准确度要求（池号必填、口语补全）
-- 回复风格（简洁分点、预警标注）
-
----
-
-## 5. 数据流
-
-### 5.1 巡检流程（S2 默认场景）
-
-```
-工人发图+文字 → dsh-lark 转发 → intent-router 识别为 S2
-    → aquasense_analyze(图片) → 三分类结果
-    → aquasense_advice(分析结果) → IMA 查询 + 分级建议
-    → aquasense_ledger(analysis + advice) → 飞书多维表格
-    → Agent 回复工人诊断结论 + 台账确认
-```
-
-### 5.2 死亡汇报流程（S4 紧急场景）
-
-```
-工人发"池3死了3条鱼" → intent-router 识别为 S4（最高优先级）
-    → aquasense_analyze(如有图) → 确认死亡状态
-    → aquasense_advice → 紧急建议 + P0/P1 预警
-    → aquasense_ledger(death, fields含死亡数量3) → 死亡记录表
-    → Agent 回复 + 提醒 @负责人
-```
-
-### 5.3 每日提醒流程（S9）
-
-```
-daily-reminder 启动 → IMA 搜索《每日操作手册》→ 解析任务列表
-    → 07:00 推送总览 → 每分钟 tick → 到点推送单条提醒
-    → 工人按提醒执行 → 发消息汇报 → 进入 S1-S8 流程
+└── tsconfig.json                      # TypeScript 编译配置
 ```
 
 ---
 
 ## 6. 外部依赖
 
-| 服务 | 用途 | 凭证 |
-|------|------|------|
-| DeepSeek Vision API | 图片分析（三分类） | `DEEPSEEK_API_KEY` |
-| IMA 知识库 | 疾病诊疗方案 + 每日操作手册 | `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY` |
-| 飞书开放平台 | 消息接收 + 多维表格写入 + 群消息推送 | `FEISHU_APP_ID` + `FEISHU_APP_SECRET` |
-| DeepSeek Harness | Agent 框架 + 工具注册 + 消息路由 | 框架自身 |
+| 服务 | 用途 | 凭证 | 模块 |
+|------|------|------|------|
+| DeepSeek Vision API | 图片三分类 + scene_hint | `DEEPSEEK_API_KEY` | analyze-image |
+| IMA 知识库 | 双通道检索 + 正文读取 + 每日操作手册 | `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY` | ima-api, generate-advice, daily-reminder |
+| 飞书开放平台 | 消息接收 + 多维表格写入 + 用户名解析 + 图片上传 | `FEISHU_APP_ID` + `FEISHU_APP_SECRET` | token, record-ledger, daily-reminder |
+| DeepSeek Harness | Agent 框架 + 工具注册 + 消息路由 | 框架自身 | index, SKILL.md |
 
 ---
 
 ## 7. 设计约束
 
-- **台账只追加不修改**: 满足政府 2 年台账审计要求
+- **台账只追加不修改**: 满足政府 2 年台账审计要求（30 分钟窗口内同池号合并更新是例外，避免短时间多次上报冗余）
 - **池号必填校验**: 缺失池号时返回追问，不写脏数据
+- **上报人只认发消息的人**: 以 `open_id` → 飞书通讯录解析为准，禁止凭记忆填写
+- **知识库双通道互补**: 仅用其一会出现长期召回缺口——只用知识库检索时，正文相关笔记永远发现不了
 - **知识库降级容错**: IMA 不可用时使用内置通用建议模板，不阻断主流程
 - **用药不代替兽医**: 疾病场景明确建议咨询专业兽医，知识库仅作参考
 - **S9 重启不补推**: 防止重启后重复推送已过时间点的任务
