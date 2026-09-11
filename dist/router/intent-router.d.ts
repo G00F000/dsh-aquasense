@@ -17,3 +17,13 @@ export interface IntentResult {
  * 按关键词优先级识别场景(S4 最高,常规巡检兜底)
  */
 export declare function detectIntent(content: string, hasImage: boolean): IntentResult;
+/**
+ * 合并视觉场景提示与文字意图识别:文字关键词优先(语义明确),视觉 scene_hint 兜底(纯图片无文字时生效)。
+ *
+ * 优先级规则:
+ *  - 文字关键词命中且置信度 ≥ 0.85 → 直接采用文字结果(死亡/温度/喂食等确定性高)
+ *  - 文字关键词命中但置信度 < 0.85 → 以文字为主,但若视觉 scene_hint 与文字一致则提升置信度
+ *  - 无文字关键词匹配(纯图片) → 采用视觉 scene_hint 转换为 Scene
+ *  - 视觉 scene_hint 缺失或无效 → 保持巡检兜底
+ */
+export declare function detectIntentWithVision(content: string, hasImage: boolean, sceneHint?: string): IntentResult;

@@ -46,3 +46,45 @@ export function detectIntent(content, hasImage) {
     // 默认:巡检
     return { scene: 'inspection', confidence: 0.5, needsImage: false, needsTable: true };
 }
+/**
+ * 合并视觉场景提示与文字意图识别:文字关键词优先(语义明确),视觉 scene_hint 兜底(纯图片无文字时生效)。
+ *
+ * 优先级规则:
+ *  - 文字关键词命中且置信度 ≥ 0.85 → 直接采用文字结果(死亡/温度/喂食等确定性高)
+ *  - 文字关键词命中但置信度 < 0.85 → 以文字为主,但若视觉 scene_hint 与文字一致则提升置信度
+ *  - 无文字关键词匹配(纯图片) → 采用视觉 scene_hint 转换为 Scene
+ *  - 视觉 scene_hint 缺失或无效 → 保持巡检兜底
+ */
+export function detectIntentWithVision(content, hasImage, sceneHint) {
+    const textResult = detectIntent(content, hasImage);
+    // 有文字且置信度足够高:直接采用文字结果(文字语义明确,视觉仅辅助)
+    if (textResult.confidence >= 0.85)
+        return textResult;
+    // 尝试将视觉 scene_hint 转为 Scene
+    const visionScene = sceneHintToScene(sceneHint);
+    // 无视觉线索:保持文字结果
+    if (!visionScene)
+        return textResult;
+    // 视觉与文字一致:提升置信度
+    if (textResult.scene === visionScene) {
+        return { ...textResult, confidence: Math.min(1, textResult.confidence + 0.1) };
+    }
+    // 视觉与文字不一致且文字置信度低:优先采用视觉(纯图片场景)
+    if (textResult.confidence < 0.7 && hasImage) {
+        return { scene: visionScene, confidence: 0.75, needsImage: true, needsTable: true };
+    }
+    // 其他情况:保持文字结果(文字仍有一定依据)
+    return textResult;
+}
+/** 视觉 scene_hint → Scene 映射(inspection 和无效值返回 null,保持兜底) */
+function sceneHintToScene(hint) {
+    switch (hint) {
+        case 'death': return 'death';
+        case 'water_quality': return 'water_quality';
+        case 'medication': return 'medication';
+        case 'feeding': return 'feeding';
+        case 'temperature': return 'temperature';
+        case 'dissection': return 'dissection';
+        default: return null; // inspection 或无效值:不改变路由,保持兜底
+    }
+}

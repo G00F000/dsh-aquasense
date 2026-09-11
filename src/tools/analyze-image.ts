@@ -9,6 +9,8 @@
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
+export type SceneHint = 'inspection' | 'death' | 'water_quality' | 'medication' | 'feeding' | 'temperature' | 'dissection'
+
 /** 模型输出 JSON 契约(与技术方案 YOLO 三分类语义一致) */
 export interface AnalysisResult {
   abnormal: boolean
@@ -16,6 +18,8 @@ export interface AnalysisResult {
   symptoms: string[]
   severity: 'low' | 'medium' | 'high' | 'critical'
   confidence: number
+  /** 图片场景提示:视觉模型判断该图属于哪类业务场景,供意图路由补充文字缺失时的分类 */
+  scene_hint: SceneHint
 }
 
 export const analyzeImage = defineTool({
@@ -45,7 +49,8 @@ export const analyzeImage = defineTool({
         cls: { type: 'string', enum: ['normal', 'early', 'disease', 'unknown'] },
         symptoms: { type: 'array', items: { type: 'string' } },
         severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
-        confidence: { type: 'number' }
+        confidence: { type: 'number' },
+        scene_hint: { type: 'string', enum: ['inspection', 'death', 'water_quality', 'medication', 'feeding', 'temperature', 'dissection'], description: '图片场景提示' }
       }
     },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
@@ -96,8 +101,16 @@ async function downloadImage(url: string): Promise<ImageDownloadResult> {
  */
 function buildPrompt(description?: string, poolId?: string): string {
   let prompt = `你是水产养殖专家,分析鲈鱼养殖照片。
-判断状态:normal(正常)/early(前兆)/disease(发病)
-输出 JSON:{"abnormal":bool, "cls":"...", "symptoms":[...], "severity":"low|medium|high|critical", "confidence":0.x}
+1. 判断鱼群状态:normal(正常)/early(前兆)/disease(发病)
+2. 判断图片场景(scene_hint),从以下选一个:
+   - death:图片中有死鱼漂浮/翻白/浮尸
+   - water_quality:拍摄水质检测仪器/试纸/水色观察
+   - medication:拍摄用药/药瓶/泼洒/消毒
+   - feeding:拍摄饲料/投喂/喂食
+   - temperature:拍摄温度计/测温
+   - dissection:拍摄鱼体解剖/内脏/器官
+   - inspection:其他常规巡检照片(默认)
+输出 JSON:{"abnormal":bool, "cls":"...", "symptoms":[...], "severity":"low|medium|high|critical", "confidence":0.x, "scene_hint":"..."}
 early=离群、蹭壁、呼吸急促;disease=浮头、烂身、白点。`
 
   if (poolId) prompt += `\n池号:${poolId}`
@@ -157,12 +170,15 @@ async function callVisionModel(imageData: string, mimeType: string, prompt: stri
   return ''
 }
 
+// scene_hint 白名单:模型输出越界时降级为 inspection
+const VALID_SCENE_HINTS: ReadonlySet<string> = new Set<SceneHint>(['inspection', 'death', 'water_quality', 'medication', 'feeding', 'temperature', 'dissection'])
+
 /**
  * 解析模型输出 JSON(容错:提取首个 JSON 对象并按白名单归一,失败降级 normal)
  * 归一化保证输出始终满足 output.schema(enum/类型/多余键),避免注册表校验失败
  */
 function parseAnalysisResponse(response: string): AnalysisResult {
-  const fallback: AnalysisResult = { abnormal: false, cls: 'unknown', symptoms: ['AI分析失败,请人工复核'], severity: 'low', confidence: 0.3 }
+  const fallback: AnalysisResult = { abnormal: false, cls: 'unknown', symptoms: ['AI分析失败,请人工复核'], severity: 'low', confidence: 0.3, scene_hint: 'inspection' }
 
   let raw: Record<string, unknown>
   try {
@@ -191,5 +207,6 @@ function parseAnalysisResponse(response: string): AnalysisResult {
     : 0.3
 
   // abnormal 由三分类推导,避免与 cls 冲突(early/disease 即异常帧)
-  return { abnormal: cls !== 'normal', cls, symptoms, severity, confidence }
+  const sceneHint = VALID_SCENE_HINTS.has(raw.scene_hint as string) ? (raw.scene_hint as SceneHint) : 'inspection'
+  return { abnormal: cls !== 'normal', cls, symptoms, severity, confidence, scene_hint: sceneHint }
 }
