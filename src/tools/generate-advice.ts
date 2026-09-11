@@ -253,7 +253,7 @@ const MAX_EXCERPT_CHARS = 240
 /** 无关键词命中时的退化摘录长度(正文开头) */
 const FALLBACK_EXCERPT_CHARS = 160
 /** 最多摘取的引用条数(note 高亮直接成引用;其余读正文摘取,不可读的跳过继续向后取) */
-const MAX_EXCERPT_DOCS = 2
+const MAX_EXCERPT_DOCS = 5
 
 /** 是否需要读取正文:有症状或非 normal 状态(disease/early/知识问答)时需要 */
 function needsExcerpts(analysis: AnalysisInput): boolean {
