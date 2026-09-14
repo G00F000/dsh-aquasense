@@ -118,15 +118,17 @@ interface AnalysisResult {
 
 视觉模型在分析健康状态的同时，会判断图片属于哪种业务场景，输出 `scene_hint`。这是**纯图片无文字时**的路由兜底依据：
 
-| scene_hint | 含义 | 对应落表 |
-|------------|------|----------|
-| `death` | 死鱼漂浮/翻白/浮尸 | 死亡记录表 |
-| `water_quality` | 水质检测仪器/试纸/水色 | 水质汇报表 |
-| `medication` | 用药/药瓶/泼洒/消毒 | 用药记录表 |
-| `feeding` | 饲料/投喂/喂食 | 投喂记录表 |
-| `temperature` | 温度计/测温 | 温度汇报表 |
-| `dissection` | 鱼体解剖/内脏/器官 | 解剖记录表 |
-| `inspection` | 其他常规巡检（默认） | 巡检记录表 |
+| scene_hint | 含义 | 意图明确 | 对应落表 |
+|------------|------|:--------:|----------|
+| `death` | 死鱼漂浮/翻白/浮尸 | 是 | 死亡记录表 |
+| `water_quality` | 水质检测仪器/试纸/水色 | 是 | 水质汇报表 |
+| `medication` | 用药/药瓶/泼洒/消毒 | 是 | 用药记录表 |
+| `feeding` | 饲料/投喂/喂食 | 是 | 投喂记录表 |
+| `temperature` | 温度计/测温 | 是 | 温度汇报表 |
+| `dissection` | 鱼体解剖/内脏/器官 | 是 | 解剖记录表 |
+| `inspection` | 其他常规巡检（默认） | **否** | **追问 Worker 确认场景后落表** |
+
+**追问规则**：当纯图片消息的 `scene_hint` 为 `inspection`（视觉模型无法判断具体场景）时，Agent 通过飞书对话追问 Worker“您是在汇报什么？”，Worker 回复后再落对应台账。具体交互规范见 SKILL.md 3.2 节。
 
 #### 3.1.5 容错设计
 
@@ -636,6 +638,8 @@ Agent 回复: "⚠️ 紧急! 池2发现3条死鱼...请立即通知负责人"
 
 ### 4.3 纯图片路由流程
 
+#### 4.3.1 意图明确(scene_hint 非 inspection)
+
 ```
 工人: 只发一张水质检测仪器照片 (无文字)
     │
@@ -643,7 +647,7 @@ Agent 回复: "⚠️ 紧急! 池2发现3条死鱼...请立即通知负责人"
 intent-router 文字匹配: 无文字 → hasImage=true → S2 巡检(0.7)
     │
     ▼
-analyze: 输出 scene_hint="water_quality"
+analyze: 输出 scene_hint="water_quality"(意图明确)
     │
     ▼
 detectIntentWithVision: 文字0.7 < 0.85 + 有图
@@ -651,6 +655,36 @@ detectIntentWithVision: 文字0.7 < 0.85 + 有图
     │
     ▼
 ledger(scene=water_quality): 水质汇报表
+```
+
+#### 4.3.2 意图不明确(scene_hint = inspection, 需追问)
+
+```
+工人: 只发图片,无文字(视觉模型无法判断具体场景)
+    │
+    ▼
+analyze: 输出 scene_hint="inspection"(意图不明确)
+    │
+    ▼
+Agent 通过飞书对话追问:
+  "收到您的图片,请问您是在汇报什么?"
+  "① 巡检观察  ② 水质检测  ③ 用药/消毒  ④ 喂食/投喂"
+  "⑤ 温度测量  ⑥ 发现死鱼  ⑦ 解剖检查"
+    │
+    ▼
+Worker: "② 水质检测"
+    │
+    ▼
+Agent: 按 worker 回复确定 scene → ledger(scene=water_quality): 水质汇报表
+```
+
+#### 4.3.3 追问兜底
+
+```
+Worker 回复仍不明确(如"就那个"):
+    │
+    ▼
+Agent: 按巡检表兜底落表,回复中说明"已按常规巡检记录"
 ```
 
 ### 4.4 S9 每日提醒流程（独立调度器）

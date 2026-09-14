@@ -52,26 +52,58 @@ description: 水产养殖巡检专家:鲈鱼状态三分类语义、处置分级
 | S3 知识询问 | 怎么/如何/为什么/咨询 | ❌ 不落表 | advice(知识库)直接回答 |
 | S2 巡检(默认) | 带图消息 | ✅ 巡检表 | analyze → advice → ledger |
 
-### 3.2 纯图片无文字(视觉场景兜底)
+### 3.2 纯图片无文字(视觉场景兜底 + 追问)
 
-工人只发图片、不加任何文字时,文字关键词全部不匹配,默认走巡检表。
-但 aquasense_analyze 现在会同时输出 `scene_hint`(图片场景提示),可据此自动归类:
+工人只发图片、不加任何文字时,文字关键词全部不匹配。此时先调用 `aquasense_analyze` 获取 `scene_hint`,再按以下规则处理:
 
-| scene_hint | 含义 | 落表 |
-|------------|------|------|
-| death | 死鱼漂浮/翻白/浮尸 | 死亡表 |
-| water_quality | 水质检测仪器/试纸/水色 | 水质表 |
-| medication | 用药/药瓶/泼洒/消毒 | 用药表 |
-| feeding | 饲料/投喂/喂食 | 喂食表 |
-| temperature | 温度计/测温 | 温度表 |
-| dissection | 鱼体解剖/内脏/器官 | 解剖表 |
-| inspection | 其他常规巡检(默认) | 巡检表 |
+| scene_hint | 含义 | 是否意图明确 | 处理方式 |
+|------------|------|:------------:|----------|
+| death | 死鱼漂浮/翻白/浮尸 | 是 | 直接落死亡表 |
+| water_quality | 水质检测仪器/试纸/水色 | 是 | 直接落水质表 |
+| medication | 用药/药瓶/泼洒/消毒 | 是 | 直接落用药表 |
+| feeding | 饲料/投喂/喂食 | 是 | 直接落喂食表 |
+| temperature | 温度计/测温 | 是 | 直接落温度表 |
+| dissection | 鱼体解剖/内脏/器官 | 是 | 直接落解剖表 |
+| inspection | 其他常规巡检(默认) | **否** | **追问 Worker 确认场景** |
 
-**编排规则**:
+**追问流程**(仅 `scene_hint = inspection` 时触发):
+
+```
+Worker: [只发图片,无文字]
+    │
+    ▼
+analyze: scene_hint = "inspection"(视觉模型无法判断具体场景)
+    │
+    ▼
+Agent: "收到您的图片,请问您是在汇报什么?"
+       "① 巡检观察  ② 水质检测  ③ 用药/消毒  ④ 喂食/投喂"
+       "⑤ 温度测量  ⑥ 发现死鱼  ⑦ 解剖检查"
+    │
+    ▼
+Worker: "水质检测" (或数字 ②)
+    │
+    ▼
+Agent: 按 worker 回复确定 scene → 补充描述后调用 ledger 落对应表
+```
+
+**追问规范**:
+- 追问消息要简洁,列出所有可选场景(带编号),让 Worker 快速选择
+- Worker 回复数字(1-7)或文字均可,按语义映射到 scene
+- Worker 回复后,将 Worker 的文字描述作为 `description` 传入 `aquasense_analyze`(如有新图则重新分析,无新图则用已有的分析结果)
+- 追问只进行一轮:Worker 回复后立即落表,不再反复追问
+- 如果 Worker 回复的内容仍然不明确(如"就那个"),按巡检表兜底落表,并在回复中说明"已按常规巡检记录"
+
+**scene_hint 非 inspection 时(意图明确)**:
+1. 直接用 `scene_hint` 对应的 scene 调用 `aquasense_ledger` 落表
+2. 不需要追问 Worker,因为视觉模型已明确判断了场景
+
+**编排规则(完整)**:
 1. 先调用 `aquasense_analyze` 获取 `scene_hint`
 2. 结合文字关键词和 `scene_hint` 综合判断场景(文字优先,视觉兜底)
-3. 用判断后的 scene 调用 `aquasense_ledger` 落对应表
-4. 如果 `scene_hint` 与文字关键词冲突(如文字说"水质"但图片是死鱼),以文字为准——工人自己知道在汇报什么
+3. 如果 `scene_hint` 为 `inspection` 且无文字描述 → 执行追问流程(3.2 追问流程)
+4. 如果 `scene_hint` 为具体场景(非 inspection) → 直接落对应表
+5. 用判断后的 scene 调用 `aquasense_ledger` 落对应表
+6. 如果 `scene_hint` 与文字关键词冲突(如文字说"水质"但图片是死鱼),以文字为准——工人自己知道在汇报什么
 
 ## 4. 工具编排规范
 
