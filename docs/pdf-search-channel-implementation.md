@@ -990,7 +990,7 @@ npx tsx -e "
 ```bash
 # 验证索引文件生成
 ls -la cache/pdf-index/
-# 应看到 index.json (~500KB) 和 chunks.json (~5MB)
+# 应看到 index.json(元数据,~14KB)和 chunks.json(切片原文,实测 61 PDF 约 10MB)
 
 # 验证查询
 npx tsx -e "
@@ -1036,4 +1036,47 @@ wc -c cache/pdf-index/chunks.json
 
 ### Q: 如何更新索引？
 
-执行 `npm run kb:warm`，脚本会自动检测 PDF 数量变化并重建索引。
+执行 `npm run kb:warm`。脚本按"缓存 mtime 是否新于索引 builtAt"判定:有新缓存、OCR 覆写缓存或索引超过 7 天时自动重建,否则跳过。
+
+---
+
+## 5. 实施记录与实测偏差(已落地)
+
+> 编写本文档时的若干假设与真实语料不符,均已按"以实测为准"调整落地。
+> 下表为最终差异与验收数据,供后续维护与方案回顾参考。
+
+### 5.1 设计稿 vs 实测落地
+
+| 设计稿(本文档前文) | 实测结论 | 最终落地 |
+|------|------|------|
+| index.json 存 2/3-gram 倒排索引(~500KB) | 61 PDF 建倒排后唯一词项 50 万+,index.json 约 51MB(预估的百倍),Map 结构与 4G 内存预算不符 | 不建倒排:index.json 仅元数据(~14KB),检索在 chunks.json 上运行时扫描(结果与倒排等价) |
+| unpdf 合并文本以 Form Feed(\f) 分页,page 可取 | 实测 84 个缓存全部无 \f(unpdf mergePages 仅用 \n 拼页) | 有 \f 按页切块并回带 1-based 页码(OCR/逐页提取的缓存);无 \f 按空行切段,page 记 null 不臆造 |
+| OCR 归一化两轮 replace | 对长间隔空格序列处理不彻底 | 单次 lookbehind/lookahead 正则 `(?<=[汉字])[ \t\u3000]+(?=[汉字])`,并回写缓存避免重复处理 |
+| AQUASENSE_CACHE_DIR 缺省 './cache' | systemd/手工/cron 的 CWD 不同会各建一份缓存,索引与缓存互相看不见 | ima-api 导出 resolveCacheRoot():环境变量优先,缺省平台绝对路径;预热/提醒/检索均走同一约定 |
+| 重建判定:比对 pdfCount | OCR 覆写缓存(数量不变、内容变)不会触发重建 | 按"缓存目录最新 mtime > 索引 builtAt"判定,覆盖新缓存与覆写两种情形 |
+| Step 5 测试断言 page > 0 | 无 \f 语料 page 为 null;且 MIN_TEXT_CHARS=100、MIN_CHUNK_CHARS=50 使短语料不建索引 | 无 \f 断言 page=null;另设分页符用例断言 page=2;测试语料加长到阈值以上 |
+
+### 5.2 落地文件清单
+
+| 文件 | 状态 |
+|------|------|
+| `src/ima/pdf-content-search.ts` | 新增(切片索引构建 + 运行时扫描 + 重叠去重) |
+| `src/ima/ima-api.ts` | 修改:KnowledgeItem.from 扩展 'pdf_content';resolveCacheRoot 导出;searchKnowledgeMerged 三通道合并 |
+| `src/tools/generate-advice.ts` | 修改:引用来源标注(PDF 一手/笔记二手),双通道合并逻辑上移 ima-api |
+| `src/scripts/warm-kb-cache.ts` | 修改:预热末尾按需构建索引(书名映射 + mtime 判定) |
+| `src/scheduler/daily-reminder.ts` | 修改:缓存根目录统一 resolveCacheRoot |
+| `src/ima/pdf-content-search.test.ts` | 新增:10 个用例(vitest) |
+| `package.json` / `.github/workflows/ci.yml` | 新增 `npm test`(vitest run),CI 增加测试步骤 |
+
+### 5.3 真实语料冒烟数据(验收)
+
+- 语料:`cache/pdf` 共 84 个 txt(23 个状态标记:12 扫描件 + 11 超限;61 个有效正文,约 313 万字)
+- 索引构建:7707 切片,耗时 0.6s;chunks.json 10.3MB,index.json 13.6KB
+- 检索:"白点病 小瓜虫 治疗" 243ms / "氨氮 亚硝酸盐" 56ms / "罗茨风机 曝气" 15ms(含首次加载索引)
+- 冒烟发现并修复两个问题:①高亮逐词替换产生嵌套 `<em>`(改为单次合并正则替换、长词优先);②相邻切片 100 字重叠导致同一处命中重复引用(按"切片偏移 + 命中词位置"去重,容差 64 字)
+- 专利文档原文存在成段重复(同一句在多处出现),不同位置的命中按其真实位置保留、单 PDF 上限 2 条;合并层还会按书名去重
+
+### 5.4 仍未完成的前置条件(超出代码范围)
+
+- 12 本扫描件 OCR 未执行(tesseract chi_sim 批处理属运维操作;完成后覆写同名缓存即可纳入索引)
+- 11 本超限 PDF(>100MB)未处理;上限已从 50MB 放宽到 100MB 以覆盖 87.5MB 带文本层大部头

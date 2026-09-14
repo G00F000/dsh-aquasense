@@ -5,6 +5,8 @@
  * 遍历 IMA 知识库全部条目,按媒体类型预热正文缓存:
  *  - PDF(media_type=1):下载 → unpdf 提取文本层 → 按 media_id 落盘
  *  - 笔记(media_type=11):notes 接口读纯文本 → 按 media_id 落盘
+ * 预热末尾构建 PDF 原文切片索引(cache/pdf-index),供 aquasense_advice 的通道 C 检索;
+ * 索引是否重建按"缓存 mtime 是否新于 builtAt"判定(OCR 覆写缓存/手工补录也能触发重建)。
  * 已缓存条目自动跳过,可重复执行(增量);建议部署后或知识库更新后各跑一次。
  *
  * 启动方式:

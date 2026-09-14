@@ -2,9 +2,11 @@
  * IMA API 封装模块
  * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)与 daily-reminder(S9 手册读取)调用。
  *
- * 检索层(双通道互补):
+ * 检索层(三通道互补):
  *  - searchKnowledge:知识库检索(wiki/v1/search_knowledge),仅索引名称(文件名/文件夹名),正文词命中为 0。
  *  - searchNote:笔记正文检索(note/v1/search_note),索引正文并回带命中处高亮原文。
+ *  - searchPdfContent:本地 PDF 原文检索(通道 C,见 pdf-content-search.ts),在预热缓存上扫描原文。
+ * 三通道由 searchKnowledgeMerged 合并(方案 D,见 docs/pdf-search-channel-architecture.md)。
  *
  * 正文层:
  *  - PDF(media_type=1):经 get_media_info 的 url_info 下载,用 unpdf(pdf.js)提取文本层并按 media_id 缓存;
@@ -17,6 +19,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { extractText, getDocumentProxy } from 'unpdf';
+import { isPdfIndexReady, pdfHitToKnowledgeItem, searchPdfContent } from './pdf-content-search.js';
 const IMA_BASE_URL = 'https://ima.qq.com';
 /**
  * 获取 IMA API 凭证
@@ -195,9 +198,20 @@ export async function getMediaInfo(mediaId) {
 const MAX_PDF_BYTES = 100 * 1024 * 1024;
 /** 扫描件判定阈值:页均字符数低于该值视为无文本层(pdf.js 提取不到,需 OCR 兜底) */
 const MIN_CHARS_PER_PAGE = 50;
-/** 正文缓存子目录(pdf/note;与 daily-reminder 共用 AQUASENSE_CACHE_DIR 约定) */
+/**
+ * 解析缓存根目录:优先 AQUASENSE_CACHE_DIR 环境变量,缺省用固定绝对路径。
+ * 不用 ./cache 相对路径:不同启动方式(systemd/手工/cron)的 CWD 不同会各建一份缓存,
+ * 导致索引与缓存互相看不见、OCR 成果随项目目录迁移丢失(见 docs/pdf-search-channel-architecture.md §8)。
+ */
+export function resolveCacheRoot() {
+    const configured = process.env.AQUASENSE_CACHE_DIR?.trim();
+    if (configured)
+        return configured;
+    return process.platform === 'win32' ? 'D:\\data\\aquasense\\cache' : '/data/aquasense/cache';
+}
+/** 正文缓存子目录(pdf/note;与 daily-reminder 共用 resolveCacheRoot 约定) */
 function cacheSubdir(sub) {
-    const dir = join(process.env.AQUASENSE_CACHE_DIR || './cache', sub);
+    const dir = join(resolveCacheRoot(), sub);
     mkdirSync(dir, { recursive: true });
     return dir;
 }
@@ -371,4 +385,109 @@ export async function getMediaContent(mediaId) {
         return '[笔记缺少 notebook_id,请使用 IMA 客户端查看原文]';
     }
     return extractMediaText(data);
+}
+// ========== 检索层:三通道合并(方案 D) ==========
+/** PDF 原文索引目录(kb:warm 构建;索引缺失时通道 C 自动跳过) */
+const PDF_INDEX_DIR = join(resolveCacheRoot(), 'pdf-index');
+/** 累加一次检索结果到命中池(同一标识保留首条,重复命中累加计数) */
+function collectHits(result, pool) {
+    for (const item of result.items) {
+        const existing = pool.get(item.media_id);
+        if (existing)
+            existing.hits++;
+        else
+            pool.set(item.media_id, { item, hits: 1 });
+    }
+}
+/** 按命中关键词数降序取出条目 */
+function rankByHits(pool) {
+    return [...pool.values()].sort((a, b) => b.hits - a.hits).map((entry) => entry.item);
+}
+/** 三通道合并参数(见 docs/pdf-search-channel-architecture.md §5.2) */
+const MERGE_CONFIG = {
+    /** note 高亮条目保留上限(IMA 引擎精确命中,最高优先级) */
+    noteHighlightLimit: 2,
+    /** PDF 原文条目保留上限 */
+    pdfContentLimit: 3,
+    /** note 正文摘取条目保留上限 */
+    noteBodyLimit: 1,
+    /** wiki 标题条目保留上限 */
+    wikiLimit: 1,
+    /** 合并结果总条数上限 */
+    totalLimit: 7
+};
+/**
+ * 合并多关键词、三通道检索结果(IMA 是关键词匹配,多词空格拼接会 0 命中)
+ * 通道:wiki(仅索引名称)+ note(索引正文,回带高亮)+ pdf_content(PDF 原文,本地索引)。
+ * 优先级:note 高亮 > PDF 原文 > note 正文 > wiki 标题;不足总上限时按同优先级补足。
+ * 去重须同时比对标题:同一篇笔记/同一本书可能被多路命中(媒体标识不同但标题相同)。
+ */
+export async function searchKnowledgeMerged(rawQuery) {
+    // 拆分原始查询为独立关键词,过滤空串和低价值词
+    const lowValueWords = new Set(['的', '了', '和', '是', '在', '有', '把', '被']);
+    const keywords = rawQuery
+        .split(/\s+/)
+        .map((w) => w.trim())
+        .filter((w) => w.length >= 1 && !lowValueWords.has(w));
+    const uniqueKeywords = [...new Set(keywords)];
+    if (uniqueKeywords.length === 0)
+        uniqueKeywords.push(rawQuery);
+    // 通道 A + B:逐词两路查询,分别收集命中并统计命中关键词数(单词/单通道失败均不影响整体)
+    const wikiHits = new Map();
+    const noteHits = new Map();
+    for (const kw of uniqueKeywords) {
+        try {
+            collectHits(await searchKnowledge(kw), wikiHits);
+        }
+        catch {
+            // 忽略:单通道查询失败不阻断其他通道
+        }
+        try {
+            collectHits(await searchNote(kw), noteHits);
+        }
+        catch {
+            // 忽略:单通道查询失败不阻断其他通道
+        }
+    }
+    // 通道 C:本地 PDF 原文检索(索引未构建/已过期时自动跳过)
+    const pdfHits = isPdfIndexReady(PDF_INDEX_DIR) ? searchPdfContent(rawQuery, PDF_INDEX_DIR) : [];
+    const pdfItems = pdfHits.map((hit) => pdfHitToKnowledgeItem(hit));
+    // 三通道合并去重
+    const merged = [];
+    const seenIds = new Set();
+    const seenTitles = new Set();
+    const take = (item) => {
+        if (seenIds.has(item.media_id) || seenTitles.has(item.title))
+            return;
+        seenIds.add(item.media_id);
+        seenTitles.add(item.title);
+        merged.push(item);
+    };
+    const noteRanked = rankByHits(noteHits);
+    const noteHighlights = noteRanked.filter((item) => item.highlight);
+    const noteBodies = noteRanked.filter((item) => !item.highlight);
+    const wikiRanked = rankByHits(wikiHits);
+    // 第一轮:各通道最高质量条目
+    for (const item of noteHighlights.slice(0, MERGE_CONFIG.noteHighlightLimit))
+        take(item);
+    for (const item of pdfItems.slice(0, MERGE_CONFIG.pdfContentLimit))
+        take(item);
+    for (const item of noteBodies.slice(0, MERGE_CONFIG.noteBodyLimit))
+        take(item);
+    for (const item of wikiRanked.slice(0, MERGE_CONFIG.wikiLimit))
+        take(item);
+    // 第二轮:不足总上限时按同优先级继续补充
+    const rest = [
+        ...noteHighlights.slice(MERGE_CONFIG.noteHighlightLimit),
+        ...pdfItems.slice(MERGE_CONFIG.pdfContentLimit),
+        ...noteBodies.slice(MERGE_CONFIG.noteBodyLimit),
+        ...wikiRanked.slice(MERGE_CONFIG.wikiLimit)
+    ];
+    for (const item of rest) {
+        if (merged.length >= MERGE_CONFIG.totalLimit)
+            break;
+        take(item);
+    }
+    console.log(`[ima] 三通道检索:note=${noteHits.size}, pdf=${pdfHits.length}, wiki=${wikiHits.size}, 合并后=${merged.length}`);
+    return { items: merged.slice(0, MERGE_CONFIG.totalLimit), total: merged.length };
 }

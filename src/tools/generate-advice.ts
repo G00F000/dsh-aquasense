@@ -1,7 +1,8 @@
 /**
  * 处置建议工具(aquasense_advice,场景 S2/S4/S5/S8 巡检诊断后调用)
  *
- * 自动查询 IMA 获取疾病诊疗参考,双通道合并:知识库名称检索 + 笔记正文检索(带高亮);
+ * 自动查询 IMA 获取疾病诊疗参考,三通道合并(见 ima-api.searchKnowledgeMerged):
+ * 笔记正文检索(带高亮)+ 本地 PDF 原文检索 + 知识库名称检索;
  * 有高亮的直接引用,其余读取命中条目正文(PDF/笔记)摘取原文片段,
  * 按「原文引用→逻辑推理→总结」输出分级处置建议。
  * 容错原则:知识库不可用不阻断主流程,降级为内置通用建议模板。
@@ -9,8 +10,7 @@
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
-  searchKnowledge,
-  searchNote,
+  searchKnowledgeMerged,
   getMediaContent,
   getNoteContentByNoteId,
   type SearchResult,
@@ -50,8 +50,8 @@ export const generateAdvice = defineTool({
   async execute(args) {
     const analysis = args.analysis as AnalysisInput
 
-    // ========== 步骤 1:自动查询 IMA 知识库 ==========
-    let knowledge: Awaited<ReturnType<typeof searchKnowledge>> | null = null
+    // ========== 步骤 1:自动查询 IMA 知识库(三通道合并) ==========
+    let knowledge: SearchResult | null = null
     let knowledgeRefs: string[] = []
 
     try {
@@ -73,7 +73,7 @@ export const generateAdvice = defineTool({
 
     // ========== 步骤 2:读取命中条目正文,摘取原文片段(三段式之"原文引用") ==========
     // 正文由 ima-api 正文层提供:PDF 走下载+unpdf 解析缓存,笔记走 notes 接口缓存,冷启动自动建缓存
-    let excerpts: Array<{ title: string; text: string }> = []
+    let excerpts: Array<{ title: string; text: string; from?: string }> = []
     if (knowledge && needsExcerpts(analysis)) {
       excerpts = await extractExcerpts(knowledge.items, buildExcerptKeywords(analysis))
       if (excerpts.length > 0) {
@@ -187,82 +187,6 @@ function buildKnowledgeQuery(analysis: AnalysisInput): string {
   return keywords.join(' ')
 }
 
-/** 各通道合并后保留条数:note 命中(正文相关、带高亮)优先,wiki 命中(名称相关,多为 PDF 书名)作补充 */
-const NOTE_MERGE_LIMIT = 3
-const WIKI_MERGE_LIMIT = 2
-/** 合并结果总条数上限 */
-const MERGED_LIMIT = 5
-
-/**
- * 合并多关键词、双通道检索结果(IMA 是关键词匹配,多词空格拼接会 0 命中)
- * 双通道:知识库检索仅索引名称(正文词命中为 0),笔记检索索引正文并回带高亮原文。
- * 策略:逐词两路查询 → 各通道按命中词数排序 → note 在前、wiki 在后 → 去重 → 取前 N 条。
- * 去重须同时比对标题:同一篇笔记可能被两路各命中一次(媒体标识不同但标题相同)。
- */
-async function searchKnowledgeMerged(rawQuery: string): Promise<SearchResult> {
-  // 拆分原始查询为独立关键词,过滤空串和低价值词
-  const lowValueWords = new Set(['的', '了', '和', '是', '在', '有', '把', '被'])
-  const keywords = rawQuery
-    .split(/\s+/)
-    .map((w) => w.trim())
-    .filter((w) => w.length >= 1 && !lowValueWords.has(w))
-
-  // 去重
-  const uniqueKeywords = [...new Set(keywords)]
-  if (uniqueKeywords.length === 0) uniqueKeywords.push(rawQuery)
-
-  // 逐词两路查询,分别收集命中并统计命中关键词数(单词/单通道失败均不影响整体)
-  const wikiHits: HitPool = new Map()
-  const noteHits: HitPool = new Map()
-
-  for (const kw of uniqueKeywords) {
-    try {
-      collectHits(await searchKnowledge(kw), wikiHits)
-    } catch {
-      // 忽略:单通道查询失败不阻断另一通道
-    }
-    try {
-      collectHits(await searchNote(kw), noteHits)
-    } catch {
-      // 忽略:单通道查询失败不阻断另一通道
-    }
-  }
-
-  // 合并去重:note 优先,wiki 补充
-  const merged: KnowledgeItem[] = []
-  const seenIds = new Set<string>()
-  const seenTitles = new Set<string>()
-  const candidates = [
-    ...rankByHits(noteHits).slice(0, NOTE_MERGE_LIMIT),
-    ...rankByHits(wikiHits).slice(0, WIKI_MERGE_LIMIT)
-  ]
-  for (const item of candidates) {
-    if (seenIds.has(item.media_id) || seenTitles.has(item.title)) continue
-    seenIds.add(item.media_id)
-    seenTitles.add(item.title)
-    merged.push(item)
-  }
-
-  return { items: merged.slice(0, MERGED_LIMIT), total: merged.length }
-}
-
-/** 命中池:条目标识 → 条目与命中关键词数 */
-type HitPool = Map<string, { item: KnowledgeItem; hits: number }>
-
-/** 累加一次检索结果到命中池(同一标识保留首条,重复命中累加计数) */
-function collectHits(result: SearchResult, pool: HitPool): void {
-  for (const item of result.items) {
-    const existing = pool.get(item.media_id)
-    if (existing) existing.hits++
-    else pool.set(item.media_id, { item, hits: 1 })
-  }
-}
-
-/** 按命中关键词数降序取出条目 */
-function rankByHits(pool: HitPool): KnowledgeItem[] {
-  return [...pool.values()].sort((a, b) => b.hits - a.hits).map((entry) => entry.item)
-}
-
 // ========== 正文引用:从命中条目正文摘取原文片段(三段式之"原文引用") ==========
 
 /** 单条摘录最大长度(字符) */
@@ -294,15 +218,15 @@ function buildExcerptKeywords(analysis: AnalysisInput): string[] {
 async function extractExcerpts(
   items: KnowledgeItem[],
   keywords: string[]
-): Promise<Array<{ title: string; text: string }>> {
-  const results: Array<{ title: string; text: string }> = []
+): Promise<Array<{ title: string; text: string; from?: string }>> {
+  const results: Array<{ title: string; text: string; from?: string }> = []
   for (const item of items) {
     if (results.length >= MAX_EXCERPT_DOCS) break
     try {
-      // 1. note 命中带高亮:高亮即接口给出的命中处原文,直接作引用
+      // 1. note/pdf_content 命中带高亮:高亮即接口/索引给出的命中处原文,直接作引用
       if (item.highlight) {
         const quote = cleanHighlight(item.highlight, keywords)
-        if (quote) results.push({ title: item.title, text: quote })
+        if (quote) results.push({ title: item.title, text: quote, from: item.from })
         continue
       }
       // 2. 无高亮:读正文摘取(note 命中走 note_id 直读,标识与 media_id 不同)
@@ -313,7 +237,7 @@ async function extractExcerpts(
         continue
       }
       const text = extractRelevantSnippet(content, keywords)
-      if (text) results.push({ title: item.title, text })
+      if (text) results.push({ title: item.title, text, from: item.from })
     } catch (error) {
       console.warn(`[aquasense] 正文读取失败(《${item.title}》):`, error instanceof Error ? error.message : error)
     }
@@ -398,12 +322,25 @@ function cleanupDisplay(text: string): string {
     .trim()
 }
 
-/** 三段式之"逻辑推理":说明症状与知识库的比对关系,并声明结论边界(不确诊) */
-function buildReasoning(analysis: AnalysisInput, excerpts: Array<{ title: string }>, hitCount: number): string {
+/** 三段式之"逻辑推理":说明症状与知识库的比对关系,标注引用来源,并声明结论边界(不确诊) */
+function buildReasoning(
+  analysis: AnalysisInput,
+  excerpts: Array<{ title: string; from?: string }>,
+  hitCount: number
+): string {
   const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状'
   if (excerpts.length > 0) {
     const titles = excerpts.map((e) => `《${e.title}》`).join('')
-    return `症状「${symptoms}」在知识库${titles}中定位到相关原文(见 knowledge_excerpt);结合视觉分类「${analysis.cls || 'unknown'}」与严重程度「${analysis.severity || 'low'}」按疑似情形处置。知识库比对不构成确诊,重症请兽医到场核实。`
+    // 引用来源标注:PDF 为原始文献(一手),note 为 IMA AI 二次汇总(二手)
+    const pdfCount = excerpts.filter((e) => e.from === 'pdf_content').length
+    const noteCount = excerpts.length - pdfCount
+    const sourceNote =
+      pdfCount > 0 && noteCount > 0
+        ? `引用来源:${pdfCount} 条 PDF 原文 + ${noteCount} 条笔记`
+        : pdfCount > 0
+          ? '引用来源:PDF 原文(一手文献)'
+          : '引用来源:笔记(AI 二次汇总)'
+    return `症状「${symptoms}」在知识库${titles}中定位到相关原文(见 knowledge_excerpt);${sourceNote};结合视觉分类「${analysis.cls || 'unknown'}」与严重程度「${analysis.severity || 'low'}」按疑似情形处置。知识库比对不构成确诊,重症请兽医到场核实。`
   }
   if (hitCount > 0) {
     return `知识库命中 ${hitCount} 条相关条目,但正文暂不可读(扫描件/超限或无权限),建议按严重程度先行处置,并人工查阅原文确认。`

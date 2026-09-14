@@ -18,11 +18,16 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getFeishuToken } from '../feishu/token.js';
-import { searchKnowledge, getMediaContent } from '../ima/ima-api.js';
+import { searchKnowledge, getMediaContent, resolveCacheRoot } from '../ima/ima-api.js';
 const TICK_MS = 60_000;
 const OVERVIEW_TIME = '07:00';
+/**
+ * 缓存根目录:与正文缓存(ima-api)统一取 resolveCacheRoot。
+ * 不用 ./cache 相对路径:systemd/手工/cron 的 CWD 不同会各建一份缓存,
+ * 导致手册缓存与 PDF 索引互相看不见。
+ */
 function cacheDir() {
-    const dir = process.env.AQUASENSE_CACHE_DIR || './cache';
+    const dir = resolveCacheRoot();
     mkdirSync(dir, { recursive: true });
     return dir;
 }

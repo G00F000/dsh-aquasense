@@ -1,13 +1,14 @@
 /**
  * 处置建议工具(aquasense_advice,场景 S2/S4/S5/S8 巡检诊断后调用)
  *
- * 自动查询 IMA 获取疾病诊疗参考,双通道合并:知识库名称检索 + 笔记正文检索(带高亮);
+ * 自动查询 IMA 获取疾病诊疗参考,三通道合并(见 ima-api.searchKnowledgeMerged):
+ * 笔记正文检索(带高亮)+ 本地 PDF 原文检索 + 知识库名称检索;
  * 有高亮的直接引用,其余读取命中条目正文(PDF/笔记)摘取原文片段,
  * 按「原文引用→逻辑推理→总结」输出分级处置建议。
  * 容错原则:知识库不可用不阻断主流程,降级为内置通用建议模板。
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { searchKnowledge, searchNote, getMediaContent, getNoteContentByNoteId } from '../ima/ima-api.js';
+import { searchKnowledgeMerged, getMediaContent, getNoteContentByNoteId } from '../ima/ima-api.js';
 export const generateAdvice = defineTool({
     name: 'aquasense_advice',
     description: '基于分析结果和知识库生成处置建议。自动查询 IMA 知识库,读取命中条目正文(PDF/笔记)摘取原文引用,按严重程度分级。',
@@ -33,7 +34,7 @@ export const generateAdvice = defineTool({
     },
     async execute(args) {
         const analysis = args.analysis;
-        // ========== 步骤 1:自动查询 IMA 知识库 ==========
+        // ========== 步骤 1:自动查询 IMA 知识库(三通道合并) ==========
         let knowledge = null;
         let knowledgeRefs = [];
         try {
@@ -64,6 +65,20 @@ export const generateAdvice = defineTool({
         const immediateActions = [];
         const followUpActions = [];
         const severity = analysis.severity || 'low';
+        const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状';
+        // ========== AI 分析失败(unknown)时的早期返回:不给出具体诊断和用药建议 ==========
+        if (analysis.cls === 'unknown') {
+            return {
+                diagnosis_summary: `AI 分析失败(状态未知),症状:${symptoms}`,
+                immediate_actions: ['AI 分析结果不确定,请人工现场复核后决定处置措施'],
+                follow_up_actions: ['人工确认鱼群状态后补录台账'],
+                medication: 'AI 分析失败,请根据现场情况咨询兽医后决定',
+                alert_level: 'P1',
+                knowledge_refs: knowledgeRefs,
+                knowledge_excerpt: excerpts.map((e) => `《${e.title}》:「${e.text}」`),
+                reasoning: `AI 视觉分析未能给出明确分类(unknown),无法自动判断病情与用药。请人工确认后按实际情况处置。`
+            };
+        }
         switch (severity) {
             case 'critical':
                 immediateActions.push('🚨 立即通知负责人');
@@ -103,12 +118,17 @@ export const generateAdvice = defineTool({
             }
         }
         // ========== 步骤 5:确定预警级别(P0/P1/P2,与飞书告警方案一致) ==========
+        // 规则:critical + disease → P0; critical 或 (disease + high) → P1; disease 或 high → P1; 其余 → P2
+        // severity 为 critical 时无论 cls 如何都至少 P1(与 immediate_actions 中的紧急措施一致)
         let alertLevel = 'P2';
         if (analysis.cls === 'disease' && severity === 'critical')
             alertLevel = 'P0';
-        else if (analysis.cls === 'disease' || severity === 'high')
+        else if (severity === 'critical')
             alertLevel = 'P1';
-        const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状';
+        else if (analysis.cls === 'disease')
+            alertLevel = 'P1';
+        else if (severity === 'high')
+            alertLevel = 'P1';
         return {
             diagnosis_summary: `状态:${analysis.cls || 'unknown'},症状:${symptoms}`,
             immediate_actions: immediateActions,
@@ -140,76 +160,6 @@ function buildKnowledgeQuery(analysis) {
     // 鱼类品种(默认鲈鱼)
     keywords.push('鲈鱼');
     return keywords.join(' ');
-}
-/** 各通道合并后保留条数:note 命中(正文相关、带高亮)优先,wiki 命中(名称相关,多为 PDF 书名)作补充 */
-const NOTE_MERGE_LIMIT = 3;
-const WIKI_MERGE_LIMIT = 2;
-/** 合并结果总条数上限 */
-const MERGED_LIMIT = 5;
-/**
- * 合并多关键词、双通道检索结果(IMA 是关键词匹配,多词空格拼接会 0 命中)
- * 双通道:知识库检索仅索引名称(正文词命中为 0),笔记检索索引正文并回带高亮原文。
- * 策略:逐词两路查询 → 各通道按命中词数排序 → note 在前、wiki 在后 → 去重 → 取前 N 条。
- * 去重须同时比对标题:同一篇笔记可能被两路各命中一次(媒体标识不同但标题相同)。
- */
-async function searchKnowledgeMerged(rawQuery) {
-    // 拆分原始查询为独立关键词,过滤空串和低价值词
-    const lowValueWords = new Set(['的', '了', '和', '是', '在', '有', '把', '被']);
-    const keywords = rawQuery
-        .split(/\s+/)
-        .map((w) => w.trim())
-        .filter((w) => w.length >= 1 && !lowValueWords.has(w));
-    // 去重
-    const uniqueKeywords = [...new Set(keywords)];
-    if (uniqueKeywords.length === 0)
-        uniqueKeywords.push(rawQuery);
-    // 逐词两路查询,分别收集命中并统计命中关键词数(单词/单通道失败均不影响整体)
-    const wikiHits = new Map();
-    const noteHits = new Map();
-    for (const kw of uniqueKeywords) {
-        try {
-            collectHits(await searchKnowledge(kw), wikiHits);
-        }
-        catch {
-            // 忽略:单通道查询失败不阻断另一通道
-        }
-        try {
-            collectHits(await searchNote(kw), noteHits);
-        }
-        catch {
-            // 忽略:单通道查询失败不阻断另一通道
-        }
-    }
-    // 合并去重:note 优先,wiki 补充
-    const merged = [];
-    const seenIds = new Set();
-    const seenTitles = new Set();
-    const candidates = [
-        ...rankByHits(noteHits).slice(0, NOTE_MERGE_LIMIT),
-        ...rankByHits(wikiHits).slice(0, WIKI_MERGE_LIMIT)
-    ];
-    for (const item of candidates) {
-        if (seenIds.has(item.media_id) || seenTitles.has(item.title))
-            continue;
-        seenIds.add(item.media_id);
-        seenTitles.add(item.title);
-        merged.push(item);
-    }
-    return { items: merged.slice(0, MERGED_LIMIT), total: merged.length };
-}
-/** 累加一次检索结果到命中池(同一标识保留首条,重复命中累加计数) */
-function collectHits(result, pool) {
-    for (const item of result.items) {
-        const existing = pool.get(item.media_id);
-        if (existing)
-            existing.hits++;
-        else
-            pool.set(item.media_id, { item, hits: 1 });
-    }
-}
-/** 按命中关键词数降序取出条目 */
-function rankByHits(pool) {
-    return [...pool.values()].sort((a, b) => b.hits - a.hits).map((entry) => entry.item);
 }
 // ========== 正文引用:从命中条目正文摘取原文片段(三段式之"原文引用") ==========
 /** 单条摘录最大长度(字符) */
@@ -243,11 +193,11 @@ async function extractExcerpts(items, keywords) {
         if (results.length >= MAX_EXCERPT_DOCS)
             break;
         try {
-            // 1. note 命中带高亮:高亮即接口给出的命中处原文,直接作引用
+            // 1. note/pdf_content 命中带高亮:高亮即接口/索引给出的命中处原文,直接作引用
             if (item.highlight) {
                 const quote = cleanHighlight(item.highlight, keywords);
                 if (quote)
-                    results.push({ title: item.title, text: quote });
+                    results.push({ title: item.title, text: quote, from: item.from });
                 continue;
             }
             // 2. 无高亮:读正文摘取(note 命中走 note_id 直读,标识与 media_id 不同)
@@ -258,7 +208,7 @@ async function extractExcerpts(items, keywords) {
             }
             const text = extractRelevantSnippet(content, keywords);
             if (text)
-                results.push({ title: item.title, text });
+                results.push({ title: item.title, text, from: item.from });
         }
         catch (error) {
             console.warn(`[aquasense] 正文读取失败(《${item.title}》):`, error instanceof Error ? error.message : error);
@@ -341,12 +291,20 @@ function cleanupDisplay(text) {
         .replace(/(?<=[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])\s+(?=[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef])/g, '')
         .trim();
 }
-/** 三段式之"逻辑推理":说明症状与知识库的比对关系,并声明结论边界(不确诊) */
+/** 三段式之"逻辑推理":说明症状与知识库的比对关系,标注引用来源,并声明结论边界(不确诊) */
 function buildReasoning(analysis, excerpts, hitCount) {
     const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状';
     if (excerpts.length > 0) {
         const titles = excerpts.map((e) => `《${e.title}》`).join('');
-        return `症状「${symptoms}」在知识库${titles}中定位到相关原文(见 knowledge_excerpt);结合视觉分类「${analysis.cls || 'unknown'}」与严重程度「${analysis.severity || 'low'}」按疑似情形处置。知识库比对不构成确诊,重症请兽医到场核实。`;
+        // 引用来源标注:PDF 为原始文献(一手),note 为 IMA AI 二次汇总(二手)
+        const pdfCount = excerpts.filter((e) => e.from === 'pdf_content').length;
+        const noteCount = excerpts.length - pdfCount;
+        const sourceNote = pdfCount > 0 && noteCount > 0
+            ? `引用来源:${pdfCount} 条 PDF 原文 + ${noteCount} 条笔记`
+            : pdfCount > 0
+                ? '引用来源:PDF 原文(一手文献)'
+                : '引用来源:笔记(AI 二次汇总)';
+        return `症状「${symptoms}」在知识库${titles}中定位到相关原文(见 knowledge_excerpt);${sourceNote};结合视觉分类「${analysis.cls || 'unknown'}」与严重程度「${analysis.severity || 'low'}」按疑似情形处置。知识库比对不构成确诊,重症请兽医到场核实。`;
     }
     if (hitCount > 0) {
         return `知识库命中 ${hitCount} 条相关条目,但正文暂不可读(扫描件/超限或无权限),建议按严重程度先行处置,并人工查阅原文确认。`;
