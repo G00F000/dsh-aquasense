@@ -256,7 +256,7 @@ note: 条目X=3词, 条目Y=2词, 条目Z=1词
 ```
 
 **正文缓存策略**:
-- 缓存目录: `AQUASENSE_CACHE_DIR/pdf/` 和 `AQUASENSE_CACHE_DIR/note/`
+- 缓存目录: `AQUASENSE_CACHE_DIR/pdf/` 和 `AQUASENSE_CACHE_DIR/note/`(必须使用绝对路径,如 `/data/aquasense/cache/`)
 - PDF: 按 `media_id.txt` 缓存解析结果；超限标记（`[PDF 超限:xxx]`）也缓存，避免重复下载
 - 笔记: 按 `note_id.txt` 缓存；确定性失败（权限/已删除）缓存标记，临时失败不缓存
 - 超限标记带文件大小，当 `MAX_PDF_BYTES` 上调时自动重评（过期标记触发重新下载）

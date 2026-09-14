@@ -51,7 +51,7 @@
 |--------|------|----------|
 | OCR 12 本扫描件 | CPU 一次性批处理 3.3 小时(已验证) | 全部病害/鲈鱼/用药内容 |
 | 处理 3 本超限书 | 提高上限或流式分片 | 3 本核心书籍 |
-| 修复缓存 CWD 漂移 | 默认值改为绝对路径 | 索引与缓存一致性 |
+| 修复缓存 CWD 漂移 | 默认值改为绝对路径(如 Linux: `/data/aquasense/cache/`, Windows: `D:\data\aquasense\cache\`) | 索引与缓存一致性 + OCR 成果持久化 |
 
 **⚠️ OCR 空格陷阱**:Tesseract chi_sim 会在每个汉字间插空格,索引层入库前必须做去空格归一化(`replace(/\s+/g,'')`),否则通道 C 子串匹配全部失效。此问题仅影响 OCR 文本——unpdf 提取原生 PDF 的文本无此问题。
 
@@ -424,7 +424,13 @@ $AQUASENSE_CACHE_DIR/
 | 索引过期(>7天) | `builtAt` 时间差 | warn 日志,仍可查询 |
 | **缓存目录 CWD 漂移** | **不同启动方式各建一份缓存** | **索引与缓存互相看不见,必须修复** |
 
-**缓存目录 CWD 漂移问题**:当前 `AQUASENSE_CACHE_DIR` 默认值为 `./cache`(相对路径),不同启动方式(systemd/手工/cron)会各建一份缓存。方案 D 要建索引的话,这必须先修——否则会出现"索引里有、缓存里没有"的不一致。修复方式:默认值改为绝对路径(如 `~/.dsh/cache/`)。
+**缓存目录 CWD 漂移问题**:当前 `AQUASENSE_CACHE_DIR` 默认值为 `./cache`(相对路径),不同启动方式(systemd/手工/cron)会各建一份缓存。方案 D 要建索引的话,这必须先修——否则会出现"索引里有、缓存里没有"的不一致。
+
+**修复方案**:默认值改为绝对路径(Linux: `/data/aquasense/cache/`, Windows: `D:\data\aquasense\cache\`)。好处:
+- 不受项目目录重装/迁移/git clean 影响,OCR 3.3 小时成果持久保存
+- 不同进程(DSH 主服务 + S9 提醒 + 预热脚本 + OCR 批处理)共享同一份缓存
+- cache/ 已在 .gitignore 中,不纳入版本控制,可独立备份
+- 修复后 `pdfFiles.length !== meta.pdfCount` 告警自动消除
 
 ---
 
@@ -498,7 +504,7 @@ export function isPdfIndexReady(indexDir: string): boolean
 | M0a | OCR 12 本扫描件(2,572 页) | 3.3 小时(CPU 批处理,已验证) | 无 |
 | M0a' | OCR 文本归一化(去空格) | 0.5 天(含批处理脚本开发) | M0a |
 | M0b | 处理 3 本超限书(>100MB) | 0.5 天 | 无 |
-| M0c | 修复缓存目录 CWD 漂移 | 0.5 天 | 无 |
+| M0c | 修复缓存目录 CWD 漂移(改绝对路径) | 0.5 天 | 无 |
 | **M1** | **轻量验证(P1)** | | |
 | M1a | 缓存 substring 检索 | 0.5 天 | M0 完成 |
 | M1b | 验证 PDF 通道引用质量 | 0.5 天 | M1a 完成 |

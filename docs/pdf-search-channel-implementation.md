@@ -193,8 +193,8 @@ function tokenizeQuery(query: string): string[] {
 ```typescript
 /**
  * 从 cache/pdf/*.txt 构建倒排索引
- * @param cachePdfDir  PDF 缓存目录(如 ./cache/pdf/)
- * @param indexDir     索引输出目录(如 ./cache/pdf-index/)
+ * @param cachePdfDir  PDF 缓存目录(如 /data/aquasense/cache/pdf/)
+ * @param indexDir     索引输出目录(如 /data/aquasense/cache/pdf-index/)
  * @returns 构建的索引元数据
  */
 export async function buildPdfIndex(
@@ -827,8 +827,8 @@ async function main(): Promise<void> {
   console.log('')
   console.log('[kb:warm] ===== PDF 索引构建 =====')
 
-  const cachePdfDir = join(process.env.AQUASENSE_CACHE_DIR || './cache', 'pdf')
-  const indexDir = join(process.env.AQUASENSE_CACHE_DIR || './cache', 'pdf-index')
+  const cachePdfDir = join(process.env.AQUASENSE_CACHE_DIR || '/data/aquasense/cache', 'pdf')
+  const indexDir = join(process.env.AQUASENSE_CACHE_DIR || '/data/aquasense/cache', 'pdf-index')
 
   // 检查是否需要重建
   const existingMeta = getPdfIndexMeta(indexDir)
@@ -980,7 +980,7 @@ npm run kb:warm
 # 方式 2: 单独运行索引构建(调试用)
 npx tsx -e "
   import { buildPdfIndex } from './src/ima/pdf-content-search.js'
-  buildPdfIndex('./cache/pdf', './cache/pdf-index')
+  buildPdfIndex('/data/aquasense/cache/pdf', '/data/aquasense/cache/pdf-index')
     .then(m => console.log('Done:', m.totalChunks, 'chunks'))
 "
 ```
@@ -995,7 +995,7 @@ ls -la cache/pdf-index/
 # 验证查询
 npx tsx -e "
   import { searchPdfContent } from './src/ima/pdf-content-search.js'
-  const hits = searchPdfContent('白点病 治疗', './cache/pdf-index')
+  const hits = searchPdfContent('白点病 治疗', '/data/aquasense/cache/pdf-index')
   hits.forEach(h => console.log(h.title, h.page + '页', h.text.slice(0, 80)))
 "
 

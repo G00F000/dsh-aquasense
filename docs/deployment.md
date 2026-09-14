@@ -125,7 +125,9 @@ FEISHU_BITABLE_TABLE_ID_DISSECTION=xxxxxxxx
 
 # ===== S9 每日任务提醒（启用时必填）=====
 FEISHU_WORKER_GROUP=oc_xxxxxxxx
-AQUASENSE_CACHE_DIR=./cache                   # 可选，默认 ./cache（任务清单与正文缓存: PDF/笔记）
+# 缓存目录（必须使用绝对路径，避免不同启动方式各建一份缓存）
+# Linux: /data/aquasense/cache    Windows: D:\data\aquasense\cache
+AQUASENSE_CACHE_DIR=/data/aquasense/cache
 ```
 
 ### 3.4 构建
@@ -151,7 +153,7 @@ npm run kb:warm               # 全量(PDF+笔记,已有缓存自动跳过,可�
 npm run kb:warm -- --limit 5  # 抽样验证文本层覆盖率
 ```
 
-缓存位置: `AQUASENSE_CACHE_DIR/pdf/`（PDF 文本）与 `AQUASENSE_CACHE_DIR/note/`（笔记文本），默认在 `./cache/` 下。输出会列出 PDF 成功/扫描件(需 OCR)/超限、笔记成功/不可读及失败清单。
+缓存位置: `AQUASENSE_CACHE_DIR/pdf/`（PDF 文本）与 `AQUASENSE_CACHE_DIR/note/`（笔记文本），默认在 `/data/aquasense/cache/` 下（必须使用绝对路径，避免不同启动方式各建一份缓存）。输出会列出 PDF 成功/扫描件(需 OCR)/超限、笔记成功/不可读及失败清单。
 
 遍历会逐级下钻知识库的嵌套文件夹（含 `folder_` 前缀形式的文件夹条目），统计口径覆盖知识库全部层级，不会因嵌套目录遗漏笔记或 PDF。
 

@@ -565,9 +565,14 @@ PDF 全文缓存 (~95% 信息,仅损失图表/公式)  ← 假设:提取成功�
    - 注意:超限标记有 `isStaleOversizeMark` 过期检测机制,提高上限后自动重新评估
 
 3. **修复缓存目录 CWD 漂移问题**
-   - 成本:将 `AQUASENSE_CACHE_DIR` 默认值从 `./cache`(相对路径)改为绝对路径(如 `~/.dsh/cache/`)
-   - 收益:避免不同启动方式(systemd/手工/cron)各建一份缓存,索引与缓存不一致
+   - 成本:将 `AQUASENSE_CACHE_DIR` 默认值从 `./cache`(相对路径)改为绝对路径(如 Linux: `/data/aquasense/cache/`, Windows: `D:\data\aquasense\cache\`)
+   - 收益:
+     - 避免不同启动方式(systemd/手工/cron)各建一份缓存,索引与缓存不一致
+     - OCR 3.3 小时成果持久保存,不受项目目录重装/迁移/git clean 影响
+     - 不同进程(DSH 主服务 + S9 提醒 + 预热脚本)共享同一份缓存
+     - 可独立备份 cache/ 目录
    - 关联:方案 D 的 `pdfFiles.length !== meta.pdfCount` 告警就是撞这个问题
+   - 注意:cache/ 已在 .gitignore 中,不纳入版本控制;改用绝对路径后需同步更新 .env.example 和部署文档
 
 ### P1:轻量验证(验证 PDF 通道价值)
 
