@@ -596,6 +596,7 @@ PDF 全文缓存 (~95% 信息,仅损失图表/公式)  ← 假设:提取成功�
 
 7. **关注 IMA OpenAPI 更新**:IMA 内部已具备 PDF 语义搜索+页码定位+图片引用能力,推动腾讯开放这些接口
 8. **自建鱼类知识图谱**:将 PDF 书籍结构化为知识图谱,支持精确的实体-关系查询
+9. **评估知识库后端替代方案**:开源(WeKnora)/云 API(腾讯云 LKE、阿里百炼)/渐进增强三条路线的对比与落地建议,见 [knowledge-base-alternatives.md](./knowledge-base-alternatives.md)
 
 ### 排序逻辑
 
