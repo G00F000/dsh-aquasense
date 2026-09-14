@@ -20,16 +20,22 @@ export interface AnalysisResult {
   confidence: number
   /** 图片场景提示:视觉模型判断该图属于哪类业务场景,供意图路由补充文字缺失时的分类 */
   scene_hint: SceneHint
+  /** 实际分析的图片数量(由调用方设置,解析函数不填充) */
+  image_count?: number
 }
 
 export const analyzeImage = defineTool({
   name: 'aquasense_analyze',
-  description: '分析鲈鱼养殖现场照片,识别异常症状',
+  description: '分析鲈鱼养殖现场照片,识别异常症状。支持单图或多图(多图时视觉模型同时分析所有图片)。',
   parameters: {
     image_url: {
       type: 'string',
-      required: true,
-      description: '图片 URL'
+      description: '单张图片 URL(与 image_urls 二选一;单图优先用此参数)'
+    },
+    image_urls: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '多张图片 URL 列表(与 image_url 二选一;多图时同时传入,视觉模型一次分析)'
     },
     description: {
       type: 'string',
@@ -50,22 +56,36 @@ export const analyzeImage = defineTool({
         symptoms: { type: 'array', items: { type: 'string' } },
         severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
         confidence: { type: 'number' },
-        scene_hint: { type: 'string', enum: ['inspection', 'death', 'water_quality', 'medication', 'feeding', 'temperature', 'dissection'], description: '图片场景提示' }
+        scene_hint: { type: 'string', enum: ['inspection', 'death', 'water_quality', 'medication', 'feeding', 'temperature', 'dissection'], description: '图片场景提示' },
+        image_count: { type: 'number', description: '实际分析的图片数量' }
       }
     },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
   },
   async execute(args) {
     // 参数缺失由 defineTool 按 required 校验拦截,此处直接执行
-    // 1. 下载图片并转 base64(30s 超时,避免坏图 URL 挂起)
-    const { data: imageData, mimeType } = await downloadImage(args.image_url)
+    // 1. 收集图片 URL:兼容单图(image_url)和多图(image_urls)两种入参
+    const urls: string[] = []
+    if (Array.isArray(args.image_urls) && args.image_urls.length > 0) {
+      urls.push(...args.image_urls)
+    } else if (typeof args.image_url === 'string' && args.image_url) {
+      urls.push(args.image_url)
+    }
+    if (urls.length === 0) {
+      throw new Error('[aquasense] 未提供任何图片:请传入 image_url 或 image_urls')
+    }
 
-    // 2. 构建提示词并调用视觉模型
+    // 2. 并发下载所有图片并转 base64(30s 超时,避免坏图 URL 挂起)
+    const images = await Promise.all(urls.map((url) => downloadImage(url)))
+
+    // 3. 构建提示词并调用视觉模型(多图时所有图片一起发给模型)
     const prompt = buildPrompt(args.description, args.pool_id)
-    const response = await callVisionModel(imageData, mimeType, prompt)
+    const response = await callVisionModel(images, prompt)
 
-    // 3. 解析结果(失败降级 normal,不阻断巡检流程)
-    return parseAnalysisResponse(response)
+    // 4. 解析结果(失败降级 normal,不阻断巡检流程)
+    const result = parseAnalysisResponse(response)
+    result.image_count = urls.length
+    return result
   }
 })
 
@@ -122,7 +142,7 @@ early=离群、蹭壁、呼吸急促;disease=浮头、烂身、白点。`
 /**
  * 调用 DeepSeek 视觉模型(兼容 OpenAI chat completions 图片输入)
  */
-async function callVisionModel(imageData: string, mimeType: string, prompt: string): Promise<string> {
+async function callVisionModel(images: ImageDownloadResult[], prompt: string): Promise<string> {
   const apiKey = process.env.DEEPSEEK_API_KEY
   if (!apiKey) {
     throw new Error('[aquasense] DEEPSEEK_API_KEY 未配置')
@@ -130,6 +150,13 @@ async function callVisionModel(imageData: string, mimeType: string, prompt: stri
 
   const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
   const model = process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash'
+
+  // 构建多图内容:每张图作为独立的 image_url 段,视觉模型可同时分析
+  const content: Array<{ type: string; image_url?: { url: string }; text?: string }> = images.map((img) => ({
+    type: 'image_url',
+    image_url: { url: `data:${img.mimeType};base64,${img.data}` }
+  }))
+  content.push({ type: 'text', text: prompt })
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -139,13 +166,7 @@ async function callVisionModel(imageData: string, mimeType: string, prompt: stri
     },
     body: JSON.stringify({
       model,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageData}` } },
-          { type: 'text', text: prompt }
-        ]
-      }],
+      messages: [{ role: 'user', content }],
       max_tokens: 4096,
       temperature: 0.1
     })
@@ -157,11 +178,11 @@ async function callVisionModel(imageData: string, mimeType: string, prompt: stri
   }
 
   const result = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }> }
-  const content = result.choices?.[0]?.message?.content
-  // content 可能为字符串或内容段数组,统一转文本
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content
+  const msgContent = result.choices?.[0]?.message?.content
+  // msgContent 可能为字符串或内容段数组,统一转文本
+  if (typeof msgContent === 'string') return msgContent
+  if (Array.isArray(msgContent)) {
+    return msgContent
       .map((part) => (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
         ? (part as { text: string }).text
         : ''))
