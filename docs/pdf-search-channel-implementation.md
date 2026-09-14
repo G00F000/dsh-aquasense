@@ -20,10 +20,11 @@
 >
 > 本实现文档描述的是方案 D 完整版（P2 阶段）。在开始实现前，必须先完成以下前置工作，否则索引建好了，最关键的病害书籍依然在盲区：
 >
-> 1. **OCR 12 本扫描件（2,572 页）**：CPU 一次性批处理，解锁全部病害/鲈鱼/用药内容
-> 2. **处理 3 本超限书（>100MB）**：提高上限或流式分片解析
-> 3. **修复缓存目录 CWD 漂移**：`AQUASENSE_CACHE_DIR` 默认值改为绝对路径
-> 4. **P1 轻量验证**：在缓存上做 substring 检索，验证 PDF 通道引用质量
+> 1. **OCR 12 本扫描件（2,572 页）**：CPU 一次性批处理（已验证可行，3.3 小时），解锁全部病害/鲈鱼/用药内容
+> 2. **OCR 文本归一化**：Tesseract chi_sim 会在每个汉字间插空格，入库前必须去空格归一化，否则子串匹配全部失效
+> 3. **处理 3 本超限书（>100MB）**：提高上限或流式分片解析
+> 4. **修复缓存目录 CWD 漂移**：`AQUASENSE_CACHE_DIR` 默认值改为绝对路径
+> 5. **P1 轻量验证**：在缓存上做 substring 检索，验证 PDF 通道引用质量
 >
 > 详见 [ima-pdf-note-limitation.md §8](./ima-pdf-note-limitation.md#8-建议与下一步) 和 [pdf-search-channel-architecture.md §1.4](./pdf-search-channel-architecture.md#14-前置条件实测验证)。
 
@@ -203,15 +204,24 @@ export async function buildPdfIndex(
   mkdirSync(indexDir, { recursive: true })
 
   // Step 1: 加载有效 PDF 文本
-  const pdfFiles = readdirSync(cachePdfDir).filter(f => f.endsWith('.txt'))
+  const pdfFiles = readdirSync(cachePdfDir).filter(f => f.endswith('.txt'))
   const pdfTexts: Array<{ mediaId: string; text: string }> = []
-
+  
   for (const filename of pdfFiles) {
     const mediaId = filename.replace('.txt', '')
-    const text = readFileSync(join(cachePdfDir, filename), 'utf8')
+    let text = readFileSync(join(cachePdfDir, filename), 'utf8')
     // 跳过标记文件
     if (text.startsWith('[')) continue
     if (text.length < 100) continue  // 太短无意义
+  
+    // OCR 文本归一化:去除 Tesseract chi_sim 插入的汉字间空格
+    // 检测方式:文件头含 [OCR] 标记,或汉字间空格比例异常高
+    if (isOcrText(text)) {
+      text = normalizeOcrText(text)
+      // 归一化后覆写缓存(一次性操作,避免后续重复处理)
+      writeFileSync(join(cachePdfDir, filename), text, 'utf8')
+    }
+  
     pdfTexts.push({ mediaId, text })
   }
 
@@ -380,6 +390,32 @@ function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`
   return `${bytes}B`
+}
+
+/** 检测是否为 OCR 来源文本(Tesseract chi_sim 会在汉字间插空格) */
+function isOcrText(text: string): boolean {
+  // 方法 1:文件头含 OCR 标记(批处理脚本写入)
+  if (text.includes('[OCR 批处理]') || text.includes('[OCR]')) return true
+  // 方法 2:统计汉字间空格比例——原生 PDF 的汉字间不会有空格
+  // 取前 2000 字符检测
+  const sample = text.slice(0, 2000)
+  const chineseChars = sample.match(/[\u4e00-\u9fff]/g)
+  if (!chineseChars || chineseChars.length < 50) return false
+  // 检测 "汉字 汉字" 模式(单个空格分隔两个汉字)
+  const spacedPattern = sample.match(/[\u4e00-\u9fff] [\u4e00-\u9fff]/g)
+  const ratio = (spacedPattern?.length || 0) / chineseChars.length
+  return ratio > 0.3  // 超过 30% 的汉字对之间有空格,判定为 OCR 文本
+}
+
+/** OCR 文本归一化:去除 Tesseract 插入的汉字间空格 */
+function normalizeOcrText(text: string): string {
+  // 核心:去除汉字间的单个空格
+  // 匹配:汉字 + 空格 + 汉字 → 汉字汉字
+  let result = text.replace(/([\u4e00-\u9fff]) ([\u4e00-\u9fff])/g, '$1$2')
+  // 重复一次,处理连续三个汉字间有两个空格的情况
+  // 如 "流 行 性" → 第一轮: "流行 性" → 第二轮: "流行性"
+  result = result.replace(/([\u4e00-\u9fff]) ([\u4e00-\u9fff])/g, '$1$2')
+  return result
 }
 ```
 
@@ -897,6 +933,23 @@ describe('pdf-content-search', () => {
   it('searchPdfContent 索引不存在时应返回空', () => {
     const results = searchPdfContent('白点病', './nonexistent-dir')
     expect(results.length).toBe(0)
+  })
+
+  it('OCR 空格文本应被正确归一化', async () => {
+    // 模拟 Tesseract chi_sim 输出:汉字间插空格
+    writeFileSync(join(TEST_CACHE_DIR, 'test-pdf-ocr.txt'),
+      '[OCR 批处理] 流 行 性 造 血 器 官 坏 死 病\n' +
+      '易 感 宿 主 : 仅 感 染 河 鲈 和 虹 鳟。\n' +
+      '治 疗 : 福 尔 马 林 25ppm 药 浴。'
+    , 'utf8')
+
+    const meta = await buildPdfIndex(TEST_CACHE_DIR, TEST_INDEX_DIR)
+    // 归一化后应能命中
+    const results = searchPdfContent('流行性造血器官坏死病', TEST_INDEX_DIR)
+    expect(results.length).toBeGreaterThan(0)
+    // 验证归一化后的文本不含汉字间空格
+    const chunk = results[0].text
+    expect(chunk).not.toMatch(/[\u4e00-\u9fff] [\u4e00-\u9fff]/)
   })
 })
 ```
