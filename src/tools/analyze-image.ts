@@ -194,8 +194,27 @@ async function callVisionModel(images: ImageDownloadResult[], prompt: string): P
 // scene_hint 白名单:模型输出越界时降级为 inspection
 const VALID_SCENE_HINTS: ReadonlySet<string> = new Set<SceneHint>(['inspection', 'death', 'water_quality', 'medication', 'feeding', 'temperature', 'dissection'])
 
+/** 将模型输出的 cls 值归一化为合法枚举值:避免模型用词稍偏(大小写、空格、中文描述)导致异常分类降级为 normal */
+function normalizeCls(raw: unknown): 'normal' | 'early' | 'disease' | 'unknown' {
+  if (typeof raw !== 'string') return 'normal'
+  const s = raw.trim().toLowerCase()
+  if (s === 'normal') return 'normal'
+  if (s === 'unknown') return 'unknown'
+
+  // disease 精确匹配(含英文变体与中文疾病名)
+  if (/^(disease|diseased|sick|ill|发病|生病|患病|病|感染|水霉病|水霉|烂|白点|打粉|出血|烂身|肠炎|烂鳃|赤皮|竖鳞|溃疡)$/.test(s)) return 'disease'
+  // early 精确匹配
+  if (/^(early|前兆|前期|初期|疑似|疑似病|亚健康|异常|不正常|症状前|早期|轻微异常|离群|蹭壁|呼吸急促|应激)$/.test(s)) return 'early'
+
+  // 包含关系兜底(模型可能输出完整句子如"疑似水霉病")
+  if (/疾病|发病|感染|水霉|烂|白点|病/.test(s)) return 'disease'
+  if (/疑似|前兆|早期|疑似病/.test(s)) return 'early'
+
+  return 'normal'
+}
+
 /**
- * 解析模型输出 JSON(容错:提取首个 JSON 对象并按白名单归一,失败降级 normal)
+ * 解析模型输出 JSON(容错:提取首个 JSON 对象并按白名单归一,失败降级 unknown)
  * 归一化保证输出始终满足 output.schema(enum/类型/多余键),避免注册表校验失败
  */
 function parseAnalysisResponse(response: string): AnalysisResult {
@@ -215,8 +234,8 @@ function parseAnalysisResponse(response: string): AnalysisResult {
     return fallback
   }
 
-  // 分类与严重程度白名单(模型输出越界时降级)
-  const cls = raw.cls === 'early' || raw.cls === 'disease' ? raw.cls : 'normal'
+  // 分类值模糊归一化(模型输出 "sick"/"疑似水霉病"/" DISEASE" 等变体均可识别)
+  const cls = normalizeCls(raw.cls)
   const severity = raw.severity === 'low' || raw.severity === 'medium' || raw.severity === 'high' || raw.severity === 'critical'
     ? raw.severity
     : 'low'

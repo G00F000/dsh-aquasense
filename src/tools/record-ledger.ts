@@ -63,6 +63,12 @@ const AI_ANALYSIS_COLUMN: Partial<Record<LedgerScene, string>> = {
 /** dissection 场景「解剖器官」下拉框选项(多选;须与飞书表格选项一致,写入值只能是其中之一) */
 const DISSECTION_ORGAN_OPTIONS = ['体表', '鳃', '肝', '胆囊', '肠', '脾', '鳔', '肾', '腹腔']
 
+/** 池号白名单:与清徐基地循环水池编号一致,防止任意文本写入台账 */
+const VALID_POOL_IDS = new Set(['池1', '池2', '池3', '池4'])
+
+/** 上报人占位符/猜测值黑名单:这些值不允许写入台账,必须通过 open_id 解析或追问获得真实姓名 */
+const REPORTER_BLOCKLIST = new Set(['未知', 'unknown', '未知用户', '模型猜的名字', '未知上报人', '不确定', '暂无'])
+
 export const recordLedger = defineTool({
   name: 'aquasense_ledger',
   description: '将巡检记录写入飞书多维表格。scene 选择表格,池号必填;缺池号时返回追问。同一池号 30 分钟内重复写入会自动更新已有记录。',
@@ -126,6 +132,24 @@ export const recordLedger = defineTool({
     }
     const poolId = String(rawPoolId)
 
+    // 池号白名单校验:防止 "1号池" 等非标文本写入(与去重精确匹配冲突)
+    if (!VALID_POOL_IDS.has(poolId)) {
+      return {
+        success: false,
+        message: `池号「${poolId}」不在允许范围内,合法值为:池1/池2/池3/池4`,
+        missing: ['pool_id'],
+        questions: ['池号有误,请问是池1、池2、池3还是池4?']
+      }
+    }
+
+    // pool_id 与 fields.池号 冲突检测:两者都有值且不同时拒绝写入,防止静默覆盖
+    if (args.pool_id && fields?.['池号'] !== undefined && String(fields['池号']) !== poolId) {
+      return {
+        success: false,
+        message: `池号冲突:args.pool_id="${args.pool_id}" 与 fields.池号="${fields['池号']}" 不一致,请统一使用一个值。`
+      }
+    }
+
     // 自动解析汇报人:必须以发消息用户的 open_id 为准,防止记忆/猜测中的姓名顶替真实上报人
     // reporter 仅作兜底:拿不到 open_id 或解析失败时才使用
     let reporterName = ''
@@ -133,7 +157,16 @@ export const recordLedger = defineTool({
       reporterName = await getFeishuUserName(args.open_id)
     }
     if (!reporterName) {
-      reporterName = args.reporter || ''
+      const fallback = (args.reporter || '').trim()
+      if (!fallback || REPORTER_BLOCKLIST.has(fallback)) {
+        return {
+          success: false,
+          message: `无法识别上报人:open_id 解析失败,且提供的 reporter 值「${fallback || '(空)'}」不可用。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
+          missing: ['open_id'],
+          questions: ['请问上报人是谁?(将记入台账)']
+        }
+      }
+      reporterName = fallback
     }
 
     // 非 inspection 场景必须提供 fields:缺失时返回列名提示(Agent 补全后重调)
@@ -162,12 +195,14 @@ export const recordLedger = defineTool({
     }
 
     // 上报人仍无法确定(fields 也未显式提供人列):返回追问,不写"未知"等脏数据
+    // 同时拦截占位符值(如 "未知")写入台账
     const reporterCol = REPORTER_COLUMN[scene]
-    const fieldReporter = reporterCol && fields ? fields[reporterCol] : undefined
-    if (!reporterName && !fieldReporter) {
+    const fieldReporter = reporterCol && fields ? String(fields[reporterCol] || '') : ''
+    const isValidReporter = (name: string) => name.trim() && !REPORTER_BLOCKLIST.has(name.trim())
+    if (!isValidReporter(reporterName) && !isValidReporter(fieldReporter)) {
       return {
         success: false,
-        message: `无法识别上报人:缺少当前消息发送者的 open_id,且未提供「${reporterCol ?? '上报人'}」。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
+        message: `无法识别上报人:缺少当前消息发送者的 open_id,且未提供有效的「${reporterCol ?? '上报人'}」。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
         missing: ['open_id'],
         questions: ['请问上报人是谁?(将记入台账)']
       }
@@ -314,9 +349,23 @@ async function findRecentRecord(
 }
 
 async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string, reporterName: string): Promise<Record<string, unknown>> {
-  const analysis = args.analysis as { cls?: string; symptoms?: string[]; severity?: string; abnormal?: boolean } | undefined
+  const analysis = args.analysis as { cls?: string; symptoms?: string[] | string; severity?: string; abnormal?: boolean } | undefined
   const advice = args.advice as { diagnosis_summary?: string; immediate_actions?: string[]; knowledge_refs?: string[]; alert_level?: string } | undefined
   const fields: Record<string, unknown> = {}
+
+  // inspection 场景:analysis 缺失或 cls 为 unknown 时拒绝落表(避免将未分析记录伪装成健康记录)
+  if (scene === 'inspection') {
+    if (!analysis || analysis.cls === 'unknown') {
+      throw new Error('inspection 场景缺少有效 AI 分析结果(analysis.cls 为 unknown 或未提供),无法写入台账。请先调用 aquasense_analyze 获取分析结果。')
+    }
+  }
+
+  // symptoms 归一化:模型可能返回字符串而非数组,统一为数组防止 .join() TypeError
+  const normalizedSymptoms = Array.isArray(analysis?.symptoms)
+    ? analysis.symptoms.filter((s): s is string => typeof s === 'string')
+    : typeof analysis?.symptoms === 'string'
+      ? [analysis.symptoms]
+      : []
 
   // 显式 fields 优先(其他场景必须由 Agent 提供)
   if (args.fields && Object.keys(args.fields).length > 0) {
@@ -327,6 +376,21 @@ async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string,
     const reporterCol = REPORTER_COLUMN[scene]
     if (reporterCol && reporterName) {
       fields[reporterCol] = reporterName
+    }
+
+    // 自动填充时间列:时间列缺失时填入当前时间戳(非巡检场景 Agent 可能漏传)
+    const timeCol = SCENE_TIME_COLUMN[scene]
+    if (timeCol && !(timeCol in fields)) {
+      fields[timeCol] = Date.now()
+    } else if (timeCol && timeCol in fields) {
+      // Agent 传入字符串日期(如 "2026-03-01 08:20")时自动解析为毫秒时间戳
+      const timeVal = fields[timeCol]
+      if (typeof timeVal === 'string') {
+        const parsed = Date.parse(timeVal)
+        if (!Number.isNaN(parsed)) {
+          fields[timeCol] = parsed
+        }
+      }
     }
 
     // 自动填充「图片」字段(未显式提供时)
@@ -349,7 +413,7 @@ async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string,
     '巡检时间': Date.now(),
     '巡检人': reporterName,
     '鱼群状态': analysis?.cls || 'normal',
-    '症状描述': analysis?.symptoms?.join('、') || '',
+    '症状描述': normalizedSymptoms.join('、'),
     '严重程度': analysis?.severity || 'low',
     'AI诊断': advice?.diagnosis_summary || analysis?.cls || '',
     '处置建议': advice?.immediate_actions?.join('; ') || '',

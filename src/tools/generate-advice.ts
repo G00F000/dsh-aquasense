@@ -85,6 +85,21 @@ export const generateAdvice = defineTool({
     const immediateActions: string[] = []
     const followUpActions: string[] = []
     const severity = analysis.severity || 'low'
+    const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状'
+
+    // ========== AI 分析失败(unknown)时的早期返回:不给出具体诊断和用药建议 ==========
+    if (analysis.cls === 'unknown') {
+      return {
+        diagnosis_summary: `AI 分析失败(状态未知),症状:${symptoms}`,
+        immediate_actions: ['AI 分析结果不确定,请人工现场复核后决定处置措施'],
+        follow_up_actions: ['人工确认鱼群状态后补录台账'],
+        medication: 'AI 分析失败,请根据现场情况咨询兽医后决定',
+        alert_level: 'P1' as const,
+        knowledge_refs: knowledgeRefs,
+        knowledge_excerpt: excerpts.map((e) => `《${e.title}》:「${e.text}」`),
+        reasoning: `AI 视觉分析未能给出明确分类(unknown),无法自动判断病情与用药。请人工确认后按实际情况处置。`
+      }
+    }
 
     switch (severity) {
       case 'critical':
@@ -127,11 +142,13 @@ export const generateAdvice = defineTool({
     }
 
     // ========== 步骤 5:确定预警级别(P0/P1/P2,与飞书告警方案一致) ==========
+    // 规则:critical + disease → P0; critical 或 (disease + high) → P1; disease 或 high → P1; 其余 → P2
+    // severity 为 critical 时无论 cls 如何都至少 P1(与 immediate_actions 中的紧急措施一致)
     let alertLevel: 'P0' | 'P1' | 'P2' = 'P2'
     if (analysis.cls === 'disease' && severity === 'critical') alertLevel = 'P0'
-    else if (analysis.cls === 'disease' || severity === 'high') alertLevel = 'P1'
-
-    const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状'
+    else if (severity === 'critical') alertLevel = 'P1'
+    else if (analysis.cls === 'disease') alertLevel = 'P1'
+    else if (severity === 'high') alertLevel = 'P1'
 
     return {
       diagnosis_summary: `状态:${analysis.cls || 'unknown'},症状:${symptoms}`,
