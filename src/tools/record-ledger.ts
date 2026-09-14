@@ -121,7 +121,18 @@ export const recordLedger = defineTool({
 
     // 池号校验:缺失时返回追问(Agent 转述给工人),不落脏数据
     const fields = args.fields as Record<string, unknown> | undefined
-    const rawPoolId = fields?.['池号'] ?? args.pool_id
+
+    // pool_id 与 fields.池号 冲突检测:两者都有值且不同时拒绝写入,防止静默覆盖
+    // 必须在 ?? 合并之前做,否则比较永远相等(死代码)
+    const fieldPoolId = fields?.['池号'] !== undefined ? String(fields['池号']).trim() : undefined
+    const argPoolId = args.pool_id?.trim()
+    if (fieldPoolId && argPoolId && fieldPoolId !== argPoolId) {
+      return {
+        success: false,
+        message: `池号冲突:args.pool_id="${argPoolId}" 与 fields.池号="${fieldPoolId}" 不一致,请统一使用一个值。`
+      }
+    }
+    const rawPoolId = fieldPoolId ?? argPoolId
     if (!rawPoolId) {
       return {
         success: false,
@@ -139,14 +150,6 @@ export const recordLedger = defineTool({
         message: `池号「${poolId}」不在允许范围内,合法值为:池1/池2/池3/池4`,
         missing: ['pool_id'],
         questions: ['池号有误,请问是池1、池2、池3还是池4?']
-      }
-    }
-
-    // pool_id 与 fields.池号 冲突检测:两者都有值且不同时拒绝写入,防止静默覆盖
-    if (args.pool_id && fields?.['池号'] !== undefined && String(fields['池号']) !== poolId) {
-      return {
-        success: false,
-        message: `池号冲突:args.pool_id="${args.pool_id}" 与 fields.池号="${fields['池号']}" 不一致,请统一使用一个值。`
       }
     }
 
@@ -208,7 +211,16 @@ export const recordLedger = defineTool({
       }
     }
 
-    const recordFields = await buildFields(scene, args, poolId, reporterName)
+    let recordFields: Record<string, unknown>
+    try {
+      recordFields = await buildFields(scene, args, poolId, reporterName)
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : String(error),
+        questions: scene === 'inspection' ? ['AI 分析结果无效,请先让工人拍摄清晰照片并重新分析后再落表。'] : undefined
+      }
+    }
 
     // 查询 30 分钟内同池号已有记录(存在则更新,否则新增)
     const token = await getFeishuToken()
