@@ -16,6 +16,17 @@
 
 **前置依赖**：无新 npm 依赖。分词使用内置 n-gram 兜底方案，可选安装 `jieba-wasm` 提升精度。
 
+> **⚠️ 前置条件（必须先完成）**
+>
+> 本实现文档描述的是方案 D 完整版（P2 阶段）。在开始实现前，必须先完成以下前置工作，否则索引建好了，最关键的病害书籍依然在盲区：
+>
+> 1. **OCR 12 本扫描件（2,572 页）**：CPU 一次性批处理，解锁全部病害/鲈鱼/用药内容
+> 2. **处理 3 本超限书（>100MB）**：提高上限或流式分片解析
+> 3. **修复缓存目录 CWD 漂移**：`AQUASENSE_CACHE_DIR` 默认值改为绝对路径
+> 4. **P1 轻量验证**：在缓存上做 substring 检索，验证 PDF 通道引用质量
+>
+> 详见 [ima-pdf-note-limitation.md §8](./ima-pdf-note-limitation.md#8-建议与下一步) 和 [pdf-search-channel-architecture.md §1.4](./pdf-search-channel-architecture.md#14-前置条件实测验证)。
+
 ---
 
 ## 2. 实现步骤
