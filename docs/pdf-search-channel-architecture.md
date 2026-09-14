@@ -31,7 +31,7 @@
 - **不改动 IMA 外部 API 调用**：通道 C 完全基于本地数据
 - **复用已有的 PDF 缓存**：`warm-kb-cache` 预热的 `cache/pdf/*.txt` 文件
 - **向后兼容**：通道 C 不可用时自动降级回双通道模式
-- **零运维**：索引构建集成到 `warm-kb-cache` 脚本，运行时自动加载
+- **零运维**：索引构建集成到 `warm-kb-cache` 脚本，运行时自动加载；扫描件兜底 OCR 为可选离线步骤（`npm run ocr`，不执行时通道 C 对扫描件保持降级）
 
 ### 1.4 前置条件（实测验证）
 
@@ -49,13 +49,13 @@
 
 | 前置项 | 成本 | 解锁内容 |
 |--------|------|----------|
-| OCR 12 本扫描件 | CPU 一次性批处理 3.3 小时(已验证) | 全部病害/鲈鱼/用药内容 |
-| 处理 3 本超限书 | 提高上限或流式分片 | 3 本核心书籍 |
+| OCR 12 本扫描件 | CPU 一次性批处理 3.3 小时(已验证);生产端已交付(`npm run ocr`,安装与语言包见 [deployment.md §3.7](./deployment.md)),批处理执行属运维操作 | 全部病害/鲈鱼/用药内容 |
+| 处理 3 本超限书 | 提高上限或流式分片(上限已放宽至 100MB) | 3 本核心书籍 |
 | 修复缓存 CWD 漂移 | 默认值改为绝对路径(如 Linux: `/data/aquasense/cache/`, Windows: `D:\data\aquasense\cache\`) | 索引与缓存一致性 + OCR 成果持久化 |
 
-**⚠️ OCR 空格陷阱**:Tesseract chi_sim 会在每个汉字间插空格,索引层入库前必须做去空格归一化(`replace(/\s+/g,'')`),否则通道 C 子串匹配全部失效。此问题仅影响 OCR 文本——unpdf 提取原生 PDF 的文本无此问题。
+**⚠️ OCR 空格陷阱**:Tesseract chi_sim 会在每个汉字间插空格,入库前必须去空格归一化,否则通道 C 子串匹配全部失效(`白 点 病` 匹配不到 `白点病`,回归探测 0/8 → 去空格后 8/8)。落地为双保险:生产端整本发布前 strip,索引层对既有 OCR 缓存再做一次汉字间空格归一化并回写(实现见 [pdf-search-channel-implementation.md §5.1](./pdf-search-channel-implementation.md))。此问题仅影响 OCR 文本——unpdf 提取原生 PDF 的文本无此问题。
 
-在前置条件完成前,通道 C 只能在营养/饲料语料上做快速检索,病害内容仍为索引盲区。
+**当前状态**:通道 C(M1/M2)已交付并冒烟通过;M0 中仅 OCR 批处理执行为待办——执行 `npm run ocr` 后病害/用药内容即从索引盲区解锁(超限书仍待处理,见 [pdf-search-channel-implementation.md §5.4](./pdf-search-channel-implementation.md))。
 
 ---
 
@@ -138,6 +138,8 @@
    通道 C 结果 --> 合并到三通道 --> extractExcerpts --> 三段式输出
 ```
 
+> **OCR 注**:扫描件(无文本层)的缓存落 `[扫描件 PDF:...]` 占位标记;`npm run ocr`(`src/scripts/ocr-scanned-pdfs.ts`)对标记文件逐页 OCR,整本完成后覆写同名缓存并触发索引重建——见 [deployment.md §3.7](./deployment.md)。
+
 ---
 
 ## 3. 核心模块设计
@@ -151,6 +153,7 @@ src/
     pdf-content-search.ts   # [新增] PDF 原文检索模块
   scripts/
     warm-kb-cache.ts        # [修改] 预热结束后触发索引构建
+    ocr-scanned-pdfs.ts     # [新增] 扫描件 OCR 兜底生产端(npm run ocr)
   tools/
     generate-advice.ts      # [修改] extractExcerpts 支持 pdf_content 通道
 ```
@@ -163,6 +166,7 @@ src/
 | IMA API 封装 | `ima-api.ts` | 三通道合并检索 | `pdf-content-search.ts` |
 | 处置建议生成 | `generate-advice.ts` | 引用提取与三段式输出 | `ima-api.ts` |
 | 批量预热 | `warm-kb-cache.ts` | PDF 缓存预热 + 索引构建触发 | `ima-api.ts`, `pdf-content-search.ts` |
+| OCR 兜底生产端 | `ocr-scanned-pdfs.ts` | 扫描件逐页 OCR + 逐页 checkpoint 续跑 + 整本完成才发布 | `unpdf`;`tesseract.js`/`@napi-rs/canvas`(可选依赖) |
 
 ---
 
@@ -230,7 +234,8 @@ Step 1: 加载 PDF 文本文件
     - 读取 getMediaInfo 获取 title
     - 保留有效文本内容
     - **OCR 文本归一化**:检测是否为 OCR 来源(如文件头含 [OCR 批处理] 标记)
-      → 对全文执行 replace(/\s+/g,'') 去除汉字间空格
+      → 去除汉字间空格(落地修正:改为单次 lookbehind/lookahead 正则;
+         replace(/\s+/g,'') 对长间隔空格序列不彻底。生产端发布时已 strip,此处为兜底)
       → 归一化后覆写缓存(一次性操作)
 
     |
@@ -367,7 +372,8 @@ function pdfHitToKnowledgeItem(hit: PdfSearchHit): KnowledgeItem {
 
 | 文件路径 | 行数估计 | 说明 |
 |----------|---------|------|
-| `src/ima/pdf-content-search.ts` | ~350 行 | PDF 原文检索核心模块 |
+| `src/ima/pdf-content-search.ts` | ~350 行 | PDF 原文检索核心模块(OCR_MARK/normalizeOcrText 契约定义处) |
+| `src/scripts/ocr-scanned-pdfs.ts` | ~840 行 | OCR 兜底生产端(离线脚本 `npm run ocr`;可选依赖,缺失时给安装提示) |
 
 ### 6.2 修改文件
 
@@ -394,8 +400,9 @@ function pdfHitToKnowledgeItem(hit: PdfSearchHit): KnowledgeItem {
 
 ```
 $AQUASENSE_CACHE_DIR/
-  pdf/                     # [已有] PDF 全文缓存
+  pdf/                     # [已有] PDF 全文缓存(OCR 完成后覆写为带 [OCR 批处理] 头的正文)
   note/                    # [已有] 笔记正文缓存
+  ocr/                     # [新增] OCR 逐页 checkpoint(<media_id>/page-0001.txt + state.json;发布后保留,缓存丢失时可免重新 OCR 快速重建)
   pdf-index/               # [新增] PDF 倒排索引
     index.json             # 倒排索引 + 元数据 (~500KB)
     chunks.json            # 切片原文数组 (~5-10MB)
@@ -476,7 +483,9 @@ export interface KnowledgeItem {
 
 ```typescript
 // src/ima/pdf-content-search.ts
-export function buildPdfIndex(cachePdfDir: string, indexDir: string): Promise<PdfIndexMeta>
+export const OCR_MARK = '[OCR 批处理]'                // 新增:OCR 契约标记(与生产端 ocr-scanned-pdfs.ts 共用,防漂移)
+export function normalizeOcrText(text: string): string  // 新增:剥离标记 + 去字间空格(生产端发布与索引层归一化共用)
+export async function buildPdfIndex(cachePdfDir: string, indexDir: string, options?: BuildPdfIndexOptions): Promise<PdfIndexMeta>
 export function searchPdfContent(query: string, indexDir: string): PdfSearchHit[]
 export function isPdfIndexReady(indexDir: string): boolean
 ```
@@ -498,22 +507,22 @@ export function isPdfIndexReady(indexDir: string): boolean
 
 ## 12. 里程碑
 
-> **注意**:M0 为方案 D 的硬性前置。在 M0 完成前,M2 不应启动——否则索引建好了,最关键的病害书籍依然在盲区。详见 [ima-pdf-note-limitation.md §8](./ima-pdf-note-limitation.md#8-建议与下一步)。
+> **注意**:M0 为方案 D 的硬性前置。实际落地时 M2 先于 M0a 批处理执行完成(索引机制不受 OCR 阻塞);M0a 生产端已随插件交付,执行 `npm run ocr` 后病害内容即从盲区解锁。详见 [ima-pdf-note-limitation.md §8](./ima-pdf-note-limitation.md#8-建议与下一步)。
 
-| 阶段 | 内容 | 预估工时 | 前置 |
-|------|------|---------|------|
-| **M0** | **语料修复(前置条件)** | | |
-| M0a | OCR 12 本扫描件(2,572 页) | 3.3 小时(CPU 批处理,已验证) | 无 |
-| M0a' | OCR 文本归一化(去空格) | 0.5 天(含批处理脚本开发) | M0a |
-| M0b | 处理 3 本超限书(>100MB) | 0.5 天 | 无 |
-| M0c | 修复缓存目录 CWD 漂移(改绝对路径) | 0.5 天 | 无 |
-| **M1** | **轻量验证(P1)** | | |
-| M1a | 缓存 substring 检索 | 0.5 天 | M0 完成 |
-| M1b | 验证 PDF 通道引用质量 | 0.5 天 | M1a 完成 |
-| **M2** | **完整索引(P2)** | | |
-| M2a | pdf-content-search 模块开发 | 3 天 | M1b 验证通过 |
-| M2b | warm-kb-cache 索引构建集成 | 1 天 | M2a 完成 |
-| M2c | 三通道合并 + generate-advice 适配 | 2 天 | M2b 完成 |
-| M2d | 单元测试 + 集成测试 | 2 天 | M2c 完成 |
-| M2e | 部署验证 + 性能调优 | 1 天 | M2d 完成 |
-| **合计** | | **~12 天** | |
+| 阶段 | 内容 | 预估工时 | 前置 | 状态 |
+|------|------|---------|------|------|
+| **M0** | **语料修复(前置条件)** | | | |
+| M0a | OCR 12 本扫描件(2,572 页) | 3.3 小时(CPU 批处理,已验证) | 无 | 生产端已交付(`npm run ocr`),批处理执行待运维安排 |
+| M0a' | OCR 文本归一化(去空格) | 0.5 天(含批处理脚本开发) | M0a | ✅ 已落地(生产端 strip + 索引层归一化回写) |
+| M0b | 处理 3 本超限书(>100MB) | 0.5 天 | 无 | ⚠️ 部分:上限已放宽至 100MB,超限书仍待处理 |
+| M0c | 修复缓存目录 CWD 漂移(改绝对路径) | 0.5 天 | 无 | ✅ 已落地(`resolveCacheRoot()` 平台绝对路径) |
+| **M1** | **轻量验证(P1)** | | | |
+| M1a | 缓存 substring 检索 | 0.5 天 | M0 完成 | ✅ 已落地 |
+| M1b | 验证 PDF 通道引用质量 | 0.5 天 | M1a 完成 | ✅ 已落地(冒烟数据见 [implementation.md §5.3](./pdf-search-channel-implementation.md)) |
+| **M2** | **完整索引(P2)** | | | |
+| M2a | pdf-content-search 模块开发 | 3 天 | M1b 验证通过 | ✅ 已落地 |
+| M2b | warm-kb-cache 索引构建集成 | 1 天 | M2a 完成 | ✅ 已落地 |
+| M2c | 三通道合并 + generate-advice 适配 | 2 天 | M2b 完成 | ✅ 已落地 |
+| M2d | 单元测试 + 集成测试 | 2 天 | M2c 完成 | ✅ 已落地(vitest,18 用例) |
+| M2e | 部署验证 + 性能调优 | 1 天 | M2d 完成 | ✅ 已落地(冒烟数据见 [implementation.md §5.3](./pdf-search-channel-implementation.md)) |
+| **合计** | | **~12 天** | | M1/M2 已交付;M0a 批处理执行待运维安排 |

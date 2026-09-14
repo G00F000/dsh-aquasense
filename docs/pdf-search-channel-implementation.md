@@ -971,6 +971,9 @@ node --version
 # 确认 PDF 缓存已预热
 ls cache/pdf/*.txt | wc -l  # 应 > 50
 
+# 查看扫描件标记数(>0 且需要其内容时,先执行 npm run ocr,见 deployment.md §3.7)
+grep -l '\[扫描件' cache/pdf/*.txt | wc -l
+
 # 可选: 安装 jieba-wasm 提升分词精度
 npm install jieba-wasm
 ```
@@ -987,6 +990,9 @@ npx tsx -e "
   buildPdfIndex('/data/aquasense/cache/pdf', '/data/aquasense/cache/pdf-index')
     .then(m => console.log('Done:', m.totalChunks, 'chunks'))
 "
+
+# 方式 3: 扫描件先 OCR(可选;完成后默认自动执行 kb:warm 重建索引)
+npm run ocr
 ```
 
 ### 3.3 验证
@@ -1003,8 +1009,8 @@ npx tsx -e "
   hits.forEach(h => console.log(h.title, h.page + '页', h.text.slice(0, 80)))
 "
 
-# 运行测试
-npx vitest run src/ima/pdf-content-search.test.ts
+# 运行测试(通道 C 索引 + OCR 生产端契约,共 18 用例)
+npm test
 ```
 
 ### 3.4 回滚方案
@@ -1013,6 +1019,7 @@ npx vitest run src/ima/pdf-content-search.test.ts
 
 1. 删除 `cache/pdf-index/` 目录 -> 系统自动降级回双通道
 2. 或在 `ima-api.ts` 中注释掉通道 C 的调用行
+3. 回退某本书的 OCR 结果:删除 `cache/pdf/<media_id>.txt` 与 `cache/ocr/<media_id>/`,下次 `npm run kb:warm` 会重新下载并恢复为扫描件标记
 
 ---
 
@@ -1060,6 +1067,7 @@ wc -c cache/pdf-index/chunks.json
 | index.json 存 2/3-gram 倒排索引(~500KB) | 61 PDF 建倒排后唯一词项 50 万+,index.json 约 51MB(预估的百倍),Map 结构与 4G 内存预算不符 | 不建倒排:index.json 仅元数据(~14KB),检索在 chunks.json 上运行时扫描(结果与倒排等价) |
 | unpdf 合并文本以 Form Feed(\f) 分页,page 可取 | 实测 84 个缓存全部无 \f(unpdf mergePages 仅用 \n 拼页) | 有 \f 按页切块并回带 1-based 页码(OCR/逐页提取的缓存);无 \f 按空行切段,page 记 null 不臆造 |
 | OCR 归一化两轮 replace | 对长间隔空格序列处理不彻底 | 单次 lookbehind/lookahead 正则 `(?<=[汉字])[ \t\u3000]+(?=[汉字])`,并回写缓存避免重复处理 |
+| 状态标记判定:`startsWith('[')` 即跳过 | OCR 缓存头 `[OCR 批处理 ...]` 也以 `[` 开头,按原判定会被误当状态标记跳过——OCR 文本永远进不了索引 | 新增 `isStatusMark()`:`startsWith('[') && !OCR_MARK_RE.test(text)`;OCR 文本视为真实内容参与切片,标记正则从共享常量 `OCR_MARK` 派生(防生产端/消费端漂移) |
 | AQUASENSE_CACHE_DIR 缺省 './cache' | systemd/手工/cron 的 CWD 不同会各建一份缓存,索引与缓存互相看不见 | ima-api 导出 resolveCacheRoot():环境变量优先,缺省平台绝对路径;预热/提醒/检索均走同一约定 |
 | 重建判定:比对 pdfCount | OCR 覆写缓存(数量不变、内容变)不会触发重建 | 按"缓存目录最新 mtime > 索引 builtAt"判定,覆盖新缓存与覆写两种情形 |
 | Step 5 测试断言 page > 0 | 无 \f 语料 page 为 null;且 MIN_TEXT_CHARS=100、MIN_CHUNK_CHARS=50 使短语料不建索引 | 无 \f 断言 page=null;另设分页符用例断言 page=2;测试语料加长到阈值以上 |
