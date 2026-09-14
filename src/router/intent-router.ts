@@ -55,13 +55,13 @@ export function detectIntent(content: string, hasImage: boolean): IntentResult {
     return { scene: 'dissection', confidence: 0.85, needsImage: true, needsTable: true }
   }
 
-  // S1: 水质检测
-  if (text.match(/水质|溶氧|氨氮|pH|亚硝酸|水色|透明度/)) {
-    return { scene: 'water_quality', confidence: 0.85, needsImage: true, needsTable: true }
+  // S1: 水质检测(图片可选,纯文本如 "pH 7.2" 也应路由到水质表)
+  if (text.match(/水质|溶氧|氨氮|ph|亚硝酸|水色|透明度/)) {
+    return { scene: 'water_quality', confidence: 0.85, needsImage: false, needsTable: true }
   }
 
-  // S3: 知识询问(不保存)
-  if (text.match(/怎么|如何|为什么|是什么|能不能|可以吗|请问|咨询|问题/)) {
+  // S3: 知识询问(不保存,仅限纯文本且无图片;有图片时优先路由到对应台账表)
+  if (!hasImage && text.match(/怎么|如何|为什么|是什么|能不能|可以吗|请问|咨询|问题/)) {
     return { scene: 'knowledge', confidence: 0.8, needsImage: false, needsTable: false }
   }
 
@@ -104,12 +104,13 @@ export function detectIntentWithVision(
     return { ...textResult, confidence: Math.min(1, textResult.confidence + 0.1) }
   }
 
-  // 视觉与文字不一致且文字置信度低:优先采用视觉(纯图片场景)
-  if (textResult.confidence < 0.7 && hasImage) {
+  // 视觉与文字不一致:有图片时优先采用视觉场景(如纯图死鱼照场景提示为 death)
+  // 无图片时保持文字结果(文字仍有一定依据)
+  if (hasImage) {
     return { scene: visionScene, confidence: 0.75, needsImage: true, needsTable: true }
   }
 
-  // 其他情况:保持文字结果(文字仍有一定依据)
+  // 其他情况:保持文字结果
   return textResult
 }
 

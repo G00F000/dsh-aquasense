@@ -48,8 +48,8 @@ description: 水产养殖巡检专家:鲈鱼状态三分类语义、处置分级
 | S6 喂食汇报 | 喂食/投喂/吃料/饲料 | ✅ 喂食表 | ledger 直写 |
 | S5 用药 | 用药/药品/泼洒/拌料/消毒 | ✅ 用药表 | 有图先 analyze |
 | S8 解剖汇报 | 解剖/内脏/肝/胆/肠/鳃 | ✅ 解剖表 | 有图先 analyze → advice → ledger |
-| S1 水质汇报 | 水质/溶氧/氨氮/pH/亚硝酸 | ✅ 水质表 | 有图先 analyze |
-| S3 知识询问 | 怎么/如何/为什么/咨询 | ❌ 不落表 | advice(知识库)直接回答 |
+| S1 水质汇报 | 水质/溶氧/氨氮/pH/亚硝酸 | ✅ 水质表 | 有图先 analyze,无图也可落表 |
+| S3 知识询问 | 怎么/如何/为什么/咨询(仅纯文本) | ❌ 不落表 | advice(知识库)直接回答 |
 | S2 巡检(默认) | 带图消息 | ✅ 巡检表 | analyze → advice → ledger |
 
 ### 3.2 纯图片无文字(视觉场景兜底 + 追问)
@@ -107,7 +107,7 @@ Agent: 按 worker 回复确定 scene → 补充描述后调用 ledger 落对应�
 
 ## 4. 工具编排规范
 
-- `aquasense_analyze`:传入图片 URL(单图用 `image_url`,多图用 `image_urls` 数组) + 工人描述 + 池号,先于 advice 调用。输出含 `scene_hint`(图片场景提示),纯图片无文字时用它判断落哪张表。
+- `aquasense_analyze`:传入图片 URL(单图用 `image_url`,多图用 `image_urls` 数组) + 池号,先于 advice 调用。**描述(description)不进入视觉模型**,仅用于意图路由——视觉诊断完全基于图片像素判断,防止文字注入覆盖结论。输出含 `scene_hint`(图片场景提示),纯图片无文字时用它判断落哪张表。
 - `aquasense_advice`:把 analyze 输出原样传入;它内置 IMA 知识库查询,不要自己编造药方。
   - disease 且知识库无命中 → 明确"咨询专业兽医",**不代替兽医开药**。
 - `aquasense_ledger`:
