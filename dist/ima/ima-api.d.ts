@@ -10,7 +10,7 @@
  *
  * 正文层:
  *  - PDF(media_type=1):经 get_media_info 的 url_info 下载,用 unpdf(pdf.js)提取文本层并按 media_id 缓存;
- *    扫描件(无文本层)留标记,待 OCR 兜底。
+ *    扫描件(无文本层)留标记,由 npm run ocr(scripts/ocr-scanned-pdfs.ts)离线 OCR 后覆写同名缓存。
  *  - 笔记(media_type=11):经 notebook_ext_info.notebook_id 调 notes 接口读纯文本并按 media_id 缓存;
  *    权限类确定性失败留标记,临时失败(频控/网络)不缓存、下次重试。
  *  - 其他类型:沿用字段提取与占位标记(见 extractMediaText)。

@@ -12,5 +12,6 @@
  * 启动方式:
  *   npm run kb:warm                 # 全量预热(已缓存自动跳过)
  *   npm run kb:warm -- --limit 10   # 只处理前 10 份正文(PDF+笔记,抽样探测覆盖率)
+ * 扫描件 OCR 兜底见 npm run ocr(本仓库 src/scripts/ocr-scanned-pdfs.ts;其完成后默认自动回到本脚本重建索引)。
  */
 export {};

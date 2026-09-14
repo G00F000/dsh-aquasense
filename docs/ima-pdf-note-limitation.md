@@ -557,7 +557,9 @@ PDF 全文缓存 (~95% 信息,仅损失图表/公式)  ← 假设:提取成功�
    - OCR:Tesseract chi_sim + psm=6,中文术语全部正确
    - 收益:直接解锁全部病害/鲈鱼/用药内容,新增 ~314 万字可索引文本
    - 方式:离线 OCR → 文本归一化(去空格) → 覆写 `cache/pdf/{mediaId}.txt`
+   - **生产端已实现**:`npm run ocr`(src/scripts/ocr-scanned-pdfs.ts;逐页 checkpoint 续跑、整本完成才发布、发布前归一化,安装与语言包见 [deployment.md §3.7](./deployment.md))
    - **⚠️ Tesseract 空格陷阱**:chi_sim 会在每个汉字间插空格,入库前必须去空格归一化,否则通道 C 子串匹配全部失效
+   - **⚠️ 语言包版本**:必须用 `4.0.0_best_int`;标准 `4.0.0` 与 tesseract.js-core 7 不兼容(API version 不匹配),加载即失败
 
 2. **处理 3 本超限书(>100MB)**
    - 成本:提高 `MAX_PDF_BYTES` 上限,或流式分片解析

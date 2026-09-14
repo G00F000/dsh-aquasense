@@ -72,12 +72,24 @@ export declare const INDEX_MAX_AGE_MS: number;
 /** 索引格式版本:结构变化时递增,旧版本索引视为不可用(由 kb:warm 重建) */
 export declare const PDF_INDEX_FORMAT_VERSION = 1;
 /**
+ * OCR 文本头标记:生产端(scripts/ocr-scanned-pdfs.ts)覆写缓存时写入的文件头。
+ * 导出供生产端复用同一字面量——两边分头维护标记必然漂移(曾从 dist 反推正则才知道要写什么头)。
+ */
+export declare const OCR_MARK = "[OCR \u6279\u5904\u7406]";
+/**
  * 从 cache/pdf/*.txt 构建切片索引(chunks.json + index.json)
  * @param cachePdfDir PDF 文本缓存目录(如 /data/aquasense/cache/pdf)
  * @param indexDir   索引输出目录(如 /data/aquasense/cache/pdf-index)
  * @param options    titles:mediaId → 书名映射(预热脚本提供,优先于文本提取)
  */
 export declare function buildPdfIndex(cachePdfDir: string, indexDir: string, options?: BuildPdfIndexOptions): Promise<PdfIndexMeta>;
+/**
+ * OCR 文本归一化:剥离文件头 OCR 标记,去除汉字间空格
+ * Tesseract chi_sim 输出"流 行 性"形态,不去空格则子串/词元匹配全部失效;
+ * 用 lookbehind/lookahead 一次性处理任意长度空格序列(两轮 replace 对长间隔不彻底)。
+ * 导出供生产端在发布缓存前调用(入库前去空格),与索引层共用同一实现;重复调用幂等。
+ */
+export declare function normalizeOcrText(text: string): string;
 /**
  * 在 PDF 原文中检索关键词,返回带页码/章节的命中切片
  * @param query 用户查询(如 "白点 小瓜虫 治疗")

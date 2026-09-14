@@ -260,6 +260,7 @@ note: 条目X=3词, 条目Y=2词, 条目Z=1词
 - PDF: 按 `media_id.txt` 缓存解析结果；超限标记（`[PDF 超限:xxx]`）也缓存，避免重复下载
 - 笔记: 按 `note_id.txt` 缓存；确定性失败（权限/已删除）缓存标记，临时失败不缓存
 - 超限标记带文件大小，当 `MAX_PDF_BYTES` 上调时自动重评（过期标记触发重新下载）
+- 扫描件: 无文本层时留标记（`[扫描件 PDF:共 N 页,无文本层,需 OCR 兜底]`），由 `npm run ocr` 离线 OCR 后覆写同名缓存（逐页 checkpoint 续跑、整本完成才发布、发布前去汉字间空格；见 [deployment.md §3.7](./deployment.md)）
 - 批量预热: `npm run kb:warm` 遍历全部条目预建缓存
 
 #### 3.2.4 处置建议生成（三段式输出）
@@ -777,9 +778,11 @@ dsh-aquasense/
 │   │   ├── record-ledger.ts           # aquasense_ledger: 飞书 Bitable 8表写入 + 30分钟窗口
 │   │   └── train_aquaspecies.py       # 水生物种识别模型训练脚本 (Python)
 │   ├── ima/
-│   │   └── ima-api.ts                 # IMA 知识库 API 封装(双通道检索 + PDF/笔记正文层)
+│   │   ├── ima-api.ts                 # IMA 知识库 API 封装(三通道检索 + PDF/笔记正文层)
+│   │   └── pdf-content-search.ts      # 通道 C: PDF 切片索引构建 + 运行时检索(OCR 标记契约定义处)
 │   ├── scripts/
-│   │   └── warm-kb-cache.ts           # 正文批量预热(PDF+笔记, npm run kb:warm)
+│   │   ├── warm-kb-cache.ts           # 正文批量预热(PDF+笔记, npm run kb:warm)
+│   │   └── ocr-scanned-pdfs.ts        # 扫描件 OCR 兜底(npm run ocr, checkpoint 续跑 + 整本才发布)
 │   ├── feishu/
 │   │   └── token.ts                   # 飞书 token 缓存 + 用户名解析 + 图片上传
 │   ├── router/

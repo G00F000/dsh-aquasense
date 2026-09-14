@@ -38,6 +38,7 @@
     "remind": "tsx src/scheduler/daily-reminder.ts",
     "remind:prod": "node dist/scheduler/daily-reminder.js",
     "kb:warm": "tsx src/scripts/warm-kb-cache.ts",
+    "ocr": "tsx src/scripts/ocr-scanned-pdfs.ts",
     "test": "vitest run"
   },
   "dsh": {
@@ -63,5 +64,9 @@
   },
   "dependencies": {
     "unpdf": "^1.8.1"
+  },
+  "optionalDependencies": {
+    "@napi-rs/canvas": "^1.0.9",
+    "tesseract.js": "^7.0.0"
   }
 }

@@ -105,8 +105,17 @@ export const INDEX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /** 索引格式版本:结构变化时递增,旧版本索引视为不可用(由 kb:warm 重建) */
 export const PDF_INDEX_FORMAT_VERSION = 1
 
-/** OCR 文本头标记:[OCR 批处理] / [OCR] 等 */
-const OCR_MARK_RE = /^\[OCR[^\]]*\][ \t]*/
+/**
+ * OCR 文本头标记:生产端(scripts/ocr-scanned-pdfs.ts)覆写缓存时写入的文件头。
+ * 导出供生产端复用同一字面量——两边分头维护标记必然漂移(曾从 dist 反推正则才知道要写什么头)。
+ */
+export const OCR_MARK = '[OCR 批处理]'
+
+/**
+ * OCR 文本头标记匹配:[OCR 批处理 ...] / [OCR] 等历史写法。
+ * 前缀取自 OCR_MARK(即 "[OCR"),标记内允许附加元信息(lang/psm/pages 等),归一化时整段剥离。
+ */
+const OCR_MARK_RE = new RegExp(`^\\[${OCR_MARK.slice(1, 4)}[^\\]]*\\][ \t]*`)
 
 /** 章节标题检测(按行匹配;命中后向后继承到所属切片) */
 const CHAPTER_PATTERNS = [
@@ -330,8 +339,9 @@ function isOcrText(text: string): boolean {
  * OCR 文本归一化:剥离文件头 OCR 标记,去除汉字间空格
  * Tesseract chi_sim 输出"流 行 性"形态,不去空格则子串/词元匹配全部失效;
  * 用 lookbehind/lookahead 一次性处理任意长度空格序列(两轮 replace 对长间隔不彻底)。
+ * 导出供生产端在发布缓存前调用(入库前去空格),与索引层共用同一实现;重复调用幂等。
  */
-function normalizeOcrText(text: string): string {
+export function normalizeOcrText(text: string): string {
   return text
     .replace(OCR_MARK_RE, '')
     .replace(/(?<=[\u4e00-\u9fff])[ \t\u3000]+(?=[\u4e00-\u9fff])/g, '')

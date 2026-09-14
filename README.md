@@ -52,7 +52,8 @@ Credentials via environment variables (copy [.env.example](.env.example)); IMA a
 | `FEISHU_BITABLE_TABLE_ID_INSPECTION` | ✅ | Inspection table (other scene tables optional) |
 | `FEISHU_BITABLE_TABLE_ID_WATER_QUALITY` / `_MEDICATION` / `_FEEDING` / `_TEMPERATURE` / `_DEATH` / `_DISSECTION` | optional | Per-scene tables |
 | `FEISHU_WORKER_GROUP` | for S9 | Worker group chat_id |
-| `AQUASENSE_CACHE_DIR` | optional | S9 manual cache dir (default `./cache`) |
+| `AQUASENSE_CACHE_DIR` | optional | Cache root for PDF/note text + index (default absolute `/data/aquasense/cache`) |
+| `AQUASENSE_OCR_LANG_PATH` | optional | tessdata dir/URL for `npm run ocr` (default: local npm lang pack, then CDN) |
 
 ## Scenes S1–S9
 
@@ -73,10 +74,12 @@ Credentials via environment variables (copy [.env.example](.env.example)); IMA a
 ## Development
 
 ```bash
-npm install
+npm install            # optionalDependencies include tesseract.js/@napi-rs/canvas for `npm run ocr`
 npm run typecheck
 npm run build          # outputs dist/(ESM, NodeNext)
-npm test               # none yet — CI runs typecheck + build
+npm test               # vitest: PDF index + OCR producer contract tests
+npm run kb:warm        # prewarm IMA PDF/note text cache and build the PDF chunk index
+npm run ocr -- --help  # offline OCR for scanned PDFs (install/lang pack: docs/deployment.md §3.7)
 ```
 
 Layout:
@@ -88,7 +91,12 @@ src/
 │   ├── analyze-image.ts           # aquasense_analyze: vision 3-class + normalization
 │   ├── generate-advice.ts         # aquasense_advice: IMA query + tiered actions
 │   └── record-ledger.ts           # aquasense_ledger: Bitable append (7 scene tables)
-├── ima/ima-api.ts                 # IMA wrapper: searchKnowledge (name) + searchNote (full-text) / getMediaContent
+├── ima/
+│   ├── ima-api.ts                 # IMA wrapper: searchKnowledge (name) + searchNote (full-text) / getMediaContent
+│   └── pdf-content-search.ts      # channel C: PDF chunk index + runtime search (OCR marker/contract live here)
+├── scripts/
+│   ├── warm-kb-cache.ts           # npm run kb:warm — prewarm text cache + rebuild index
+│   └── ocr-scanned-pdfs.ts        # npm run ocr — offline OCR producer for scanned PDFs (tesseract.js)
 ├── feishu/token.ts                # tenant_access_token with cache (shared)
 ├── router/intent-router.ts        # pure S1-S8 intent detection (for hosts/skills)
 └── scheduler/daily-reminder.ts    # S9 standalone process (not a tool)

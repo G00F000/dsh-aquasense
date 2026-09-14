@@ -9,19 +9,23 @@
 | 操作 | 文件 | 变更量估计 |
 |------|------|----------|
 | 新增 | `src/ima/pdf-content-search.ts` | ~350 行 |
+| 新增 | `src/scripts/ocr-scanned-pdfs.ts` | ~830 行(OCR 兜底生产端,`npm run ocr`) |
+| 新增 | `src/scripts/ocr-scanned-pdfs.test.ts` | ~220 行契约测试 |
 | 修改 | `src/ima/ima-api.ts` | ~50 行改动 |
 | 修改 | `src/tools/generate-advice.ts` | ~30 行改动 |
 | 修改 | `src/scripts/warm-kb-cache.ts` | ~20 行改动 |
 | 新增 | `src/ima/pdf-content-search.test.ts` | ~200 行测试 |
 
-**前置依赖**：无新 npm 依赖。分词使用内置 n-gram 兜底方案，可选安装 `jieba-wasm` 提升精度。
+**前置依赖**：无新运行依赖(OCR 可选依赖 `tesseract.js`/`@napi-rs/canvas` 在 optionalDependencies，不影响核心运行)。分词使用内置 n-gram 兜底方案，可选安装 `jieba-wasm` 提升精度。
 
 > **⚠️ 前置条件（必须先完成）**
 >
 > 本实现文档描述的是方案 D 完整版（P2 阶段）。在开始实现前，必须先完成以下前置工作，否则索引建好了，最关键的病害书籍依然在盲区：
 >
 > 1. **OCR 12 本扫描件（2,572 页）**：CPU 一次性批处理（已验证可行，3.3 小时），解锁全部病害/鲈鱼/用药内容
+>    —— 生产端已随插件交付：`npm run ocr`（src/scripts/ocr-scanned-pdfs.ts），安装与语言包见 [deployment.md §3.7](./deployment.md)
 > 2. **OCR 文本归一化**：Tesseract chi_sim 会在每个汉字间插空格，入库前必须去空格归一化，否则子串匹配全部失效
+>    —— 已双保险：生产端发布前调用 `normalizeOcrText`，索引层共用同一实现
 > 3. **处理 3 本超限书（>100MB）**：提高上限或流式分片解析
 > 4. **修复缓存目录 CWD 漂移**：`AQUASENSE_CACHE_DIR` 默认值改为绝对路径
 > 5. **P1 轻量验证**：在缓存上做 substring 检索，验证 PDF 通道引用质量
@@ -1036,7 +1040,11 @@ wc -c cache/pdf-index/chunks.json
 
 ### Q: 如何更新索引？
 
-执行 `npm run kb:warm`。脚本按"缓存 mtime 是否新于索引 builtAt"判定:有新缓存、OCR 覆写缓存或索引超过 7 天时自动重建,否则跳过。
+执行 `npm run kb:warm`。脚本按"缓存 mtime 是否新于索引 builtAt"判定:有新缓存、OCR 覆写缓存或索引超过 7 天时自动重建,否则跳过。扫描件需先 OCR(`npm run ocr`,完成后默认自动回到 kb:warm)。
+
+### Q: 扫描件 PDF 检索不到内容？
+
+扫描件无文本层,先执行 `npm run ocr` 离线 OCR 并覆写缓存(逐页 checkpoint 可续跑,整本完成才发布;安装与语言包见 [deployment.md §3.7](./deployment.md)),完成后默认自动重建索引。
 
 ---
 
@@ -1064,6 +1072,8 @@ wc -c cache/pdf-index/chunks.json
 | `src/ima/ima-api.ts` | 修改:KnowledgeItem.from 扩展 'pdf_content';resolveCacheRoot 导出;searchKnowledgeMerged 三通道合并 |
 | `src/tools/generate-advice.ts` | 修改:引用来源标注(PDF 一手/笔记二手),双通道合并逻辑上移 ima-api |
 | `src/scripts/warm-kb-cache.ts` | 修改:预热末尾按需构建索引(书名映射 + mtime 判定) |
+| `src/scripts/ocr-scanned-pdfs.ts` | 新增:OCR 兜底生产端(扫描件逐页 OCR → checkpoint 续跑 → 整本完成才覆写缓存 → 触发重建;`npm run ocr`) |
+| `src/scripts/ocr-scanned-pdfs.test.ts` | 新增:8 个契约用例(发布文本 → 索引 → 检索端到端、四条规则回归) |
 | `src/scheduler/daily-reminder.ts` | 修改:缓存根目录统一 resolveCacheRoot |
 | `src/ima/pdf-content-search.test.ts` | 新增:10 个用例(vitest) |
 | `package.json` / `.github/workflows/ci.yml` | 新增 `npm test`(vitest run),CI 增加测试步骤 |
@@ -1078,5 +1088,5 @@ wc -c cache/pdf-index/chunks.json
 
 ### 5.4 仍未完成的前置条件(超出代码范围)
 
-- 12 本扫描件 OCR 未执行(tesseract chi_sim 批处理属运维操作;完成后覆写同名缓存即可纳入索引)
+- 12 本扫描件 OCR 未执行(生产端已交付:`npm run ocr`,逐页 checkpoint 续跑、整本完成才覆写缓存;执行属运维操作)
 - 11 本超限 PDF(>100MB)未处理;上限已从 50MB 放宽到 100MB 以覆盖 87.5MB 带文本层大部头

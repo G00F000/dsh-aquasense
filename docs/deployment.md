@@ -128,6 +128,10 @@ FEISHU_WORKER_GROUP=oc_xxxxxxxx
 # 缓存目录（必须使用绝对路径，避免不同启动方式各建一份缓存）
 # Linux: /data/aquasense/cache    Windows: D:\data\aquasense\cache
 AQUASENSE_CACHE_DIR=/data/aquasense/cache
+
+# ===== OCR 扫描件兜底（可选；npm run ocr 用）=====
+# 语言包目录或 URL（自备 tessdata_best 的 4.0.0_best_int 版本；不填则自动探测本机 npm 包，其次官方 CDN）
+# AQUASENSE_OCR_LANG_PATH=/data/tessdata
 ```
 
 ### 3.4 构建
@@ -156,6 +160,56 @@ npm run kb:warm -- --limit 5  # 抽样验证文本层覆盖率
 缓存位置: `AQUASENSE_CACHE_DIR/pdf/`（PDF 文本）与 `AQUASENSE_CACHE_DIR/note/`（笔记文本），默认在 `/data/aquasense/cache/` 下（必须使用绝对路径，避免不同启动方式各建一份缓存）。输出会列出 PDF 成功/扫描件(需 OCR)/超限、笔记成功/不可读及失败清单。
 
 遍历会逐级下钻知识库的嵌套文件夹（含 `folder_` 前缀形式的文件夹条目），统计口径覆盖知识库全部层级，不会因嵌套目录遗漏笔记或 PDF。
+
+若汇总中提示「扫描件无文本层」，继续执行 §3.7 完成 OCR 兜底，否则通道 C（PDF 原文检索）看不到这些书。
+
+### 3.7 OCR 扫描件正文（可选；需要扫描件内容时执行）
+
+预热时无文本层的 PDF 会被标记为扫描件（`[扫描件 PDF:共 N 页,无文本层,需 OCR 兜底]`），通道 C 检索不到其中任何内容。本步骤用本机 CPU 离线 OCR 扫描件并覆写同名缓存，完成后默认自动重建索引，是扫描件内容的唯一生产入口（运行时不会内联 OCR：一条飞书消息等不起几分钟）。
+
+#### 3.7.1 安装依赖与语言包
+
+OCR 引擎为可选依赖，已声明在 `package.json` 的 `optionalDependencies`（`tesseract.js` + `@napi-rs/canvas`），正常 `npm install` 即会拉取；缺失时脚本会给出明确提示，核心运行不受影响。
+
+中文语言包必须用 **`4.0.0_best_int` 版本**：标准 `4.0.0` 包与 `tesseract.js-core 7` 的 API 版本不匹配，加载时直接报 `API version 6.2.108 does not match the Worker version 6.1.200`，整本书解析失败。三种获取方式，按网络环境选用：
+
+```bash
+# 方式 A（内网/离线推荐）：随 npm 包附带语言包，脚本自动探测，无需 --lang-path
+npm i @tesseract.js-data/chi_sim
+
+# 方式 B：自备语言包目录（tessdata_best 的 chi_sim.traineddata，或 .gz 压缩版）
+npm run ocr -- --lang-path /path/to/tessdata
+
+# 方式 C：默认走官方 CDN（内网通常不可达，地址见 npm run ocr -- --help）
+```
+
+方式 B 也可用环境变量 `AQUASENSE_OCR_LANG_PATH` 固化（优先级：`--lang-path` > 环境变量 > 本机 npm 包 > CDN）。
+
+#### 3.7.2 运行
+
+```bash
+npm run ocr -- --pages 2      # 冒烟：每本只 OCR 前 2 页，校验语言包与识别质量（不覆写缓存）
+npm run ocr                   # 全量：处理全部待 OCR 扫描件，完成后自动重建索引
+npm run ocr -- --only 鱼病     # 只处理 mediaId/书名包含「鱼病」的扫描件
+npm run ocr -- --help         # 全部参数说明
+```
+
+耗时参照：约 4.6 秒/页（scale=4 + chi_sim + psm=6，CPU 单线程），12 本扫描件 2,572 页约 3.3 小时。建议在 `screen`/`tmux`/`nohup` 下运行；中断后重跑自动续跑，不会从零开始。
+
+#### 3.7.3 行为与安全边界
+
+- 逐页 checkpoint 落盘在 `AQUASENSE_CACHE_DIR/ocr/<media_id>/`；PDF 内容（sha256）、页数、lang/psm/scale 任一变化，旧 checkpoint 自动作废重跑。
+- 只有整本 OCR 完成才原子覆写 `AQUASENSE_CACHE_DIR/pdf/<media_id>.txt`；`--pages` 冒烟绝不覆写正式缓存。
+- 入库前统一去除汉字间空格（Tesseract chi_sim 逐字插空格，不去则检索命中为 0），与索引层共用同一实现。
+- 完成后默认执行 `npm run kb:warm`（按缓存 mtime 感知覆写并重建索引）；`--no-warm` 关闭。
+- >100MB 的超限 PDF 不在本脚本范围（参见 [ima-pdf-note-limitation.md](./ima-pdf-note-limitation.md)）。
+
+#### 3.7.4 验证与排障
+
+- 验证：`npm run kb:warm` 汇总里「扫描件」计数下降，处置建议的引用中出现该书页码。
+- 报 `API version ... does not match ...`：语言包版本错误，改用 `4.0.0_best_int`（方式 A 的 npm 包自带该版本）。
+- 报 `缺少可选依赖 tesseract.js`：重新 `npm install`，或按提示手动补装。
+- 语言包下载失败/超时：改用方式 A 或 B，不要依赖 CDN。
 
 ---
 

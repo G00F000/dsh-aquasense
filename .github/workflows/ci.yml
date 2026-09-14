@@ -14,7 +14,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # 核心不依赖 OCR 可选依赖(tesseract.js/@napi-rs/canvas):CI 显式忽略 optional,
+      # 既保持安装快速,也验证"缺可选依赖时 typecheck/test/build 仍全绿"
+      - run: npm ci --omit=optional
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

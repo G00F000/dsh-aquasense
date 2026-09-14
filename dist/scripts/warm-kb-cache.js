@@ -12,6 +12,7 @@
  * 启动方式:
  *   npm run kb:warm                 # 全量预热(已缓存自动跳过)
  *   npm run kb:warm -- --limit 10   # 只处理前 10 份正文(PDF+笔记,抽样探测覆盖率)
+ * 扫描件 OCR 兜底见 npm run ocr(本仓库 src/scripts/ocr-scanned-pdfs.ts;其完成后默认自动回到本脚本重建索引)。
  */
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -150,7 +151,7 @@ async function main() {
         }
     }
     if (scannedCount > 0) {
-        console.log('[kb:warm] 提示:扫描件无文本层,接入 OCR 兜底后覆写对应缓存文件即可生效');
+        console.log('[kb:warm] 提示:扫描件无文本层,运行 npm run ocr 批量 OCR 并覆写同名缓存(完成后本脚本重建索引即可生效)');
     }
     if (noteUnreadable > 0) {
         console.log('[kb:warm] 提示:不可读笔记(非本人/已删除/共享无权限)已写入标记缓存,如需正文请在 IMA 客户端确认归属');
