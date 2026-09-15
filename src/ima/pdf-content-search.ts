@@ -604,6 +604,16 @@ export function isPdfIndexReady(indexDir: string): boolean {
   return Date.now() - builtAt < INDEX_MAX_AGE_MS
 }
 
+export type PdfIndexStatus = 'ready' | 'not_found' | 'expired'
+
+/** 检查索引状态:区分「不存在」与「过期」,便于调用方给出精准提示 */
+export function getPdfIndexStatus(indexDir: string): PdfIndexStatus {
+  const meta = getPdfIndexMeta(indexDir)
+  if (!meta) return 'not_found'
+  const builtAt = new Date(meta.builtAt).getTime()
+  return Date.now() - builtAt < INDEX_MAX_AGE_MS ? 'ready' : 'expired'
+}
+
 /** 获取索引元数据(不加载完整索引) */
 export function getPdfIndexMeta(indexDir: string): PdfIndexMeta | null {
   const indexPath = join(indexDir, 'index.json')

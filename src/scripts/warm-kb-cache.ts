@@ -188,8 +188,9 @@ async function main(): Promise<void> {
       const meta = await buildPdfIndex(cachePdfDir, indexDir, { titles })
       console.log(`[kb:warm] 索引构建完成:${meta.pdfCount} PDF, ${meta.totalChunks} 切片`)
     } catch (error) {
-      // 构建失败不影响正文缓存与运行时降级(通道 C 自动跳过,双通道照常)
+      // 构建失败时记入失败清单并以非 0 退出(提示运维索引未就绪)
       console.error('[kb:warm] PDF 索引构建失败:', error instanceof Error ? error.message : error)
+      process.exitCode = 1
     }
   }
   if (limited) {

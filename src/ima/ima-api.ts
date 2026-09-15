@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { extractText, getDocumentProxy } from 'unpdf'
-import { isPdfIndexReady, pdfHitToKnowledgeItem, searchPdfContent } from './pdf-content-search.js'
+import { isPdfIndexReady, pdfHitToKnowledgeItem, searchPdfContent, getPdfIndexStatus } from './pdf-content-search.js'
 
 const IMA_BASE_URL = 'https://ima.qq.com'
 
@@ -476,6 +476,9 @@ export async function getMediaContent(mediaId: string): Promise<string> {
 /** PDF 原文索引目录(kb:warm 构建;索引缺失时通道 C 自动跳过) */
 const PDF_INDEX_DIR = join(resolveCacheRoot(), 'pdf-index')
 
+/** 模块级标记:通道 C 降级警告只输出一次(避免每次检索都刷屏) */
+let pdfIndexWarned = false
+
 /** 命中池:条目标识 → 条目与命中关键词数 */
 type HitPool = Map<string, { item: KnowledgeItem; hits: number }>
 
@@ -540,7 +543,16 @@ export async function searchKnowledgeMerged(rawQuery: string): Promise<SearchRes
   }
 
   // 通道 C:本地 PDF 原文检索(索引未构建/已过期时自动跳过)
-  const pdfHits = isPdfIndexReady(PDF_INDEX_DIR) ? searchPdfContent(rawQuery, PDF_INDEX_DIR) : []
+  const pdfIndexReady = isPdfIndexReady(PDF_INDEX_DIR)
+  if (!pdfIndexReady && !pdfIndexWarned) {
+    const status = getPdfIndexStatus(PDF_INDEX_DIR)
+    const hint = status === 'not_found'
+      ? '索引未构建,请运行 npm run kb:warm'
+      : '索引已过期,请运行 npm run kb:warm 重建'
+    console.warn(`[ima] 通道 C(PDF 原文检索)不可用:${hint}`)
+    pdfIndexWarned = true
+  }
+  const pdfHits = pdfIndexReady ? searchPdfContent(rawQuery, PDF_INDEX_DIR) : []
   const pdfItems = pdfHits.map((hit) => pdfHitToKnowledgeItem(hit))
 
   // 三通道合并去重
