@@ -22,6 +22,10 @@ export interface AnalysisResult {
   scene_hint: SceneHint
   /** 实际分析的图片数量(由调用方设置,解析函数不填充) */
   image_count?: number
+  /** 工人发送的图片总数(由调用方通过 expected_image_count 传入,用于检测丢失) */
+  expected_image_count?: number
+  /** 数据完整性标记:图片齐全时为 'complete',有图片丢失时标注丢失详情 */
+  data_completeness?: 'complete' | 'partial' | 'empty'
 }
 
 export const analyzeImage = defineTool({
@@ -36,6 +40,10 @@ export const analyzeImage = defineTool({
       type: 'array',
       items: { type: 'string' },
       description: '多张图片 HTTP URL 列表(与 image_url/image_data_list 二选一)'
+    },
+    expected_image_count: {
+      type: 'number',
+      description: '工人本次发送的图片总数(用于检测图片丢失:实际分析数 < 期望数时标记 data_completeness=partial)'
     },
     image_data: {
       type: 'string',
@@ -70,7 +78,9 @@ export const analyzeImage = defineTool({
         severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
         confidence: { type: 'number' },
         scene_hint: { type: 'string', enum: ['inspection', 'death', 'water_quality', 'medication', 'feeding', 'temperature', 'dissection'], description: '图片场景提示' },
-        image_count: { type: 'number', description: '实际分析的图片数量' }
+        image_count: { type: 'number', description: '实际分析的图片数量' },
+        expected_image_count: { type: 'number', description: '工人发送的图片总数(用于检测丢失)' },
+        data_completeness: { type: 'string', enum: ['complete', 'partial', 'empty'], description: '数据完整性:complete=齐全, partial=有丢失(禁止落表正常结论), empty=全部丢失' }
       }
     },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
@@ -79,6 +89,9 @@ export const analyzeImage = defineTool({
     // 参数缺失由 defineTool 按 required 校验拦截,此处直接执行
     // 1. 收集图片:优先 base64 数据,回退 HTTP URL
     const images: ImageDownloadResult[] = []
+    // 期望图片数:由 Agent 传入,用于检测 harness 层丢图
+    const expectedCount = typeof args.expected_image_count === 'number' && args.expected_image_count > 0
+      ? Math.floor(args.expected_image_count) : undefined
 
     // 路径 A:base64 数据(优先,不依赖网络)
     if (Array.isArray(args.image_data_list) && args.image_data_list.length > 0) {
@@ -110,17 +123,31 @@ export const analyzeImage = defineTool({
       }
     }
 
+    // 计算数据完整性
+    const receivedCount = images.length
+    let dataCompleteness: 'complete' | 'partial' | 'empty'
+    if (receivedCount === 0) {
+      dataCompleteness = 'empty'
+    } else if (expectedCount !== undefined && receivedCount < expectedCount) {
+      dataCompleteness = 'partial'
+      console.warn(`[aquasense] 数据不完整:工人发送 ${expectedCount} 张图片,实际获取 ${receivedCount} 张(${expectedCount - receivedCount} 张丢失)`) 
+    } else {
+      dataCompleteness = 'complete'
+    }
+
     if (images.length === 0) {
       // 返回降级结果而非抛异常,避免上层将图片下载失败放大为 fatal
       console.error('[aquasense] 未获取到任何可用图片,返回 unknown 降级结果')
       return {
         abnormal: false,
         cls: 'unknown' as const,
-        symptoms: ['图片下载失败,请重发图片'],
+        symptoms: ['全部图片下载失败,无法分析,请重发图片'],
         severity: 'low' as const,
         confidence: 0.3,
         scene_hint: 'inspection' as SceneHint,
-        image_count: 0
+        image_count: 0,
+        expected_image_count: expectedCount,
+        data_completeness: 'empty' as const
       }
     }
 
@@ -130,7 +157,25 @@ export const analyzeImage = defineTool({
 
     // 3. 解析结果(失败降级 normal,不阻断巡检流程)
     const result = parseAnalysisResponse(response)
-    result.image_count = images.length
+    result.image_count = receivedCount
+    result.expected_image_count = expectedCount
+    result.data_completeness = dataCompleteness
+
+    // 防漏诊:图片不齐全时,如果视觉模型给出 normal 结论,降级为 unknown 并注入警告
+    // 理由:仅看到部分图片就下"正常"结论是危险的——遗漏的图可能包含病灶
+    if (dataCompleteness === 'partial' && result.cls === 'normal') {
+      console.warn(`[aquasense] 防漏诊:仅收到 ${receivedCount}/${expectedCount} 张图,视觉模型判定 normal — 降级为 unknown 防止台账记录错误结论`)
+      result.cls = 'unknown'
+      result.abnormal = false
+      result.symptoms = [
+        `图片不完整:工人发送 ${expectedCount} 张,仅获取 ${receivedCount} 张`,
+        '部分图片可能包含关键病灶信息,当前结论不可靠',
+        '请人工现场复核后决定是否落表'
+      ]
+      result.severity = 'low'
+      result.confidence = 0.3
+    }
+
     return result
   }
 })

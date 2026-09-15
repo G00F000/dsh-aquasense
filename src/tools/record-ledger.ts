@@ -237,6 +237,52 @@ export const recordLedger = defineTool({
     const timeColumn = SCENE_TIME_COLUMN[scene]
     const recentRecord = await findRecentRecord(token, bitableToken, tableId, poolId, timeColumn)
 
+    // dissection 场景:每个器官独立一条记录,不合并
+    if (scene === 'dissection') {
+      const organValue = recordFields['解剖器官']
+      const organList = Array.isArray(organValue) ? organValue : [organValue]
+
+      try {
+        const recordIds: string[] = []
+        for (const organ of organList) {
+          // 每个器官独立一行:从 recordFields 派生,「解剖器官」只放单个值
+          const organFields: Record<string, unknown> = { ...recordFields, '解剖器官': [organ] }
+          // 30 分钟内有同池号记录时,合并公共字段(池号/汇报人/时间/AI辅助判断),不跨器官合并
+          if (recentRecord) {
+            const { '解剖器官': _oldOrgan, ...commonFields } = recentRecord.fields as Record<string, unknown>
+            Object.assign(organFields, commonFields)
+          }
+          const response = await fetch(
+            `https://open.feishu.cn/open-apis/bitable/v1/apps/${bitableToken}/tables/${tableId}/records`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ fields: organFields })
+            }
+          )
+          const result = (await response.json()) as { code: number; msg?: string; data?: { record?: { record_id?: string } } }
+          if (result.code === 0 && result.data?.record?.record_id) {
+            recordIds.push(result.data.record.record_id)
+          } else {
+            console.error(`[aquasense] dissection 器官「${organ}」写入失败:${result.msg}`)
+          }
+        }
+        if (recordIds.length > 0) {
+          return {
+            success: true,
+            message: `已写入台账(scene=${scene},${recordIds.length} 条记录,器官:${organList.join('/')})`,
+            record_id: recordIds[0]
+          }
+        }
+        return { success: false, message: `所有器官写入失败` }
+      } catch (error) {
+        return { success: false, message: `操作异常:${error instanceof Error ? error.message : String(error)}` }
+      }
+    }
+
     try {
       if (recentRecord) {
         // 更新已有记录(合并字段,保留未覆盖的旧值)
@@ -385,7 +431,7 @@ async function findRecentRecord(
 }
 
 async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string, reporterName: string): Promise<Record<string, unknown>> {
-  const analysis = args.analysis as { cls?: string; symptoms?: string[] | string; severity?: string; abnormal?: boolean } | undefined
+  const analysis = args.analysis as { cls?: string; symptoms?: string[] | string; severity?: string; abnormal?: boolean; data_completeness?: string; image_count?: number; expected_image_count?: number } | undefined
   const advice = args.advice as { diagnosis_summary?: string; immediate_actions?: string[]; knowledge_refs?: string[]; alert_level?: string } | undefined
   const fields: Record<string, unknown> = {}
 
@@ -393,6 +439,19 @@ async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string,
   if (scene === 'inspection') {
     if (!analysis || analysis.cls === 'unknown') {
       throw new Error('inspection 场景缺少有效 AI 分析结果(analysis.cls 为 unknown 或未提供),无法写入台账。请先调用 aquasense_analyze 获取分析结果。')
+    }
+
+    // 防漏诊:图片数据不完整时,禁止将 normal 结论写入台账
+    // 场景:工人发了 N 张图,harness 丢了 M 张,视觉模型只看到 N-M 张就判定 normal
+    // 此时 normal 结论不可靠——丢失的图可能包含病灶(已有实际案例:5 张图丢了 4 张,实际为 disease)
+    const dataComplete = analysis.data_completeness
+    if (dataComplete === 'partial' || dataComplete === 'empty') {
+      const received = analysis.image_count ?? 0
+      const expected = analysis.expected_image_count ?? '?'
+      throw new Error(
+        `图片数据不完整(获取 ${received}/${expected} 张),无法给出可靠的诊断结论。` +
+        `当前基于部分图片的分析结果不可作为落表依据。请等待图片补全或人工现场复核后再落表。`
+      )
     }
   }
 

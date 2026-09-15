@@ -111,6 +111,53 @@ try {
 
 ---
 
+## 实际影响案例（已验证）
+
+### 案例: Sep 15 13:22 池1 漏诊
+
+工人发送 5 张鲈鱼体表照片（"1号池 鲈鱼体表"），harness 只收到 1 张。
+
+| 维度 | 仅 1 张图（实际发生） | 全 5 张图（恢复验证） |
+|------|----------------------|----------------------|
+| cls | **normal** | **disease** |
+| severity | low | **high** |
+| symptoms | （无） | 腹部体侧红色溃疡、皮肤充血渗血、体表光泽度下降 |
+| confidence | - | 0.92 |
+| 台账记录 | 13:22:29 池1 "体表正常" | **不应写入正常结论** |
+
+**结论**: 基于 20% 信息写下的 "正常" 台账记录，是**审计级错误前提**。
+
+---
+
+## 漏诊防护方案（已实施）
+
+### ④ [防漏诊] analyze-image.ts — 数据完整性检测
+
+新增参数 `expected_image_count`：Agent 传入工人实际发送的图片数量。
+
+输出新增字段：
+- `image_count`: 实际分析的图片数
+- `expected_image_count`: 期望的图片数
+- `data_completeness`: `'complete'` / `'partial'` / `'empty'`
+
+**防漏诊规则**: 当 `data_completeness === 'partial'` 且视觉模型判定 `cls === 'normal'` 时，自动将 `cls` 降级为 `'unknown'`，症状注入 "图片不完整" 警告。
+
+**理由**: 仅看到部分图片就下 "正常" 结论是危险的——遗漏的图可能包含病灶。
+
+### ⑤ [防漏诊] record-ledger.ts — 拒绝不完整数据落表
+
+在 `buildFields` 中，当 `analysis.data_completeness` 为 `'partial'` 或 `'empty'` 时，`throw` 错误拒绝写入，返回 `success: false`。
+
+**效果**: 图片丢失时，台账不会记录任何结论（无论正常还是异常），迫使 Agent 要求工人重新发送全部图片。
+
+### ⑥ [前置] DSH harness 需传递 expected_image_count
+
+**位置**: `deepseek-harness-lark` 的消息上下文构建层
+
+harness 应在消息上下文中提供 `expected_image_count`（即该会话中 worker 发送的图片消息数），Agent 才能将其传入 `aquasense_analyze`。
+
+---
+
 ## 插件层已实施的防御（dsh-aquasense）
 
 以下修复在 `dsh-aquasense` 插件中已实施，作为 depth-in-defense：
@@ -119,6 +166,10 @@ try {
 2. **analyze-image.ts**: 多图下载改用 `Promise.allSettled` 逐张容错，单张失败不阻断
 3. **analyze-image.ts**: 全部图片下载失败时返回 `unknown` 降级结果而非 `throw`
 4. **record-ledger.ts**: `uploadImages` 改用 `Promise.allSettled` + 失败计数日志
+5. **analyze-image.ts**: 新增 `expected_image_count` 参数 + `data_completeness` 输出字段
+6. **analyze-image.ts**: 图片不完整时 `cls=normal` 自动降级为 `unknown`（防漏诊）
+7. **record-ledger.ts**: `data_completeness` 为 partial/empty 时拒绝写入台账
+8. **SKILL.md**: Agent 技能文档增加数据完整性检测规范
 
 **注意**: 插件层修复**无法阻止** harness 层的 `process.exit(1)`。
 根因修复必须在 `deepseek-harness-lark/src/inbound.ts` 中完成。

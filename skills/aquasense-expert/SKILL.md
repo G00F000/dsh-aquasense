@@ -55,6 +55,20 @@ dsh-lark 桥接层应从飞书消息的 `mediaType` 字段提取 MIME 类型并�
 - `aquasense_ledger` 的 `images` 参数同样接收图片数据/URL 数组，确保所有图片都上传至台账
 - 多图分析时，模型会对所有图片给出统一的 scene_hint 和分析结论；如果图片内容差异大（如一张是死鱼、一张是水质），取最严重的场景落表，并在回复中说明各图分别拍了什么
 
+### 2.4 数据完整性检测(expected_image_count)
+
+**重要**:工人连发多张图片时，DSH harness inbound 层可能因 `messageId`/`fileKey` 错配导致部分图片丢失（飞书 API 返回 400）。为防止漏诊（基于部分图片错误得出 "normal" 结论），Agent 必须:
+
+1. **记录工人发送的图片总数**:从消息上下文中获取实际图片数量，作为 `expected_image_count` 传入 `aquasense_analyze`
+2. **检查分析结果的 `data_completeness` 字段**:
+   - `complete`: 图片齐全，结论可靠
+   - `partial`: 有图片丢失，**禁止落表 normal/低风险结论**
+   - `empty`: 全部图片丢失
+3. **当 `data_completeness` 为 `partial` 时**:
+   - `aquasense_analyze` 会自动将 `cls` 从 `normal` 降级为 `unknown`
+   - `aquasense_ledger` 会拒绝写入（返回 success:false）
+   - Agent 应回复工人: "您发送了 N 张图片，系统仅收到 M 张，部分图片可能丢失。请检查后重新发送全部图片。"
+
 ## 3. 场景路由(S1-S8)
 
 消息先做意图判断,再决定工具调用与是否落表。
