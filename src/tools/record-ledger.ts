@@ -183,7 +183,9 @@ export const recordLedger = defineTool({
     }
 
     // 非 inspection 场景必须提供 fields:缺失时返回列名提示(Agent 补全后重调)
-    if (scene !== 'inspection' && !(fields && Object.keys(fields).length > 0)) {
+    // mutableFields:局部可变引用,dissection 回退 analysis.organs 时可能需要初始化
+    const mutableFields: Record<string, unknown> | undefined = fields ? { ...fields } : undefined
+    if (scene !== 'inspection' && !(mutableFields && Object.keys(mutableFields).length > 0)) {
       return {
         success: false,
         message: `scene=${scene} 需要提供 fields(键为表格实际列名),可选列:${SCENE_COLUMNS[scene].join('、')}`
@@ -191,20 +193,44 @@ export const recordLedger = defineTool({
     }
 
     // dissection 场景:「解剖器官」只允许下拉框选项,归一为多选数组,不写入自由文本
-    if (scene === 'dissection' && fields && fields['解剖器官'] !== undefined) {
-      const { organs, unknown } = normalizeDissectionOrgans(fields['解剖器官'])
-      if (organs.length === 0) {
+    // 优先级:Agent 显式提供的 fields["解剖器官"] > analysis.organs(视觉模型识别) > 追问
+    if (scene === 'dissection') {
+      const analysisOrgans = (args.analysis as Record<string, unknown> | undefined)?.organs as string[] | undefined
+      if (fields && fields['解剖器官'] !== undefined) {
+        // Agent 显式提供:归一化校验
+        const { organs, unknown } = normalizeDissectionOrgans(fields['解剖器官'])
+        if (organs.length === 0) {
+          return {
+            success: false,
+            message: `「解剖器官」只能从下拉选项中选择(当前值 ${JSON.stringify(fields['解剖器官'])} 无法识别)。合法选项:${DISSECTION_ORGAN_OPTIONS.join('/')}`,
+            missing: ['解剖器官'],
+            questions: [`解剖器官请从以下选项中选(可多选):${DISSECTION_ORGAN_OPTIONS.join('/')}`]
+          }
+        }
+        if (unknown.length > 0) {
+          console.warn(`[aquasense] 解剖器官忽略无法识别的内容:${unknown.join('、')}`)
+        }
+        fields['解剖器官'] = organs
+      } else if (Array.isArray(analysisOrgans) && analysisOrgans.length > 0) {
+        // 回退到视觉模型识别的 organs(已归一化,可直接使用)
+        if (!mutableFields) {
+          const newFields = { '解剖器官': analysisOrgans }
+          ;(args as Record<string, unknown>).fields = newFields
+        } else {
+          mutableFields['解剖器官'] = analysisOrgans
+          // 同步回 args.fields,确保 buildFields 能读到 organs
+          ;(args as Record<string, unknown>).fields = mutableFields
+        }
+        console.log(`[aquasense] dissection 回退:使用 aquasense_analyze 识别的器官 [${analysisOrgans.join('/')}]`)
+      } else {
+        // 两处都无值:照旧追问
         return {
           success: false,
-          message: `「解剖器官」只能从下拉选项中选择(当前值 ${JSON.stringify(fields['解剖器官'])} 无法识别)。合法选项:${DISSECTION_ORGAN_OPTIONS.join('/')}`,
+          message: `dissection 场景需要「解剖器官」字段(下拉框选项)。请从以下选项中选(可多选):${DISSECTION_ORGAN_OPTIONS.join('/')}`,
           missing: ['解剖器官'],
           questions: [`解剖器官请从以下选项中选(可多选):${DISSECTION_ORGAN_OPTIONS.join('/')}`]
         }
       }
-      if (unknown.length > 0) {
-        console.warn(`[aquasense] 解剖器官忽略无法识别的内容:${unknown.join('、')}`)
-      }
-      fields['解剖器官'] = organs
     }
 
     // 上报人仍无法确定(fields 也未显式提供人列):返回追问,不写"未知"等脏数据

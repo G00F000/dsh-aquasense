@@ -16,6 +16,7 @@ import {
   type SearchResult,
   type KnowledgeItem
 } from '../ima/ima-api.js'
+import { normalizeOcrText } from '../ima/pdf-content-search.js'
 
 interface AnalysisInput {
   abnormal?: boolean
@@ -230,8 +231,10 @@ async function extractExcerpts(
         continue
       }
       // 2. 无高亮:读正文摘取(note 命中走 note_id 直读,标识与 media_id 不同)
-      const content =
+      const rawContent =
         item.from === 'note' ? await getNoteContentByNoteId(item.media_id) : await getMediaContent(item.media_id)
+      // OCR 缓存文件以 [OCR 批处理 ...] 开头,归一化剥离后即为正文;不剥离会被 startsWith('[') 误判为状态标记
+      const content = rawContent ? normalizeOcrText(rawContent).trim() : rawContent
       if (!content || content.startsWith('[')) {
         console.log(`[aquasense] 跳过不可读条目(《${item.title}》):${(content || '').slice(0, 60)}`)
         continue

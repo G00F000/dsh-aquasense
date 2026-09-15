@@ -22,6 +22,8 @@ export interface AnalysisResult {
   scene_hint: SceneHint
   /** 实际分析的图片数量(由调用方设置,解析函数不填充) */
   image_count?: number
+  /** 解剖场景下可见的器官列表(仅 scene_hint=dissection 时填充;枚举与 record-ledger DISSECTION_ORGAN_OPTIONS 一致) */
+  organs?: string[]
   /** 工人发送的图片总数(由调用方通过 expected_image_count 传入,用于检测丢失) */
   expected_image_count?: number
   /** 数据完整性标记:图片齐全时为 'complete',有图片丢失时标注丢失详情 */
@@ -79,6 +81,7 @@ export const analyzeImage = defineTool({
         confidence: { type: 'number' },
         scene_hint: { type: 'string', enum: ['inspection', 'death', 'water_quality', 'medication', 'feeding', 'temperature', 'dissection'], description: '图片场景提示' },
         image_count: { type: 'number', description: '实际分析的图片数量' },
+        organs: { type: 'array', items: { type: 'string' }, description: '解剖场景下可见的器官列表(仅 scene_hint=dissection 时填充;枚举:体表/鳃/肝/胆囊/肠/脾/鳔/肾/腹腔)' },
         expected_image_count: { type: 'number', description: '工人发送的图片总数(用于检测丢失)' },
         data_completeness: { type: 'string', enum: ['complete', 'partial', 'empty'], description: '数据完整性:complete=齐全, partial=有丢失(禁止落表正常结论), empty=全部丢失' }
       }
@@ -145,6 +148,7 @@ export const analyzeImage = defineTool({
         severity: 'low' as const,
         confidence: 0.3,
         scene_hint: 'inspection' as SceneHint,
+        organs: [],
         image_count: 0,
         expected_image_count: expectedCount,
         data_completeness: 'empty' as const
@@ -240,8 +244,11 @@ function buildPrompt(poolId?: string): string {
    - temperature:拍摄温度计/测温
    - dissection:拍摄鱼体解剖/内脏/器官
    - inspection:其他常规巡检照片(默认)
-输出 JSON:{"abnormal":bool, "cls":"...", "symptoms":[...], "severity":"low|medium|high|critical", "confidence":0.x, "scene_hint":"..."}
-early=离群、蹭壁、呼吸急促;disease=浮头、烂身、白点。` + (poolId ? `\n池号:${poolId}` : '')
+3. 当 scene_hint 为 dissection 时,识别画面中确实可见的器官并填入 organs 字段。
+   合法器官:体表/鳃/肝/胆囊/肠/脾/鳔/肾/腹腔。
+   严格规则:只列出画面里能明确看到的器官,看不清或无法判断的不许猜(写错器官比不写更糟,台账是 2 年审计凭证)。
+   非 dissection 场景 organs 输出空数组。
+输出 JSON:{"abnormal":bool, "cls":"...", "symptoms":[...], "severity":"low|medium|high|critical", "confidence":0.x, "scene_hint":"...", "organs":["..."]}` + (poolId ? `\n池号:${poolId}` : '')
 }
 
 /**
@@ -311,6 +318,9 @@ async function callVisionModel(images: ImageDownloadResult[], prompt: string): P
 // scene_hint 白名单:模型输出越界时降级为 inspection
 const VALID_SCENE_HINTS: ReadonlySet<string> = new Set<SceneHint>(['inspection', 'death', 'water_quality', 'medication', 'feeding', 'temperature', 'dissection'])
 
+/** 解剖器官枚举(与 record-ledger DISSECTION_ORGAN_OPTIONS 保持一致;模型输出归一化用) */
+const VALID_DISSECTION_ORGANS: ReadonlySet<string> = new Set(['体表', '鳃', '肝', '胆囊', '肠', '脾', '鳔', '肾', '腹腔'])
+
 /** 将模型输出的 cls 值归一化为合法枚举值:避免模型用词稍偏(大小写、空格、中文描述)导致异常分类降级为 normal */
 function normalizeCls(raw: unknown): 'normal' | 'early' | 'disease' | 'unknown' {
   if (typeof raw !== 'string') return 'normal'
@@ -335,7 +345,7 @@ function normalizeCls(raw: unknown): 'normal' | 'early' | 'disease' | 'unknown' 
  * 归一化保证输出始终满足 output.schema(enum/类型/多余键),避免注册表校验失败
  */
 function parseAnalysisResponse(response: string): AnalysisResult {
-  const fallback: AnalysisResult = { abnormal: false, cls: 'unknown', symptoms: ['AI分析失败,请人工复核'], severity: 'low', confidence: 0.3, scene_hint: 'inspection' }
+  const fallback: AnalysisResult = { abnormal: false, cls: 'unknown', symptoms: ['AI分析失败,请人工复核'], severity: 'low', confidence: 0.3, scene_hint: 'inspection', organs: [] }
 
   let raw: Record<string, unknown>
   try {
@@ -365,5 +375,11 @@ function parseAnalysisResponse(response: string): AnalysisResult {
 
   // abnormal 由三分类推导,避免与 cls 冲突(early/disease 即异常帧)
   const sceneHint = VALID_SCENE_HINTS.has(raw.scene_hint as string) ? (raw.scene_hint as SceneHint) : 'inspection'
-  return { abnormal: cls !== 'normal', cls, symptoms, severity, confidence, scene_hint: sceneHint }
+  // organs 归一化:只保留枚举内的器官,场景非 dissection 时输出空数组
+  const organs = Array.isArray(raw.organs)
+    ? [...new Set((raw.organs as unknown[])
+        .filter((v): v is string => typeof v === 'string')
+        .filter((o) => VALID_DISSECTION_ORGANS.has(o)))]
+    : []
+  return { abnormal: cls !== 'normal', cls, symptoms, severity, confidence, scene_hint: sceneHint, organs }
 }
