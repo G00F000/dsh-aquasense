@@ -26,16 +26,29 @@ export interface AnalysisResult {
 
 export const analyzeImage = defineTool({
   name: 'aquasense_analyze',
-  description: '分析鲈鱼养殖现场照片,识别异常症状。支持单图或多图(多图时视觉模型同时分析所有图片)。',
+  description: '分析鲈鱼养殖现场照片,识别异常症状。支持单图或多图(多图时视觉模型同时分析所有图片)。支持两种图片来源:base64 数据(优先)或 HTTP URL。',
   parameters: {
     image_url: {
       type: 'string',
-      description: '单张图片 URL(与 image_urls 二选一;单图优先用此参数)'
+      description: '单张图片 HTTP URL(与 image_urls/image_data/image_data_list 二选一)'
     },
     image_urls: {
       type: 'array',
       items: { type: 'string' },
-      description: '多张图片 URL 列表(与 image_url 二选一;多图时同时传入,视觉模型一次分析)'
+      description: '多张图片 HTTP URL 列表(与 image_url/image_data_list 二选一)'
+    },
+    image_data: {
+      type: 'string',
+      description: '单张图片 base64 编码数据(与 image_url 二选一,优先使用)'
+    },
+    image_data_list: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '多张图片 base64 编码数据列表(与 image_urls 二选一,优先使用)'
+    },
+    image_mime: {
+      type: 'string',
+      description: '图片 MIME 类型(使用 image_data/image_data_list 时必填,如 image/jpeg/image/png)'
     },
     description: {
       type: 'string',
@@ -64,33 +77,66 @@ export const analyzeImage = defineTool({
   },
   async execute(args) {
     // 参数缺失由 defineTool 按 required 校验拦截,此处直接执行
-    // 1. 收集图片 URL:兼容单图(image_url)和多图(image_urls)两种入参
-    const urls: string[] = []
-    if (Array.isArray(args.image_urls) && args.image_urls.length > 0) {
-      urls.push(...args.image_urls)
+    // 1. 收集图片:优先 base64 数据,回退 HTTP URL
+    const images: ImageDownloadResult[] = []
+
+    // 路径 A:base64 数据(优先,不依赖网络)
+    if (Array.isArray(args.image_data_list) && args.image_data_list.length > 0) {
+      const mime = args.image_mime || 'image/jpeg'
+      for (const b64 of args.image_data_list) {
+        images.push({ data: b64, mimeType: mime })
+      }
+    } else if (typeof args.image_data === 'string' && args.image_data) {
+      const mime = args.image_mime || 'image/jpeg'
+      images.push({ data: args.image_data, mimeType: mime })
+    }
+    // 路径 B:HTTP URL(回退) — 使用 Promise.allSettled 逐张容错,
+    // 单张下载失败不阻断其余图片分析
+    else if (Array.isArray(args.image_urls) && args.image_urls.length > 0) {
+      const results = await Promise.allSettled(args.image_urls.map((url) => downloadImage(url)))
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]
+        if (r.status === 'fulfilled') {
+          images.push(r.value)
+        } else {
+          console.error(`[aquasense] image[${i}] download failed, skipped: ${r.reason?.message ?? r.reason}`)
+        }
+      }
     } else if (typeof args.image_url === 'string' && args.image_url) {
-      urls.push(args.image_url)
-    }
-    if (urls.length === 0) {
-      throw new Error('[aquasense] 未提供任何图片:请传入 image_url 或 image_urls')
+      try {
+        images.push(await downloadImage(args.image_url))
+      } catch (e) {
+        console.error(`[aquasense] single image download failed: ${e instanceof Error ? e.message : e}`)
+      }
     }
 
-    // 2. 并发下载所有图片并转 base64(30s 超时,避免坏图 URL 挂起)
-    const images = await Promise.all(urls.map((url) => downloadImage(url)))
+    if (images.length === 0) {
+      // 返回降级结果而非抛异常,避免上层将图片下载失败放大为 fatal
+      console.error('[aquasense] 未获取到任何可用图片,返回 unknown 降级结果')
+      return {
+        abnormal: false,
+        cls: 'unknown' as const,
+        symptoms: ['图片下载失败,请重发图片'],
+        severity: 'low' as const,
+        confidence: 0.3,
+        scene_hint: 'inspection' as SceneHint,
+        image_count: 0
+      }
+    }
 
-    // 3. 构建提示词并调用视觉模型(描述不进入视觉prompt,只供场景路由用)
+    // 2. 构建提示词并调用视觉模型(描述不进入视觉prompt,只供场景路由用)
     const prompt = buildPrompt(args.pool_id)
     const response = await callVisionModel(images, prompt)
 
-    // 4. 解析结果(失败降级 normal,不阻断巡检流程)
+    // 3. 解析结果(失败降级 normal,不阻断巡检流程)
     const result = parseAnalysisResponse(response)
-    result.image_count = urls.length
+    result.image_count = images.length
     return result
   }
 })
 
 /**
- * 下载图片为 base64
+ * 下载图片为 base64(仅用于 HTTP URL 场景)
  */
 interface ImageDownloadResult {
   data: string
@@ -98,9 +144,22 @@ interface ImageDownloadResult {
 }
 
 async function downloadImage(url: string): Promise<ImageDownloadResult> {
+  // 仅接受 HTTP/HTTPS URL
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    throw new Error(`[aquasense] 图片 URL 必须是 http(s) 协议: ${url}`)
+  }
+  // 可观测日志:下载前打印 URL 摘要(前80字符),便于排查飞书 fileKey 配错
+  const urlPreview = url.length > 80 ? url.slice(0, 80) + '...' : url
+  console.log(`[aquasense] downloading image: ${urlPreview}`)
+
   const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
   if (!response.ok) {
-    throw new Error(`图片下载失败: HTTP ${response.status}`)
+    const errBody = await response.text().catch(() => '')
+    // 飞书 API 234003 File not in msg:file_key 不属于该 message(messageId 配错)
+    // 该错误由 DSH harness inbound 层的 message.resources 聚合错误导致
+    // 防御:记录详细诊断信息,不吞掉错误
+    console.error(`[aquasense] image download failed: HTTP ${response.status}, url=${urlPreview}, body=${errBody.slice(0, 200)}`)
+    throw new Error(`图片下载失败: HTTP ${response.status} — ${errBody.slice(0, 120)}`)
   }
   const buffer = await response.arrayBuffer()
   const data = Buffer.from(buffer).toString('base64')
@@ -113,6 +172,7 @@ async function downloadImage(url: string): Promise<ImageDownloadResult> {
   else if (ct.includes('gif')) mimeType = 'image/gif'
   else if (ct.includes('webp')) mimeType = 'image/webp'
 
+  console.log(`[aquasense] image downloaded OK: ${urlPreview} (${buffer.byteLength} bytes, ${mimeType})`)
   return { data, mimeType }
 }
 

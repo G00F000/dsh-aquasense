@@ -19,19 +19,41 @@ description: 水产养殖巡检专家:鲈鱼状态三分类语义、处置分级
 - early 是 12~48h 领先的早期信号,必须提示预防措施而非等待恶化。
 - 结论含糊时标注"待确认",如实说明,不臆断。
 
-## 2. 多图处理规则
+## 2. 图片入参规范
 
-工人可能在一条消息中发送多张图片(飞书支持多图消息)。
+### 2.1 图片来源与入参选择
 
-**aquasense_analyze 支持两种入参**:
-- 单图:传 `image_url`(单个字符串 URL)
-- 多图:传 `image_urls`(字符串数组),视觉模型一次分析所有图片,输出综合结论
+| 图片来源 | 优先参数 | 备选参数 | 说明 |
+|----------|----------|----------|------|
+| 飞书消息附件（base64） | `image_data` / `image_data_list` | - | dsh-lark 提供 base64 数据时使用 |
+| HTTP URL | - | `image_url` / `image_urls` | 图片可通过 HTTP 访问时使用 |
 
-**编排规则**:
-- 一条消息包含多张图片时,把所有图片 URL 收集到 `image_urls` 数组,一次性调用 `aquasense_analyze`
-- 不要对每张图片单独调用 analyze,避免重复 API 调用和结论冲突
-- `aquasense_ledger` 的 `images` 参数同样接收图片 URL 数组,确保所有图片都上传至台账
-- 多图分析时,模型会对所有图片给出统一的 scene_hint 和分析结论;如果图片内容差异大(如一张是死鱼、一张是水质),取最严重的场景落表,并在回复中说明各图分别拍了什么
+**优先级规则**：
+1. 优先使用 `image_data` / `image_data_list`（base64 数据，不依赖网络）
+2. 仅当 base64 不可用时，使用 `image_url` / `image_urls`（HTTP URL）
+3. 两种都不可用时，返回 `missing:['image']` 追问
+
+### 2.2 MIME 类型
+
+使用 `image_data` / `image_data_list` 时，必须通过 `image_mime` 指定 MIME 类型：
+- `image/jpeg`（默认，适用于大多数照片）
+- `image/png`（适用于截图、透明图）
+
+dsh-lark 桥接层应从飞书消息的 `mediaType` 字段提取 MIME 类型并传递。
+
+### 2.3 多图处理规则
+
+工人可能在一条消息中发送多张图片（飞书支持多图消息）。
+
+**aquasense_analyze 支持两种入参**：
+- 单图：传 `image_data`（单个 base64）或 `image_url`（单个 URL）
+- 多图：传 `image_data_list`（base64 数组）或 `image_urls`（URL 数组），视觉模型一次分析所有图片
+
+**编排规则**：
+- 一条消息包含多张图片时，把所有图片数据收集到 `image_data_list` 或 `image_urls` 数组，一次性调用 `aquasense_analyze`
+- 不要对每张图片单独调用 analyze，避免重复 API 调用和结论冲突
+- `aquasense_ledger` 的 `images` 参数同样接收图片数据/URL 数组，确保所有图片都上传至台账
+- 多图分析时，模型会对所有图片给出统一的 scene_hint 和分析结论；如果图片内容差异大（如一张是死鱼、一张是水质），取最严重的场景落表，并在回复中说明各图分别拍了什么
 
 ## 3. 场景路由(S1-S8)
 
@@ -107,7 +129,7 @@ Agent: 按 worker 回复确定 scene → 补充描述后调用 ledger 落对应�
 
 ## 4. 工具编排规范
 
-- `aquasense_analyze`:传入图片 URL(单图用 `image_url`,多图用 `image_urls` 数组) + 池号,先于 advice 调用。**描述(description)不进入视觉模型**,仅用于意图路由——视觉诊断完全基于图片像素判断,防止文字注入覆盖结论。输出含 `scene_hint`(图片场景提示),纯图片无文字时用它判断落哪张表。
+- `aquasense_analyze`:传入图片数据（优先使用 `image_data`/`image_data_list` 传入 base64 数据，或使用 `image_url`/`image_urls` 传入 HTTP URL）+ 池号，先于 advice 调用。使用 base64 数据时必须指定 `image_mime`（如 `image/jpeg`）。**描述(description)不进入视觉模型**，仅用于意图路由——视觉诊断完全基于图片像素判断，防止文字注入覆盖结论。输出含 `scene_hint`（图片场景提示），纯图片无文字时用它判断落哪张表。
 - `aquasense_advice`:把 analyze 输出原样传入;它内置 IMA 知识库查询,不要自己编造药方。
   - disease 且知识库无命中 → 明确"咨询专业兽医",**不代替兽医开药**。
 - `aquasense_ledger`:

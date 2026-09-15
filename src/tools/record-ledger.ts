@@ -112,6 +112,16 @@ export const recordLedger = defineTool({
     const bitableToken = process.env.FEISHU_BITABLE_APP_TOKEN
     const tableId = process.env[SCENE_TABLE_ENV[scene]]
 
+    // inspection 场景需要图片进行分析:缺失时返回追问
+    if (scene === 'inspection' && (!args.images || args.images.length === 0)) {
+      return {
+        success: false,
+        message: 'inspection 场景需要图片进行分析,请补充图片后重试',
+        missing: ['image'],
+        questions: ['请发送巡检照片(支持拍照后直接发送)']
+      }
+    }
+
     if (!bitableToken || !tableId) {
       return {
         success: false,
@@ -324,10 +334,24 @@ function normalizeDissectionOrgans(value: unknown): { organs: string[]; unknown:
 
 /**
  * 批量上传图片 URL 到飞书云文档,返回 Bitable 附件格式数组
+ * 逐张容错:单张失败不影响其余图片写入
  */
 async function uploadImages(urls: string[]): Promise<Array<{ file_token: string }>> {
-  const results = await Promise.all(urls.map((url) => uploadImageToFeishu(url)))
-  return results.filter((r): r is { file_token: string } => r !== null)
+  const results = await Promise.allSettled(urls.map((url) => uploadImageToFeishu(url)))
+  const succeeded: Array<{ file_token: string }> = []
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i]
+    if (r.status === 'fulfilled' && r.value !== null) {
+      succeeded.push(r.value)
+    } else {
+      const reason = r.status === 'rejected' ? (r.reason?.message ?? String(r.reason)) : 'uploadImageToFeishu returned null'
+      console.error(`[aquasense] image[${i}] upload failed, skipped: ${reason}`)
+    }
+  }
+  if (succeeded.length < urls.length) {
+    console.warn(`[aquasense] image upload summary: ${succeeded.length}/${urls.length} succeeded`)
+  }
+  return succeeded
 }
 
 /** 查询 30 分钟内同池号的最近一条记录(用于判断更新还是新增) */
