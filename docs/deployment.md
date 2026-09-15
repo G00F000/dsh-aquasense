@@ -194,7 +194,7 @@ npm run ocr -- --only 鱼病     # 只处理 mediaId/书名包含「鱼病」的
 npm run ocr -- --help         # 全部参数说明
 ```
 
-耗时参照：约 4.6 秒/页（scale=4 + chi_sim + psm=6，CPU 单线程），12 本扫描件 2,572 页约 3.3 小时。建议在 `screen`/`tmux`/`nohup` 下运行；中断后重跑自动续跑，不会从零开始。
+耗时参照：约 4.6 秒/页（scale=4 + chi_sim + psm=6，CPU 单线程），12 本扫描件 2,572 页约 3.3 小时。**不建议**在 `screen`/`tmux`/`nohup` 下长期运行：这些进程与宿主服务同属一个 cgroup，systemd 服务重启（含 OOM-kill）会连带清除，断点虽保留但无人自动拉起。推荐使用 cron 无人值守调度，详见 §3.7.5。
 
 #### 3.7.3 行为与安全边界
 
@@ -210,6 +210,30 @@ npm run ocr -- --help         # 全部参数说明
 - 报 `API version ... does not match ...`：语言包版本错误，改用 `4.0.0_best_int`（方式 A 的 npm 包自带该版本）。
 - 报 `缺少可选依赖 tesseract.js`：重新 `npm install`，或按提示手动补装。
 - 语言包下载失败/超时：改用方式 A 或 B，不要依赖 CDN。
+
+#### 3.7.5 无人值守调度（cron 推荐）
+
+批量 OCR 耗时数小时，用 `screen`/`tmux`/`nohup` 守护存在两个实际问题：
+
+1. **同 cgroup 连坐**：它们与 DSH 主服务处于同一 systemd cgroup，服务重启或 OOM-kill 会一并清除，断点虽保留但无人拉起后续任务。
+2. **长驻进程内存累积**：Node.js 长时间处理数百页 PDF，内存缓慢增长，最终触发 OOM（即 §3.7.2 中提到的 cgroup 清理的直接原因）。
+
+推荐用 cron 定时调度，配合脚本自带的断点续跑能力实现真正的无人值守：
+
+```bash
+# crontab -e
+# 每 5 分钟检查一次：有未完成的 OCR 就续跑一本（脚本自带断点，不会重复劳动）
+*/5 * * * * AQUASENSE_CACHE_DIR=/data/aquasense/cache \
+            AQUASENSE_OCR_LANG_PATH=/path/to/4.0.0_best_int \
+            flock -n /tmp/aquasense-ocr.lock \
+            node /path/to/dsh-aquasense/dist/scripts/ocr-scanned-pdfs.js --limit 1 --no-warm
+```
+
+三个要点：
+
+- **cron 环境变量必须显式写全**：cron 不读 `~/.dsh/.env`，也不继承登录 shell 的环境。必须在 crontab 里显式写出 `AQUASENSE_CACHE_DIR` 和 `AQUASENSE_OCR_LANG_PATH`，否则会踩“CWD 相对路径”或“语言包找不到”的老坑。
+- **必须加锁（flock）**：单本 OCR 耗时 12–23 分钟，而 cron 最小间隔 1 分钟，不加锁会导致多个实例重叠运行。`flock -n` 在锁被占用时直接跳过，安全无副作用。
+- **用 `--limit 1` 让 cron 充当循环器**：每次只处理一本，进程退出后内存归零——顺带规避了长驻进程的内存累积问题（正是导致 OOM-kill 的根因）。所有扫描件处理完毕后脚本无事可做即退出，无需人工停止。
 
 ---
 
