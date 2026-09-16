@@ -179,17 +179,11 @@ src/
 interface PdfChunk {
   mediaId: string          // 所属 PDF 的 IMA media_id
   title: string            // PDF 文件标题(书名)
-  page: number             // 所在页码 (1-based)
+  page: number | null      // 所在页码(1-based);无分页符时为 null
   chapter: string | null   // 章节标题(正则检测,可为 null)
   text: string             // 切片文本内容
+  offset: number           // 切片在 PDF 全文中的起始字符偏移(用于重叠切片去重)
   index: number            // 切片在 chunks.json 中的索引位置
-}
-
-/** 倒排索引条目 */
-interface IndexEntry {
-  term: string                           // 关键词(分词后)
-  chunkIndices: number[]                 // 包含该词的 chunk 索引
-  termFreqs: Record<number, number>      // 每个 chunk 中的词频
 }
 
 /** 索引元数据 */
@@ -201,7 +195,7 @@ interface PdfIndexMeta {
     mediaId: string
     title: string
     chunkCount: number
-    totalPages: number
+    pageCount: number | null  // 页数;无分页符时为 null
   }>
   config: {
     chunkSize: number      // 默认 512 字符
@@ -214,7 +208,7 @@ interface PdfSearchHit {
   mediaId: string           // 所属 PDF 的 media_id
   title: string             // PDF 文件标题
   text: string              // 命中的切片文本
-  page: number              // 命中页码
+  page: number | null       // 命中页码(可能为 null)
   chapter: string | null    // 命中章节
   score: number             // 匹配得分
   matchedTerms: string[]    // 命中的关键词列表
@@ -488,6 +482,9 @@ export function normalizeOcrText(text: string): string  // 新增:剥离标记 +
 export async function buildPdfIndex(cachePdfDir: string, indexDir: string, options?: BuildPdfIndexOptions): Promise<PdfIndexMeta>
 export function searchPdfContent(query: string, indexDir: string): PdfSearchHit[]
 export function isPdfIndexReady(indexDir: string): boolean
+export function getPdfIndexStatus(indexDir: string): 'ready' | 'not_found' | 'expired'
+export function getPdfIndexMeta(indexDir: string): PdfIndexMeta | null
+export function pdfHitToKnowledgeItem(hit: PdfSearchHit): KnowledgeItem
 ```
 
 ---

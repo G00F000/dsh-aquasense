@@ -105,6 +105,10 @@ interface AnalysisResult {
   severity: 'low' | 'medium' | 'high' | 'critical'
   confidence: number              // 置信度 0-1
   scene_hint: SceneHint           // 图片场景提示(供纯图片路由兜底)
+  image_count?: number            // 实际分析的图片数量
+  organs?: string[]               // 解剖场景下可见器官(仅 scene_hint=dissection 时填充)
+  expected_image_count?: number   // 工人发送的图片总数(用于检测丢失)
+  data_completeness?: 'complete' | 'partial' | 'empty'  // 数据完整性标记
 }
 ```
 
@@ -134,20 +138,23 @@ interface AnalysisResult {
 
 #### 3.1.5 容错设计
 
-- 图片下载失败（30s 超时/HTTP 错误）→ 抛出异常，由 Agent 决定后续
-- 模型返回空内容或非 JSON → 降级为 `{cls: 'unknown', symptoms: ['AI分析失败,请人工复核']}`
-- 模型输出字段越界（如 cls 写成 "sick"/"疑似水霉病"）→ `normalizeCls` 模糊归一化（sick→disease, 疑似水霉病→disease）
-- scene_hint 不在合法枚举内 → 降级为 `inspection`
+- **多图下载**: 使用 `Promise.allSettled` 逐张容错，单张下载失败不阻断其余图片分析
+- **全部图片下载失败** → 返回 `{cls: 'unknown'}` 降级结果（不抛异常），症状提示重发图片
+- **模型返回空内容或非 JSON** → 降级为 `{cls: 'unknown', symptoms: ['AI分析失败,请人工复核']}`
+- **模型输出字段越界**（如 cls 写成 "sick"/"疑似水霉病"）→ `normalizeCls` 模糊归一化（sick→disease, 疑似水霉病→disease）
+- **scene_hint 不在合法枚举内** → 降级为 `inspection`
+- **数据完整性检测**: `data_completeness` 为 `partial` 时，若视觉模型给出 `normal` 结论则自动降级为 `unknown`（防漏诊）
+- **图片不完整拒绝落表**: `record-ledger` 在 `data_completeness` 为 `partial`/`empty` 时拒绝写入台账
 
 ---
 
-### 3.2 知识库模块 (IMA 双通道检索 + 正文引用)
+### 3.2 知识库模块 (IMA 三通道检索 + 正文引用)
 
-**文件**: `src/ima/ima-api.ts`（API 封装）、`src/tools/generate-advice.ts`（处置建议生成）
+**文件**: `src/ima/ima-api.ts`（API 封装 + 三通道合并）、`src/tools/generate-advice.ts`（处置建议生成）、`src/ima/pdf-content-search.ts`（通道 C: PDF 原文检索）
 
-#### 3.2.1 检索架构：双通道互补
+#### 3.2.1 检索架构：三通道互补
 
-知识库检索采用**双通道**设计，两通道覆盖不同语料，互补而非替代：
+知识库检索采用**三通道互补**设计，三通道覆盖不同语料，互补而非替代：
 
 ```
                     ┌─────────────────────────────┐
@@ -155,76 +162,69 @@ interface AnalysisResult {
                     │   + 用户全部笔记(含未入库)     │
                     └──────────┬──────────────────┘
                                │
-            ┌──────────────────┼──────────────────┐
-            ▼                                     ▼
-   ┌─────────────────┐                  ┌─────────────────┐
-   │ 通道A:知识库检索  │                  │ 通道B:笔记检索    │
-   │ searchKnowledge  │                  │ searchNote       │
-   │                  │                  │                  │
-   │ 接口:wiki/v1/    │                  │ 接口:note/v1/    │
-   │  search_knowledge│                  │  search_note     │
-   │                  │                  │                  │
-   │ 索引范围:         │                  │ 索引范围:         │
-   │  仅名称(文件名/   │                  │  正文全文(含用户   │
-   │  文件夹名)        │                  │  专属笔记,如剖检   │
-   │                  │                  │  手册/操作手册)    │
-   │ 命中特征:         │                  │                  │
-   │  条目标题匹配     │                  │ 命中特征:         │
-   │  无高亮原文       │                  │  正文关键词匹配    │
-   │  from='wiki'     │                  │  回带高亮原文      │
-   │                  │                  │  from='note'     │
-   │ 优势:             │                  │ 优势:             │
-   │  覆盖所有入库文件  │                  │  能命中正文词      │
-   │                  │                  │  (如"罗茨风机"     │
-   │                  │                  │  "氨氮")           │
-   └────────┬────────┘                  └────────┬────────┘
-            │                                     │
-            └──────────────────┬──────────────────┘
-                               ▼
-                    ┌─────────────────┐
-                    │ 合并去重 + 排序   │
-                    │ note 优先,        │
-                    │ wiki 补充         │
-                    └─────────────────┘
+            ┌──────────────────┼──────────────────┬──────────────────┐
+            ▼                  ▼                  ▼
+   ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────────┐
+   │ 通道A:知识库检索  │ │ 通道B:笔记检索    │ │ 通道C:PDF原文检索    │
+   │ searchKnowledge  │ │ searchNote       │ │ searchPdfContent    │
+   │                  │ │                  │ │ (本地切片索引)       │
+   │ 接口:wiki/v1/    │ │ 接口:note/v1/    │ │ 索引:cache/pdf-     │
+   │  search_knowledge│ │  search_note     │ │  index/chunks.json  │
+   │                  │ │                  │ │ (离线构建+在线扫描)  │
+   │ 索引范围:         │ │ 索引范围:         │ │ 索引范围:            │
+   │  仅名称(文件名/   │ │  正文全文(含用户   │ │  PDF 全文(原始文献)  │
+   │  文件夹名)        │ │  专属笔记)        │ │                     │
+   │                  │ │                  │ │                     │
+   │ 命中特征:         │ │ 命中特征:         │ │ 命中特征:            │
+   │  条目标题匹配     │ │  正文关键词匹配    │ │  切片关键词扫描      │
+   │  无高亮原文       │ │  回带高亮原文      │ │  带页码/章节定位     │
+   │  from='wiki'     │ │  from='note'     │ │  from='pdf_content' │
+   └────────┬────────┘ └────────┬────────┘ └─────────┬───────────┘
+            │                   │                    │
+            └───────────────────┼────────────────────┘
+                                ▼
+                    ┌──────────────────────────────┐
+                    │ 三路合并去重 + 按优先级排序      │
+                    │ note高亮 > PDF原文 >           │
+                    │ note正文 > wiki标题            │
+                    └──────────────────────────────┘
 ```
 
 **关键区别**:
-- 知识库检索（`searchKnowledge`）：只索引文件名/文件夹名，搜索"氨氮"不会命中 PDF 正文中的"氨氮超标处理方案"
-- 笔记检索（`searchNote`）：索引正文全文，搜索"氨氮"能命中笔记中讨论氨氮问题的内容，并返回命中处高亮原文
+- 知识库检索（`searchKnowledge`）：只索引文件名/文件夹名，搜索“氨氮”不会命中 PDF 正文中的“氨氮超标处理方案”
+- 笔记检索（`searchNote`）：索引正文全文，搜索“氨氮”能命中笔记中讨论氨氮问题的内容，并返回命中处高亮原文
+- PDF 原文检索（`searchPdfContent`）：本地索引 PDF 全文切片，直接检索原始文献（一手资料），命中处带页码/章节定位，信息保真度最高
 
 #### 3.2.2 合并策略（searchKnowledgeMerged）
 
-由于 IMA 是关键词匹配（非语义检索），多词空格拼接会 0 命中，因此采用**逐词拆分 + 双通道查询**策略：
+由于 IMA 是关键词匹配（非语义检索），多词空格拼接会 0 命中，因此采用**逐词拆分 + 三通道查询**策略：
 
 ```
-原始查询: "白点 鲈鱼 疾病 治疗"
+原始查询: “白点 鲈鱼 疾病 治疗”
     │
     ▼ 拆分为独立关键词
-["白点", "鲈鱼", "疾病", "治疗"]
+[“白点”, “鲈鱼”, “疾病”, “治疗”]
     │
-    ▼ 逐词双通道查询(每个词分别查 wiki + note)
-词1 "白点" → wiki 命中 [条目A]  |  note 命中 [条目X(高亮)]
-词2 "鲈鱼" → wiki 命中 [条目A,条目B]  |  note 命中 [条目X,条目Y]
-词3 "疾病" → wiki 命中 [条目C]  |  note 命中 [条目Y(高亮)]
-词4 "治疗" → wiki 命中 []  |  note 命中 [条目X,条目Z(高亮)]
+    ▼ 逐词三通道查询(每个词分别查 wiki + note + pdf_content)
+词1 “白点” → wiki 命中 [条目A]  |  note 命中 [条目X(高亮)]  |  pdf 命中 [《鲈鱼病害》第3章](高亮)
+词2 “鲈鱼” → wiki 命中 [条目A,条目B]  |  note 命中 [条目X,条目Y]  |  pdf 命中 [...]
+词3 “疾病” → wiki 命中 [条目C]  |  note 命中 [条目Y(高亮)]  |  pdf 命中 [...]
+词4 “治疗” → wiki 命中 []  |  note 命中 [条目X,条目Z(高亮)]  |  pdf 命中 [...]
     │
-    ▼ 统计命中词数
-wiki: 条目A=2词, 条目B=1词, 条目C=1词
-note: 条目X=3词, 条目Y=2词, 条目Z=1词
+    ▼ 三路合并去重(按命中词数统计, media_id + 标题双维度去重)
+优先级: note高亮 > PDF原文 > note正文摘取 > wiki标题匹配
     │
-    ▼ 合并去重(note优先,wiki补充,按命中词数排序)
-最终: [条目X(note,3词), 条目Y(note,2词), 条目Z(note,1词), 条目A(wiki,2词), 条目B(wiki,1词)]
-    │
-    ▼ 去重规则: media_id + 标题双维度去重
-    (同一篇笔记可能被 wiki 和 note 各命中一次,标题相同视为同一来源)
+    ▼ 最终结果(最多 7 条)
 ```
 
 **合并参数**:
-- note 保留上限: 3 条
-- wiki 保留上限: 2 条
-- 合并总上限: 5 条
+- note 高亮保留上限: 2 条（IMA 引擎精确命中,最高优先级）
+- PDF 原文保留上限: 3 条（原始文献,带页码/章节）
+- note 正文摘取保留上限: 1 条
+- wiki 标题保留上限: 1 条
+- 合并总上限: 7 条
 
-#### 3.2.3 正文引用提取（三段式之"原文引用"）
+#### 3.2.3 正文引用提取（三段式之“原文引用”）
 
 命中知识条目后，需要读取正文并摘取与症状最相关的原文片段：
 
@@ -238,6 +238,12 @@ note: 条目X=3词, 条目Y=2词, 条目Z=1词
 │   → 清理HTML标签 → 压缩空白 → 截断(240字)      │
 │   → 输出: 《标题》:「摘录」                      │
 │   (无需下载解析,不受扫描件/超限影响)             │
+├──────────────────────────────────────────────┤
+│ 条目P (from='pdf_content', 有高亮)             │
+│   → 直接使用 highlight 中的 <em> 标记文本       │
+│   → 清理HTML标签 → 压缩空白 → 截断(240字)      │
+│   → 输出: 《标题》:「摘录」[PDF 第N页 章节名]    │
+│   (原始文献一手信息,带页码/章节定位)             │
 ├──────────────────────────────────────────────┤
 │ 条目A (from='wiki', 无高亮)                    │
 │   → getMediaContent(media_id) 读取正文         │
@@ -274,18 +280,21 @@ note: 条目X=3词, 条目Y=2词, 条目Z=1词
 │ ① 原文引用 (knowledge_excerpt)                    │
 │    《鲈鱼养殖技术》:「白点病由小瓜虫引起...」        │
 │    《水产疾病防治手册》:「症状表现为体表白点...」     │
+│    来源标注: PDF 原文(一手文献) / 笔记(AI 二次汇总)  │
 │                                                   │
 │ ② 逻辑推理 (reasoning)                            │
-│    "症状「白点、蹭壁」在知识库《鲈鱼养殖技术》        │
-│     中定位到相关原文(见 knowledge_excerpt);          │
-│     结合视觉分类「early」与严重程度「medium」         │
-│     按疑似情形处置。知识库比对不构成确诊,              │
-│     重症请兽医到场核实。"                            │
+│    "症状「白点、蹭壁」在知识库《鲈鱼养殖技术》       │
+│     中定位到相关原文(见 knowledge_excerpt);         │
+│     引用来源:N 条 PDF 原文 + M 条笔记;              │
+│     结合视觉分类「early」与严重程度「medium」        │
+│     按疑似情形处置。知识库比对不构成确诊,             │
+│     重症请兽医到场核实。"                           │
 │                                                   │
 │ ③ 总结 (diagnosis_summary + 立即行动/后续观察)      │
 │    状态:early, 症状:白点、蹭壁                      │
 │    立即行动:减料50%, 密切观察24小时                   │
 │    后续观察:持续观察48小时, 记录水质变化               │
+│    预警级别: P2                                      │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -640,10 +649,11 @@ dsh-lark 转发消息 (含 image_url + open_id)
 │ 输入: analysis (来自 analyze 输出)                    │
 │                                                    │
 │ ① 构建查询词: "蹭壁 离群独游 前兆 预防 鲈鱼"           │
-│ ② 双通道检索(逐词):                                  │
+│ ② 三通道检索(逐词):                                 │
 │    wiki: 《鲈鱼养殖手册》(名称匹配)                    │
 │    note: 《鲈鱼前兆症状记录》(正文命中,带高亮)           │
-│ ③ 合并去重: note优先, wiki补充, 共5条                 │
+│    pdf: 《鲈鱼病害防治》第3章(原文命中,带页码)           │
+│ ③ 合并去重: note高亮>PDF原文>note正文>wiki, 共7条      │
 │ ④ 正文摘取:                                          │
 │    note 高亮 → 《鲈鱼前兆症状记录》:「蹭壁是应激前兆     │
 │    的典型表现,常见于水质突变...」                       │
@@ -773,16 +783,19 @@ dsh-aquasense/
 ├── src/
 │   ├── index.ts                       # Cordis 插件入口 (name/inject/apply)
 │   ├── tools/
-│   │   ├── analyze-image.ts           # aquasense_analyze: 视觉三分类 + scene_hint
-│   │   ├── generate-advice.ts         # aquasense_advice: IMA 双通道检索 + 三段式建议
+│   │   ├── analyze-image.ts           # aquasense_analyze: 视觉三分类 + scene_hint + 数据完整性
+│   │   ├── analyze-image.test.ts      # analyze-image 单元测试
+│   │   ├── generate-advice.ts         # aquasense_advice: IMA 三通道检索 + 三段式建议
 │   │   ├── record-ledger.ts           # aquasense_ledger: 飞书 Bitable 8表写入 + 30分钟窗口
 │   │   └── train_aquaspecies.py       # 水生物种识别模型训练脚本 (Python)
 │   ├── ima/
 │   │   ├── ima-api.ts                 # IMA 知识库 API 封装(三通道检索 + PDF/笔记正文层)
-│   │   └── pdf-content-search.ts      # 通道 C: PDF 切片索引构建 + 运行时检索(OCR 标记契约定义处)
+│   │   ├── pdf-content-search.ts      # 通道 C: PDF 切片索引构建 + 运行时检索(OCR 标记契约定义处)
+│   │   └── pdf-content-search.test.ts # 通道 C 索引 + 检索单元测试
 │   ├── scripts/
 │   │   ├── warm-kb-cache.ts           # 正文批量预热(PDF+笔记, npm run kb:warm)
-│   │   └── ocr-scanned-pdfs.ts        # 扫描件 OCR 兜底(npm run ocr, checkpoint 续跑 + 整本才发布)
+│   │   ├── ocr-scanned-pdfs.ts        # 扫描件 OCR 兜底(npm run ocr, checkpoint 续跑 + 整本才发布)
+│   │   └── ocr-scanned-pdfs.test.ts   # OCR 生产端契约测试
 │   ├── feishu/
 │   │   └── token.ts                   # 飞书 token 缓存 + 用户名解析 + 图片上传
 │   ├── router/
@@ -795,6 +808,10 @@ dsh-aquasense/
 ├── docs/
 │   ├── architecture.md                # 架构说明 (本文件)
 │   ├── deployment.md                  # 部署文档
+│   ├── pdf-search-channel-architecture.md  # 方案 D: 三通道混合检索架构设计
+│   ├── pdf-search-channel-implementation.md # 方案 D: 三通道混合检索实现记录
+│   ├── ima-pdf-note-limitation.md      # IMA PDF 读取问题讨论与解决方案
+│   ├── fix-feishu-image-resource-crash.md  # 飞书图片下载崩溃修复规范
 │   └── user-manual.md                 # 使用手册
 ├── .env.example                       # 环境变量模板
 ├── cordis.patch.yml                   # DSH 插件注册补丁
@@ -809,7 +826,7 @@ dsh-aquasense/
 | 服务 | 用途 | 凭证 | 模块 |
 |------|------|------|------|
 | DeepSeek Vision API | 图片三分类 + scene_hint | `DEEPSEEK_API_KEY` | analyze-image |
-| IMA 知识库 | 双通道检索 + 正文读取 + 每日操作手册 | `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY` | ima-api, generate-advice, daily-reminder |
+| IMA 知识库 | 三通道检索(名称+正文+PDF原文) + 正文读取 + 每日操作手册 | `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY` | ima-api, generate-advice, daily-reminder |
 | 飞书开放平台 | 消息接收 + 多维表格写入 + 用户名解析 + 图片上传 | `FEISHU_APP_ID` + `FEISHU_APP_SECRET` | token, record-ledger, daily-reminder |
 | DeepSeek Harness | Agent 框架 + 工具注册 + 消息路由 | 框架自身 | index, SKILL.md |
 
@@ -824,7 +841,7 @@ dsh-aquasense/
 - **inspection 缺 analysis 时拒绝落表**: 返回 success:false 而非抛异常，不将未分析记录伪装成健康记录
 - **AI 失败时不说"不用药"**: cls=unknown 时标注"请咨询兽医"，不给出误导性结论
 - **告警级别与措施一致**: severity=critical 时无论 cls 如何都至少 P1
-- **知识库双通道互补**: 仅用其一会出现长期召回缺口——只用知识库检索时，正文相关笔记永远发现不了
+- **知识库三通道互补**: wiki(仅标题) + note(笔记正文) + pdf_content(PDF原文),三通道覆盖不同语料,仅用其一会出现召回缺口
 - **知识库降级容错**: IMA 不可用时使用内置通用建议模板，不阻断主流程
 - **用药不代替兽医**: 疾病场景明确建议咨询专业兽医，知识库仅作参考
 - **S9 重启不补推**: 防止重启后重复推送已过时间点的任务

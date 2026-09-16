@@ -88,15 +88,18 @@ Layout:
 src/
 ├── index.ts                       # cordis plugin entry (name/inject/apply)
 ├── tools/
-│   ├── analyze-image.ts           # aquasense_analyze: vision 3-class + normalization
-│   ├── generate-advice.ts         # aquasense_advice: IMA query + tiered actions
+│   ├── analyze-image.ts           # aquasense_analyze: vision 3-class + normalization + data completeness
+│   ├── analyze-image.test.ts      # unit tests
+│   ├── generate-advice.ts         # aquasense_advice: IMA 3-channel query + tiered actions
 │   └── record-ledger.ts           # aquasense_ledger: Bitable append (7 scene tables)
 ├── ima/
-│   ├── ima-api.ts                 # IMA wrapper: searchKnowledge (name) + searchNote (full-text) / getMediaContent
-│   └── pdf-content-search.ts      # channel C: PDF chunk index + runtime search (OCR marker/contract live here)
+│   ├── ima-api.ts                 # IMA wrapper: 3-channel search (wiki + note + pdf_content) + getMediaContent
+│   ├── pdf-content-search.ts      # channel C: PDF chunk index + runtime search (OCR marker/contract live here)
+│   └── pdf-content-search.test.ts # channel C tests
 ├── scripts/
 │   ├── warm-kb-cache.ts           # npm run kb:warm — prewarm text cache + rebuild index
-│   └── ocr-scanned-pdfs.ts        # npm run ocr — offline OCR producer for scanned PDFs (tesseract.js)
+│   ├── ocr-scanned-pdfs.ts        # npm run ocr — offline OCR producer for scanned PDFs (tesseract.js)
+│   └── ocr-scanned-pdfs.test.ts   # OCR producer contract tests
 ├── feishu/token.ts                # tenant_access_token with cache (shared)
 ├── router/intent-router.ts        # pure S1-S8 intent detection (for hosts/skills)
 └── scheduler/daily-reminder.ts    # S9 standalone process (not a tool)
