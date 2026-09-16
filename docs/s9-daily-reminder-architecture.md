@@ -276,7 +276,14 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 
 - 「保存配置」→ `saveRemindConfig()`：写 `config.json` → 立即 `setupS9Reminder()` 重建当日计划并重启 tick（已推送项由 sent 标记保留）
 - 「发送测试提醒」→ `sendTestReminder()`：仅用**已保存**配置立即推送一次总览卡片；不落计划、不影响 sent 标记、不做 30s 重试
+- 「放弃修改」→ 草稿回滚为已保存快照（不清空提示，回到 idle）
 - 前端草稿未保存（dirty）时禁用「发送测试提醒」并提示先保存；加载失败可重试
+
+**卡片 UI**（对齐 SkillHub 插件广场设置卡，详见 requirements.md 原型 3「UI 实现注（v1.6）」）：
+
+- 头部为「展开区 + 独立收起按钮」：展开区（标题/描述/未保存徽标，`aria-expanded`）+ 28×28 独立按钮（内嵌箭头，展开态 `rotate(180deg)`，`aria-label` 收起/展开）
+- 展开态卡底色切换为 `--dsw-alias-bg-layer-2`；未保存徽标用 warn 色（`--dsw-alias-state-warn-*`）；字段间分隔线；输入框 `--dsw-specific-input-major`
+- 底部操作区：「发送测试 / 放弃修改 / 保存配置」，错误信息在操作行左侧（`--dsw-alias-state-error-primary`）；主按钮用 `--dsw-alias-button-primary-fill`，禁用态 `opacity:.4`
 
 **降级**：
 

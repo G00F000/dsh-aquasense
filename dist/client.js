@@ -76,27 +76,57 @@ const remindApi = {
 //#region src/client/RemindCard.tsx
 /** 任务数上限(与 Host 侧 remind-gateway.ts 保持一致) */
 const MAX_TASKS = 50;
+/**
+* 卡片样式对齐 SkillHub 设置卡(.sh-cfg 体系):
+* 展开区 + 独立收起按钮、字段分隔线、底部操作区。
+*/
 const cardStyle = {
-	border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.22))",
-	background: "var(--dsw-alias-bg-layer-3, transparent)",
+	border: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
+	background: "var(--dsw-alias-bg-layer-3, #fff)",
 	borderRadius: 12,
+	boxSizing: "border-box",
 	listStyle: "none",
 	transition: "border-color .16s, background .16s"
 };
+/** 展开态卡底色(对齐 .sh-cfg.open) */
+const cardOpenStyle = { background: "var(--dsw-alias-bg-layer-2, #fafafa)" };
 const headerStyle = {
-	appearance: "none",
+	boxSizing: "border-box",
 	width: "100%",
+	alignItems: "center",
+	gap: 12,
+	padding: "14px 16px",
+	display: "flex"
+};
+/** 展开区按钮:标题 + 描述 + 未保存徽标(对齐 .sh-cfg-expand) */
+const expandStyle = {
+	appearance: "none",
+	flex: 1,
+	minWidth: 0,
 	font: "inherit",
 	color: "inherit",
 	textAlign: "left",
 	cursor: "pointer",
 	background: "transparent",
 	border: 0,
-	borderRadius: 12,
 	alignItems: "center",
 	gap: 12,
-	padding: "14px 16px",
+	padding: 0,
 	display: "flex"
+};
+/** 收起/展开按钮:28×28 独立热区(对齐 .sh-cfg-toggle) */
+const toggleStyle = {
+	appearance: "none",
+	flex: "none",
+	width: 28,
+	height: 28,
+	padding: 0,
+	border: 0,
+	background: "transparent",
+	color: "inherit",
+	cursor: "pointer",
+	display: "grid",
+	placeItems: "center"
 };
 const headTextStyle = {
 	flexDirection: "column",
@@ -112,43 +142,54 @@ const nameStyle = {
 	lineHeight: 1.4
 };
 const descStyle = {
-	color: "var(--dsw-alias-label-tertiary, rgba(128,128,128,0.7))",
+	color: "var(--dsw-alias-label-tertiary, #6b7280)",
 	fontSize: 13,
 	lineHeight: 1.5
 };
-const pendingStyle = {
+/** 未保存徽标(对齐 .sh-tag.orange) */
+const unsavedStyle = {
+	flex: "none",
 	whiteSpace: "nowrap",
-	background: "var(--dsw-alias-bg-module-platform, rgba(128,128,128,0.12))",
-	color: "var(--dsw-alias-label-secondary, inherit)",
-	borderRadius: 999,
-	flex: "none",
-	padding: "1px 8px",
+	background: "var(--dsw-alias-state-warn-tertiary, #fff7ed)",
+	color: "var(--dsw-alias-state-warn-label, #c2410c)",
+	borderRadius: 6,
+	padding: "2px 6px",
 	fontSize: 11,
-	fontWeight: 500,
-	lineHeight: "17px"
+	lineHeight: "16px"
 };
+/** 收起箭头:展开态旋转 180°(对齐 .sh-cfg-ch) */
 const chevronStyle = (open) => ({
-	color: "var(--dsw-alias-label-tertiary, inherit)",
+	color: "var(--dsw-alias-label-tertiary, #6b7280)",
 	flex: "none",
+	width: 14,
+	height: 14,
 	transition: "transform .16s",
 	display: "inline-flex",
 	alignItems: "center",
+	justifyContent: "center",
 	transform: open ? "rotate(180deg)" : "none"
 });
+/** 卡体(对齐 .sh-cfg-b) */
 const bodyStyle = {
-	borderTop: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.22))",
+	borderTop: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
 	margin: "0 16px",
-	padding: "12px 0 4px"
+	padding: "8px 0 12px"
 };
 const formStyle = {
 	display: "flex",
-	flexDirection: "column",
-	gap: 14
+	flexDirection: "column"
 };
+/** 字段容器:字段间补分隔线(对齐 .sh-cfg-f),首字段无分隔线 */
 const fieldStyle = {
 	display: "flex",
 	flexDirection: "column",
-	gap: 6
+	gap: 6,
+	padding: "10px 0",
+	borderTop: "1px solid var(--dsw-alias-border-l2, #eee)"
+};
+const fieldFirstStyle = {
+	...fieldStyle,
+	borderTop: "none"
 };
 const labelStyle = {
 	display: "block",
@@ -167,11 +208,12 @@ const switchRowStyle = {
 };
 const inputStyle = {
 	width: "100%",
-	padding: "6px 10px",
+	height: 34,
+	padding: "0 12px",
 	fontSize: 13,
 	borderRadius: 8,
-	border: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.3))",
-	background: "var(--dsw-alias-bg-layer-3, transparent)",
+	border: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
+	background: "var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-3, #fff))",
 	color: "var(--dsw-alias-label-primary, inherit)",
 	boxSizing: "border-box",
 	fontFamily: "inherit"
@@ -188,47 +230,62 @@ const timeInputStyle = {
 };
 const hintStyle = {
 	fontSize: 12,
-	color: "var(--dsw-alias-label-tertiary, rgba(128,128,128,0.6))",
+	color: "var(--dsw-alias-label-caption, #6b7280)",
 	margin: 0,
 	lineHeight: 1.5
 };
 const footerStyle = {
-	borderTop: "1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.22))",
+	borderTop: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
 	justifyContent: "flex-end",
 	alignItems: "center",
 	gap: 8,
 	padding: "12px 0 4px",
 	display: "flex"
 };
+/** 按钮基础(对齐 .sh-cfg-ft button) */
 const btnBase = {
 	appearance: "none",
 	font: "inherit",
 	cursor: "pointer",
-	border: "1px solid transparent",
 	borderRadius: 8,
 	padding: "5px 14px",
 	fontSize: 13,
-	fontWeight: 500,
 	lineHeight: "20px",
-	color: "var(--dsw-alias-label-primary, inherit)",
-	background: "var(--dsw-alias-bg-module-platform, rgba(128,128,128,0.12))",
 	transition: "background .16s, opacity .16s"
 };
+/** 次级按钮:透明底 + 描边(对齐 .sh-cfg-disc) */
+const ghostBtnStyle = {
+	...btnBase,
+	background: "transparent",
+	border: "1px solid var(--dsw-alias-border-l2, #d1d5db)",
+	color: "var(--dsw-alias-label-secondary, #4b5563)"
+};
+/** 主按钮(对齐 .sh-cfg-save) */
+const primaryBtnStyle = {
+	...btnBase,
+	background: "var(--dsw-alias-button-primary-fill, #111827)",
+	border: "1px solid var(--dsw-alias-button-primary-fill, #111827)",
+	color: "var(--dsw-alias-label-primary-foreground, #fff)"
+};
+/** 禁用态透明度(对齐 .sh-cfg-ft button:disabled) */
+const DISABLED_OPACITY = .4;
 const noticeStyle = {
-	color: "var(--dsw-alias-label-tertiary, rgba(128,128,128,0.7))",
+	color: "var(--dsw-alias-label-caption, #6b7280)",
 	margin: "0 0 8px",
 	fontSize: 12,
 	lineHeight: 1.5
 };
 const savedStyle = {
-	color: "var(--dsw-alias-state-success-primary, #30d158)",
+	color: "var(--dsw-alias-state-success-primary, #047857)",
 	margin: "0 0 8px",
 	fontSize: 12,
 	lineHeight: 1.5
 };
+/** 错误文本(对齐 .sh-cfg-err,位于操作行左侧) */
 const errorStyle = {
-	color: "var(--dsw-alias-label-error, #ff453a)",
-	margin: "0 0 8px",
+	color: "var(--dsw-alias-state-error-primary, #b91c1c)",
+	flex: 1,
+	margin: 0,
 	fontSize: 12,
 	lineHeight: 1.5,
 	minWidth: 0
@@ -366,6 +423,12 @@ function RemindCard({ t, api }) {
 			});
 		}
 	};
+	/** 放弃修改:草稿回滚为已保存快照(对齐 SkillHub「放弃修改」) */
+	const discard = () => {
+		if (!saved) return;
+		setDraft(toDraft(saved));
+		setApplyState({ kind: "idle" });
+	};
 	const sendTest = async () => {
 		setApplyState({ kind: "testing" });
 		try {
@@ -389,16 +452,16 @@ function RemindCard({ t, api }) {
 		});
 	};
 	const expanded = open || phase === "unavailable";
-	const header = /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-		type: "button",
+	const header = /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		style: headerStyle,
-		"aria-expanded": expanded,
-		"aria-label": t("card.title"),
-		onClick: () => {
-			setOpen((value) => !value);
-		},
-		children: [
-			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+			type: "button",
+			style: expandStyle,
+			"aria-expanded": expanded,
+			onClick: () => {
+				setOpen((value) => !value);
+			},
+			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 				style: headTextStyle,
 				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 					style: nameStyle,
@@ -407,16 +470,22 @@ function RemindCard({ t, api }) {
 					style: descStyle,
 					children: t("card.intro")
 				})]
-			}),
-			dirty ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-				style: pendingStyle,
+			}), dirty ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: unsavedStyle,
 				children: t("card.unsaved")
-			}) : null,
-			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+			}) : null]
+		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+			type: "button",
+			style: toggleStyle,
+			"aria-label": expanded ? t("card.collapse") : t("card.expand"),
+			onClick: () => {
+				setOpen((value) => !value);
+			},
+			children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 				style: chevronStyle(expanded),
 				children: CHEVRON_SVG
 			})
-		]
+		})]
 	});
 	let body = null;
 	if (expanded) if (phase === "unavailable") body = /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -429,7 +498,7 @@ function RemindCard({ t, api }) {
 			style: footerStyle,
 			children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 				type: "button",
-				style: btnBase,
+				style: ghostBtnStyle,
 				onClick: () => {
 					load();
 				},
@@ -450,11 +519,6 @@ function RemindCard({ t, api }) {
 				role: "status",
 				children: t("card.testSent")
 			}) : null,
-			applyState.kind === "error" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-				style: errorStyle,
-				role: "status",
-				children: applyState.message
-			}) : null,
 			dirty && !saving ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 				style: noticeStyle,
 				children: t("card.unsavedHint")
@@ -463,7 +527,7 @@ function RemindCard({ t, api }) {
 				style: formStyle,
 				children: [
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-						style: fieldStyle,
+						style: fieldFirstStyle,
 						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
 							style: switchRowStyle,
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
@@ -569,8 +633,9 @@ function RemindCard({ t, api }) {
 									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
 										style: {
-											...btnBase,
-											flex: "none"
+											...ghostBtnStyle,
+											flex: "none",
+											opacity: busy ? DISABLED_OPACITY : 1
 										},
 										disabled: busy,
 										onClick: () => {
@@ -584,7 +649,10 @@ function RemindCard({ t, api }) {
 								style: { display: "flex" },
 								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
-									style: btnBase,
+									style: {
+										...ghostBtnStyle,
+										opacity: busy || draft.tasks.length >= MAX_TASKS ? DISABLED_OPACITY : 1
+									},
 									disabled: busy || draft.tasks.length >= MAX_TASKS,
 									onClick: addTask,
 									children: t("field.tasks.add")
@@ -607,31 +675,47 @@ function RemindCard({ t, api }) {
 			}) : null,
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: footerStyle,
-				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: {
-						...btnBase,
-						opacity: !dirty || busy ? .5 : 1
-					},
-					disabled: !dirty || busy,
-					onClick: () => {
-						sendTest();
-					},
-					children: testing ? t("card.testing") : t("card.test")
-				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-					type: "button",
-					style: {
-						...btnBase,
-						background: "var(--dsw-alias-brand-primary, #0a84ff)",
-						color: "var(--dsw-alias-bg-layer-1, #fff)",
-						opacity: !dirty || saving ? .5 : 1
-					},
-					disabled: !dirty || saving,
-					onClick: () => {
-						save();
-					},
-					children: saving ? t("card.saving") : t("card.save")
-				})]
+				children: [
+					applyState.kind === "error" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						style: errorStyle,
+						role: "status",
+						children: applyState.message
+					}) : null,
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: {
+							...ghostBtnStyle,
+							opacity: dirty || busy ? DISABLED_OPACITY : 1
+						},
+						disabled: dirty || busy,
+						onClick: () => {
+							sendTest();
+						},
+						children: testing ? t("card.testing") : t("card.test")
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: {
+							...ghostBtnStyle,
+							opacity: !dirty || busy ? DISABLED_OPACITY : 1
+						},
+						disabled: !dirty || busy,
+						onClick: discard,
+						children: t("card.discard")
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: {
+							...primaryBtnStyle,
+							opacity: !dirty || busy ? DISABLED_OPACITY : 1
+						},
+						disabled: !dirty || busy,
+						onClick: () => {
+							save();
+						},
+						children: saving ? t("card.saving") : t("card.save")
+					})
+				]
 			})
 		]
 	});
@@ -644,7 +728,10 @@ function RemindCard({ t, api }) {
 		})
 	});
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("li", {
-		style: cardStyle,
+		style: expanded ? {
+			...cardStyle,
+			...cardOpenStyle
+		} : cardStyle,
 		children: [header, expanded ? body : null]
 	});
 }
@@ -661,12 +748,15 @@ const zh = {
 	"card.title": "S9 每日任务提醒",
 	"card.intro": "巡检任务定时提醒(每日总览 + 到点任务卡片),经飞书群推送",
 	"card.unsaved": "未保存",
+	"card.expand": "展开",
+	"card.collapse": "收起",
 	"card.loading": "加载中…",
 	"card.unavailable": "设置接口不可用,请确认插件已随 Web 界面加载后重试",
 	"card.retry": "重试",
 	"card.saved": "已保存,当日推送计划已重建",
 	"card.saving": "保存中…",
 	"card.save": "保存配置",
+	"card.discard": "放弃修改",
 	"card.test": "发送测试提醒",
 	"card.testing": "发送中…",
 	"card.testSent": "测试提醒已发送,请到飞书群查收",
@@ -694,12 +784,15 @@ const en = {
 	"card.title": "S9 daily task reminders",
 	"card.intro": "Scheduled inspection reminders (daily overview + per-task cards) pushed to a Feishu group",
 	"card.unsaved": "Unsaved",
+	"card.expand": "Expand",
+	"card.collapse": "Collapse",
 	"card.loading": "Loading…",
 	"card.unavailable": "Settings API unavailable — make sure the plugin is loaded in the web UI",
 	"card.retry": "Retry",
 	"card.saved": "Saved — today's push plan was rebuilt",
 	"card.saving": "Saving…",
 	"card.save": "Save",
+	"card.discard": "Discard",
 	"card.test": "Send test reminder",
 	"card.testing": "Sending…",
 	"card.testSent": "Test reminder sent — check the Feishu group",
