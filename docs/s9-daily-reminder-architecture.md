@@ -2,7 +2,7 @@
 
 > - 总文档：[architecture.md](./architecture.md)（本文为其 S9 专题**分文档**，展开模块级/接口级设计；总文档仅保留概述与引用）
 > - 需求依据：[requirements.md §R6](./requirements.md)
-> - 状态：📝 待实现（V1 独立调度器 → V2 插件内调度）
+> - 状态：✅ 已实现（V2 插件内调度 + 原型 3 设置页；见 §3.6 与 §8.5）
 
 ---
 
@@ -224,6 +224,74 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 - 消息类型：`interactive`（卡片）；卡片 JSON 构造异常时降级为 `text` 文本消息（沿用 V1 文本格式）
 - 凭证：复用 `getFeishuToken()`（缓存 + 自动刷新）
 
+### 3.6 设置页（原型 3，Web 面）
+
+> 对应需求 R6.5 原型 3「管理员配置界面」。Host 侧文件 `src/web/remind-gateway.ts`，浏览器侧 `src/client/`。
+
+**入口与偏差说明**：
+
+| 项 | 说明 |
+|------|------|
+| 需求原文 | DSH 界面中 AquaSense 插件一级按钮位于**设置图标上方**，点击跳转设置网页 |
+| 平台核实 | DSH 客户端插件无「设置图标上方一级按钮」注册面；合规设置入口为 **设置 → 插件 → 插件配置** tab |
+| 实现入口 | 「插件配置」tab 内以插件卡片承载本设置页（`settings.plugin.item` 键位槽） |
+
+**配对机制（Host ↔ 浏览器）**：
+
+- Host 侧注册 settings 命名空间 `aquasense-remind`（`registerRemindSettingsNamespace`，schema 字段与 config.json 同口径）
+- 浏览器侧在 `settings.plugin.item` 槽注册**同 key** 卡片（key = 命名空间名），「插件配置」tab 扫描到同名宿主命名空间后自动派发
+- settings 命名空间**仅作配对键**：配置读写不走 settings 服务，唯一事实源仍是 `config.json`（§9）
+
+**组件架构**：
+
+```
+浏览器半侧 (dist/client.js)                     插件进程 (Host)
+┌────────────────────────────┐    POST      ┌─────────────────────────────────────┐
+│ RemindCard (React)         │ ───────────▶ │ /aquasense-remind/api/{method}      │
+│  ├─ api.ts    fetch 封装   │   信封回包    │  handleRemindHttp（协议层/校验）      │
+│  └─ locales.ts zh/en 字典  │ ◀─────────── │   └─ createRemindApi（分发）          │
+└────────────────────────────┘              │        ├─ get    → 配置 + 当日状态    │
+                                            │        ├─ save   → 写 config.json     │
+                                            │        │           + 重建当日计划     │
+                                            │        ├─ test   → 立即推总览卡片     │
+                                            │        └─ groups → 飞书群列表         │
+                                            └─────────────────────────────────────┘
+```
+
+**API 协议**：
+
+| 方法 | 请求体 | 成功响应 `value` | 失败 |
+|------|--------|------------------|------|
+| `get` | — | `{ config, status }` | — |
+| `save` | `{ config: { enabled, group, tasks } }` | `{ config, status }` | 400 `invalid-config` |
+| `test` | — | `{ sent: true }` | 400 `group-missing` / 502 `push-failed` |
+| `groups` | — | `{ groups }`；拉取失败降级 `{ groups: [], error }`（仍 200） | — |
+
+- 响应信封：`{ ok: true, value }` / `{ ok: false, error: { code, message } }`
+- 协议层防护：仅 POST（405）、同源校验（403，无 Origin 放行）、JSON Content-Type（415）、路径解析（404）、请求体 ≤ 16KB（413）、非法 JSON（400）、兜底 500
+- 服务端校验：任务 ≤ 50 条、`time` 为 `HH:MM`（自动补零）、`task` 非空且 ≤ 200 字、`group` ≤ 128 字符
+- `cron` 不在设置页暴露，保存时保留现值（§3.2）
+
+**保存 / 测试语义**（对应 §4.1 流程）：
+
+- 「保存配置」→ `saveRemindConfig()`：写 `config.json` → 立即 `setupS9Reminder()` 重建当日计划并重启 tick（已推送项由 sent 标记保留）
+- 「发送测试提醒」→ `sendTestReminder()`：仅用**已保存**配置立即推送一次总览卡片；不落计划、不影响 sent 标记、不做 30s 重试
+- 前端草稿未保存（dirty）时禁用「发送测试提醒」并提示先保存；加载失败可重试
+
+**降级**：
+
+| 场景 | 行为 |
+|------|------|
+| 群列表拉取失败（token/网络/权限） | 切换为手填输入框（chat_id），不阻断保存与测试 |
+| `webServer` 服务缺失 | API 路由注册静默跳过；卡片显示不可用并可重试 |
+| settings 命名空间重复注册 | 静默跳过（重复加载/热更新兜底） |
+
+**构建与加载**：
+
+- 浏览器半侧由 **tsdown** 打包为 `dist/client.js`（DSH module-loader 包裹的 CJS；React/cordis/client-store 保持 external，由运行时模块表提供）
+- `package.json` → `dsh.client`（`platform: 'web'` + inject 4 个客户端包）；`exports['./client']` 指向该产物；类型声明由 `tsc` 产出（`dist/client/*.d.ts`）
+- `npm run build` = `tsc -p tsconfig.build.json` + `tsdown -c tsdown.config.ts`；仅重建浏览器侧可用 `npm run build:client`
+
 ---
 
 ## 4. 关键流程
@@ -255,7 +323,7 @@ setupS9Reminder(ctx)
 返回: 已加载 N 项推送(其中 M 项已推送)
 ```
 
-- 设置页入口：DSH 界面「设置图标上方」的 AquaSense 一级按钮 → 跳转插件设置网页
+- 设置页入口：**设置 → 插件 → 插件配置** tab 的「每日任务提醒」卡片（需求原文“设置图标上方一级按钮”无对应平台槽位，偏差说明见 §3.6）
 - 设置页「保存配置」→ 写 `config.json` → 重新调用 `setupS9Reminder`（重建计划）
 - 设置页「发送测试提醒」→ 直接调用推送器发送一次总览卡片（不注册、不落计划）
 
@@ -307,6 +375,8 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | A 每日任务总览 | 每日 cron 时刻（默认 07:00） | 原型 1 | 查看今日台账 |
 | B 单条任务提醒 | 任务 `time` 到点 | 原型 2 | 拍照汇报（引导） |
 | C 异常预警 | `analyze` 检出 `early`/`disease` | 原型 4 | 查看详情 / 通知负责人 |
+
+> 原型 3（管理员配置界面）不是飞书消息卡片，而是 DSH 设置页内的插件配置卡片，见 §3.6。
 
 ### 5.2 卡片 JSON 骨架（以卡片 B 为例）
 
@@ -426,6 +496,22 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | `src/tools/*` | 主链路不变；仅 `analyze` 结果驱动预警卡片（新增调用点） |
 | `src/router/intent-router.ts` | S9 不经意图路由 |
 
+### 8.5 原型 3（设置页）文件清单
+
+| 文件路径 | 变更 | 说明 |
+|----------|------|------|
+| `src/web/remind-gateway.ts` | 新增 | Host 侧：settings 命名空间注册 + `/aquasense-remind/api` 路由（校验/协议层/群列表） |
+| `src/client/index.ts` | 新增 | 浏览器侧入口：字典注册 + `settings.plugin.item` 卡片注册 |
+| `src/client/RemindCard.tsx` | 新增 | 设置卡片组件（启用开关/群选择/任务增删/保存/测试/状态行） |
+| `src/client/api.ts` | 新增 | 浏览器侧 API 封装（信封解包） |
+| `src/client/locales.ts` | 新增 | 卡片文案 zh/en 字典 |
+| `src/web/remind-gateway.test.ts` | 新增 | gateway 单元测试（校验/分发/协议层，26 例） |
+| `tsdown.config.ts` | 新增 | 浏览器 bundle 构建配置 |
+| `src/scheduler/s9-reminder.ts` | 扩展 | 新增 §7 设置页接口（get/save/test/status）+ 导出 `DEFAULT_CRON` |
+| `src/index.ts` | 接入 | `apply()` 增调 `installRemindWeb(ctx)` |
+| `package.json` | 更新 | `exports['./client']`、`dsh.client`、`build:client` 脚本、客户端 peer 声明 |
+| `tsconfig.json` | 更新 | `jsx: react-jsx`（客户端 TSX 编译） |
+
 ---
 
 ## 9. 存储设计
@@ -434,7 +520,7 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 $AQUASENSE_CACHE_DIR/          # 绝对路径(Linux: /data/aquasense/cache)
   pdf/  note/  pdf-index/      # [已有] 知识库通道
   remind/                      # [新增] S9 运行状态
-    config.json                #   设置页持久化配置(可选, 优先于环境变量)
+    config.json                #   设置页「保存配置」持久化(优先于环境变量)
     plan-2026-09-16.json       #   当日推送计划(重启复用)
     sent-2026-09-16.json       #   当日已推送标记(防重启重复)
 ```
@@ -465,12 +551,12 @@ $AQUASENSE_CACHE_DIR/          # 绝对路径(Linux: /data/aquasense/cache)
 
 | 阶段 | 内容 | 前置 | 状态 |
 |------|------|------|------|
-| M1 | 配置解析 + 计划生成 + 落盘 | 无 | 待开发 |
-| M2 | tick 执行器 + 推送器（文本消息打通） | M1 | 待开发 |
-| M3 | 总览/单条提醒卡片（interactive） | M2 | 待开发 |
-| M4 | 按钮回调（拍照引导/台账跳转） | M3 | 待开发 |
-| M5 | 异常预警卡片 + 主链路接入 | M4 | 待开发 |
-| M6 | V1 下线（进程/包入口/旧状态清理）+ 部署验证 | M5 | 待开发 |
+| M1 | 配置解析 + 计划生成 + 落盘 | 无 | ✅ 已实现 |
+| M2 | tick 执行器 + 推送器（文本消息打通） | M1 | ✅ 已实现 |
+| M3 | 总览/单条提醒卡片（interactive） | M2 | ✅ 已实现 |
+| M4 | 按钮回调（拍照引导/台账跳转） | M3 | 🔄 部分实现（卡片按钮已下发；回调链见 §5.3） |
+| M5 | 异常预警卡片 + 主链路接入 | M4 | ✅ 已实现 |
+| M6 | V1 下线（进程/包入口/旧状态清理）+ 部署验证 | M5 | ✅ 已实现（部署验证见下方验收要点） |
 
 **验收要点**（对应需求 R6.6）：
 

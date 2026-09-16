@@ -7,9 +7,13 @@
  *  - 重启恢复当日剩余计划: 已推送不重复、已过时间点不补推、同一时间点仅推送一次
  *  - 仅提醒: 不写任何多维表格、卡片无打卡交互
  *
- * 对外暴露 2 个函数:
- *  - setupS9Reminder(ctx)      插件启动/配置变更时调用(enabled=false 时直接跳过)
- *  - pushAbnormalAlert(input)  异常预警(供 analyze 主链路调用)
+ * 对外暴露入口:
+ *  - setupS9Reminder(ctx)          插件启动/配置变更时调用(enabled=false 时直接跳过)
+ *  - pushAbnormalAlert(input)      异常预警(供 analyze 主链路调用)
+ *  - getRemindConfig()             读取当前生效配置(设置页 gateway 使用)
+ *  - saveRemindConfig(input)       保存配置并重建当日推送计划(设置页「保存配置」)
+ *  - sendTestReminder()            立即推送一次总览卡片(设置页「发送测试提醒」)
+ *  - getRemindStatus()             当日计划/已推送/下一项(设置页状态展示)
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -22,7 +26,8 @@ import { resolveCacheRoot } from '../ima/ima-api.js'
 
 const TICK_MS = 60_000
 const RETRY_DELAY_MS = 30_000
-const DEFAULT_CRON = '0 7 * * *'
+/** 默认总览推送时刻(设置页 settings schema 默认值共用同一口径) */
+export const DEFAULT_CRON = '0 7 * * *'
 /** 历史状态文件(plan/sent)保留天数,更早的自动清理(架构文档 §9) */
 const KEEP_STATE_DAYS = 7
 /** 任务卡片剩余任务预览条数(原型 2) */
@@ -35,9 +40,11 @@ export interface RemindTask {
   task: string
 }
 
-interface RemindConfig {
+/** 提醒配置(remind/config.json 为唯一事实源;设置页经 gateway 读写该文件) */
+export interface RemindConfig {
   enabled: boolean
   group: string
+  /** 总览推送时刻(5 段 cron,仅使用"每天 HH:MM"语义) */
   cron: string
   tasks: RemindTask[]
 }
@@ -141,6 +148,15 @@ function parseEnvTasks(raw: string | undefined): unknown {
   }
 }
 
+/** 单条任务归一化:非法返回 null(设置页校验与配置解析共用同一口径) */
+export function normalizeRemindTask(input: unknown): RemindTask | null {
+  const entry = input as { time?: unknown; task?: unknown }
+  const time = typeof entry?.time === 'string' ? normalizeTime(entry.time) : ''
+  const task = typeof entry?.task === 'string' ? entry.task.trim() : ''
+  if (!isValidHHMM(time) || !task) return null
+  return { time, task }
+}
+
 /** 校验任务列表:非法条目跳过并计数;合法条目按 time 升序 */
 function sanitizeTasks(raw: unknown): { tasks: RemindTask[]; skipped: number } {
   if (!Array.isArray(raw)) return { tasks: [], skipped: raw === undefined ? 0 : 1 }
@@ -148,14 +164,12 @@ function sanitizeTasks(raw: unknown): { tasks: RemindTask[]; skipped: number } {
   const tasks: RemindTask[] = []
   let skipped = 0
   for (const item of raw) {
-    const entry = item as { time?: unknown; task?: unknown }
-    const time = typeof entry?.time === 'string' ? normalizeTime(entry.time) : ''
-    const task = typeof entry?.task === 'string' ? entry.task.trim() : ''
-    if (!isValidHHMM(time) || !task) {
+    const task = normalizeRemindTask(item)
+    if (!task) {
       skipped++
       continue
     }
-    tasks.push({ time, task })
+    tasks.push(task)
   }
   return { tasks: tasks.sort((a, b) => a.time.localeCompare(b.time)), skipped }
 }
@@ -471,16 +485,16 @@ function buildFallbackText(item: PlanItem, plan: PushPlan): string {
   return lines.join('\n')
 }
 
-async function sendToFeishu(message: FeishuMessage): Promise<void> {
-  const group = activeConfig?.group
-  if (!group) {
+async function sendToFeishu(message: FeishuMessage, group?: string): Promise<void> {
+  const target = group ?? activeConfig?.group
+  if (!target) {
     throw new Error('S9_REMIND_GROUP 未配置(巡检群 chat_id)')
   }
   const token = await getFeishuToken()
   const response = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ receive_id: group, msg_type: message.msgType, content: message.content }),
+    body: JSON.stringify({ receive_id: target, msg_type: message.msgType, content: message.content }),
     // 超时上限: 网络挂起时避免长时间占用 tick 防重入锁,拖垮后续时间点
     signal: AbortSignal.timeout(15_000)
   })
@@ -627,5 +641,94 @@ export async function pushAbnormalAlert(input: AbnormalAlertInput): Promise<void
     )
   } catch (error) {
     warn('预警推送异常(不阻断主链路):', error)
+  }
+}
+
+// ========== 7. 设置页接口(原型 3;HTTP 层见 src/web/remind-gateway.ts) ==========
+
+/** 设置页保存输入(草稿整体提交;cron 不在设置页暴露,保存时保留现值) */
+export interface RemindConfigInput {
+  enabled?: boolean
+  group?: string
+  tasks?: RemindTask[]
+}
+
+/** 读取当前生效配置(文件 > 环境变量) */
+export function getRemindConfig(): RemindConfig {
+  return loadConfig()
+}
+
+/**
+ * 保存配置(设置页「保存配置」):
+ * 写入 remind/config.json 后调用 setupS9Reminder() 重建当日推送计划,
+ * 使调度立即随新配置运行(需求 R6.5 交互说明「持久化配置并重建当日推送计划」)。
+ */
+export function saveRemindConfig(input: RemindConfigInput): RemindConfig {
+  const current = loadConfig()
+  const { tasks, skipped } = sanitizeTasks(input.tasks === undefined ? current.tasks : input.tasks)
+  if (skipped > 0) {
+    warn(`保存配置: ${skipped} 条非法任务已跳过(time 需为 HH:MM、task 需非空)`)
+  }
+
+  const config: RemindConfig = {
+    enabled: input.enabled ?? current.enabled,
+    group: (input.group ?? current.group).trim(),
+    cron: current.cron,
+    tasks
+  }
+  writeFileSync(join(remindDir(), 'config.json'), JSON.stringify(config, null, 2), 'utf8')
+  log(`配置已保存: enabled=${config.enabled}, group=${config.group || '(未配置)'}, 任务 ${config.tasks.length} 项`)
+
+  // 立即重建当日计划并重启 tick(已推送项由 sent 标记保留,不受影响)
+  setupS9Reminder()
+  return config
+}
+
+/**
+ * 发送测试提醒(设置页「发送测试提醒」):
+ * 用已保存配置立即推送一次总览卡片;不落当日计划、不影响 sent 标记。
+ * 失败直接抛出(与调度推送不同,不做 30s 重试),由 gateway 转为错误响应。
+ */
+export async function sendTestReminder(): Promise<void> {
+  const config = loadConfig()
+  if (!config.group) {
+    throw new Error('推送目标群未配置,请选择或填写群 chat_id 并保存')
+  }
+  const plan: PushPlan = {
+    date: today(),
+    items: buildPlanItems(parseCronTime(config.cron), config.tasks)
+  }
+  await sendToFeishu({ msgType: 'interactive', content: JSON.stringify(buildOverviewCard(plan)) }, config.group)
+  log(`已发送测试提醒 → ${config.group}`)
+}
+
+/** 当日运行状态(设置页状态行;调度未运行时全为 0) */
+export interface RemindStatus {
+  /** 当前调度日(本地日期) */
+  date: string
+  /** 当日计划项数(总览 + 任务) */
+  planned: number
+  /** 已成功推送项数 */
+  sent: number
+  /** 下一个待推送时刻(HH:MM),无则 null */
+  nextTime: string | null
+  /** 调度器（60s tick）是否在运行 */
+  running: boolean
+}
+
+export function getRemindStatus(): RemindStatus {
+  const date = today()
+  if (!currentPlan || currentPlan.date !== date) {
+    return { date, planned: 0, sent: 0, nextTime: null, running: tickTimer !== null }
+  }
+  const sent = currentPlan.items.filter((i) => sentKeys.has(keyOf(i))).length
+  const now = currentHHMM()
+  const next = currentPlan.items.find((i) => !sentKeys.has(keyOf(i)) && i.time >= now)
+  return {
+    date,
+    planned: currentPlan.items.length,
+    sent,
+    nextTime: next?.time ?? null,
+    running: tickTimer !== null
   }
 }

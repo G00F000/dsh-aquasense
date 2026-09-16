@@ -8,6 +8,8 @@
  *
  * 意图路由(intent-router)为纯函数模块,由消息宿主/Agent 技能调用,不注册为 Tool;
  * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。
+ * S9 设置页(原型 3)由 web/remind-gateway 提供:settings 配对命名空间 +
+ * /aquasense-remind/api 路由(web 面缺失时静默跳过,不影响定时推送)。
  */
 import type { Context } from '@deepseek-ai/cordis';
 export declare const name = "aquasense-plugin";

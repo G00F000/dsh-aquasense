@@ -1,6 +1,6 @@
 # AquaSense 水产养殖 AI 巡检系统 — 需求文档
 
-> **版本**: v1.4 (R6 需求变更待实现，其余需求已实现)
+> **版本**: v1.5 (R6 已实现：V2 插件内调度 + 原型 3 设置页)
 > **基线日期**: 2026-09-16
 > **目标用户**: 清徐基地 4 池循环水鲈鱼养殖工人(飞书端)
 > **技术载体**: DeepSeek Harness 插件(dsh-aquasense)，配合 dsh-lark 桥接层对接飞书
@@ -224,19 +224,19 @@ AquaSense 是一个运行在 DeepSeek Harness 上的 AI 巡检插件，工人通
 
 | 属性 | 说明 |
 |------|------|
-| 当前实现 | `src/scheduler/daily-reminder.ts`（独立调度器进程） |
-| 目标方案 | 插件端配置提醒规则 + 插件内调度推送（飞书即时消息 API） |
+| 实现文件 | `src/scheduler/s9-reminder.ts`（插件内模块）；设置页：`src/web/remind-gateway.ts` + `src/client/` |
+| 方案 | 插件端配置提醒规则 + 插件内调度推送（飞书即时消息 API） |
 | 设计文档 | [s9-daily-reminder-architecture.md](./s9-daily-reminder-architecture.md)（专题分文档） |
-| 状态 | 🔄 需求变更（从独立进程改为插件配置，V2 待实现） |
+| 状态 | ✅ 已实现（V2 插件内调度 + 原型 3 设置页） |
 
 #### R6.1 设计变更说明
 
-**当前实现（V1）**：
+**原实现（V1，已下线）**：
 - 独立调度器进程 `daily-reminder.ts`，启动后自行计时
 - 07:00 推送当日任务总览，每分钟 tick 匹配时间点推送单条提醒
 - 缺点：需要独立进程保活、重启后不补推、运维成本高
 
-**目标方案（V2）**：
+**方案（V2，已实现）**：
 - 去掉独立调度器进程，改为**插件端配置提醒规则**
 - 插件读取配置后，生成当日推送计划，由插件进程内 tick 到点触发，调用**飞书消息 API** 即时推送
 - 飞书平台仅承担消息投递（经核实：飞书开放平台无“注册式定时消息”能力，消息 API 均为即时发送）
@@ -397,7 +397,9 @@ S9_REMIND_TASKS=[                                # 任务列表(JSON)
 └──────────────────────────┘
 ```
 
-管理员点击一级按钮打开设置网页，在其中配置 S9 提醒规则：
+> **入口实现注（v1.5）**：DSH 客户端未提供「设置图标上方一级按钮」注册面，原入口无法落地。实际交付采用平台合规入口：**设置 → 插件 → 插件配置** tab 内的「每日任务提醒」卡片（`settings.plugin.item` 键位槽，key 与宿主 settings 命名空间 `aquasense-remind` 配对）。偏差说明与配对机制详见 [s9-daily-reminder-architecture.md §3.6](./s9-daily-reminder-architecture.md)。
+
+管理员经由上述入口打开设置页，在其中配置 S9 提醒规则：
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -584,13 +586,22 @@ dsh-aquasense/
 │   │   ├── record-ledger.ts       # 台账写入工具
 │   │   └── train_aquaspecies.py   # 水产种类训练脚本
 │   ├── scheduler/
-│   │   └── daily-reminder.ts      # S9 每日任务提醒
+│   │   └── s9-reminder.ts         # S9 每日任务提醒（插件内调度）
+│   ├── web/
+│   │   ├── remind-gateway.ts      # S9 设置页 API 网关（原型 3 Host 侧）
+│   │   └── remind-gateway.test.ts # 网关单元测试
+│   ├── client/
+│   │   ├── index.ts               # 浏览器半侧入口（设置卡片注册）
+│   │   ├── RemindCard.tsx         # 设置卡片组件（原型 3）
+│   │   ├── api.ts                 # 浏览器侧 API 封装
+│   │   └── locales.ts             # 卡片文案 zh/en 字典
 │   └── scripts/
 │       ├── ocr-scanned-pdfs.ts    # 扫描件 OCR 离线处理
 │       ├── ocr-scanned-pdfs.test.ts # OCR 脚本单元测试
 │       └── warm-kb-cache.ts       # 知识库缓存预热
 ├── package.json
 ├── tsconfig.json
+├── tsdown.config.ts               # 浏览器 bundle 构建配置
 ├── .env.example
 └── cordis.patch.yml
 ```
@@ -680,6 +691,7 @@ interface LedgerParams {
 | `analyze-image.test.ts` | 视觉分析工具 |
 | `pdf-content-search.test.ts` | PDF 原文检索引擎 |
 | `ocr-scanned-pdfs.test.ts` | OCR 扫描件处理脚本 |
+| `remind-gateway.test.ts` | S9 设置页 API 网关（校验/分发/协议层） |
 
 ---
 
@@ -687,11 +699,12 @@ interface LedgerParams {
 
 | 命令 | 说明 |
 |------|------|
-| `npm run build` | TypeScript 编译 |
-| `npm run dev` | 开发模式（watch） |
+| `npm run build` | 完整构建（tsc 产物 + tsdown 浏览器 bundle） |
+| `npm run build:client` | 仅重建浏览器侧 `dist/client.js` |
+| `npm run typecheck` | 类型检查（含客户端 TSX） |
 | `npm test` | 运行单元测试 |
 | `npm run ocr` | 离线 OCR 处理扫描件 PDF |
-| `npm run warm-cache` | 预热知识库 PDF 缓存 |
+| `npm run kb:warm` | 预热知识库 PDF 缓存 |
 
 ---
 
@@ -704,6 +717,7 @@ interface LedgerParams {
 | v1.2 | 2026-09-16 | R6 定稿：插件内轻量调度（飞书消息 API 即时推送），修正“飞书定时”措辞并与专题架构设计同步 |
 | v1.3 | 2026-09-16 | R6.5 补充：管理员配置原型增加设置页入口（DSH 设置图标上方的一级按钮） |
 | v1.4 | 2026-09-16 | R6.5 精简：S9 仅提醒不落表不打卡——删除任务完成状态卡片原型、卡片打卡按钮及 mark_done 回调 |
+| v1.5 | 2026-09-16 | R6.5 原型 3 设置页实现；入口调整：DSH 无「设置图标上方一级按钮」槽位，改用「设置→插件→插件配置」卡片（详见专题文档 §3.6）；目录树与 npm 命令表同步 |
 | v1.1 | 2026-09-16 | R6.5 新增：S9 每日任务页面原型设计（5 个原型） |
 
 ---

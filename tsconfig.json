@@ -6,6 +6,7 @@
     "lib": ["ES2022", "DOM"],
     "outDir": "dist",
     "rootDir": "src",
+    "jsx": "react-jsx",
     "declaration": true,
     "strict": true,
     "noImplicitOverride": true,

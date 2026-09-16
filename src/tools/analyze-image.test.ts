@@ -215,7 +215,7 @@ describe('aquasense_analyze', () => {
       expect(result).toMatchObject({
         abnormal: false,
         cls: 'unknown',
-        symptoms: ['图片下载失败,请重发图片'],
+        symptoms: ['全部图片下载失败,无法分析,请重发图片'],
         severity: 'low',
         confidence: 0.3,
         scene_hint: 'inspection',
@@ -232,7 +232,7 @@ describe('aquasense_analyze', () => {
       expect(result).toMatchObject({
         abnormal: false,
         cls: 'unknown',
-        symptoms: ['图片下载失败,请重发图片'],
+        symptoms: ['全部图片下载失败,无法分析,请重发图片'],
         severity: 'low',
         confidence: 0.3,
         scene_hint: 'inspection',
