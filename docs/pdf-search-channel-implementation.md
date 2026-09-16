@@ -1066,6 +1066,7 @@ wc -c cache/pdf-index/chunks.json
 |------|------|------|
 | index.json 存 2/3-gram 倒排索引(~500KB) | 61 PDF 建倒排后唯一词项 50 万+,index.json 约 51MB(预估的百倍),Map 结构与 4G 内存预算不符 | 不建倒排:index.json 仅元数据(~14KB),检索在 chunks.json 上运行时扫描(结果与倒排等价) |
 | unpdf 合并文本以 Form Feed(\f) 分页,page 可取 | 实测 84 个缓存全部无 \f(unpdf mergePages 仅用 \n 拼页) | 有 \f 按页切块并回带 1-based 页码(OCR/逐页提取的缓存);无 \f 按空行切段,page 记 null 不臆造 |
+| 页码回带到命中条目即算"已实现" | 页码只进了展示用 summary,knowledge_excerpt 仅拼 title+text,最终引用里页码丢失,审计无法溯源到页 | KnowledgeItem 增加 locator 独立回带,generate-advice 拼装引用时透出(格式`《标题》[定位]:「摘录」`);缺分页符时缺省,不臆造 |
 | OCR 归一化两轮 replace | 对长间隔空格序列处理不彻底 | 单次 lookbehind/lookahead 正则 `(?<=[汉字])[ \t\u3000]+(?=[汉字])`,并回写缓存避免重复处理 |
 | 状态标记判定:`startsWith('[')` 即跳过 | OCR 缓存头 `[OCR 批处理 ...]` 也以 `[` 开头,按原判定会被误当状态标记跳过——OCR 文本永远进不了索引 | 新增 `isStatusMark()`:`startsWith('[') && !OCR_MARK_RE.test(text)`;OCR 文本视为真实内容参与切片,标记正则从共享常量 `OCR_MARK` 派生(防生产端/消费端漂移) |
 | AQUASENSE_CACHE_DIR 缺省 './cache' | systemd/手工/cron 的 CWD 不同会各建一份缓存,索引与缓存互相看不见 | ima-api 导出 resolveCacheRoot():环境变量优先,缺省平台绝对路径;预热/提醒/检索均走同一约定 |

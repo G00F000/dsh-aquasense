@@ -4,6 +4,7 @@
  * 自动查询 IMA 获取疾病诊疗参考,三通道合并(见 ima-api.searchKnowledgeMerged):
  * 笔记正文检索(带高亮)+ 本地 PDF 原文检索 + 知识库名称检索;
  * 有高亮的直接引用,其余读取命中条目正文(PDF/笔记)摘取原文片段,
+ * 引用格式《标题》[定位]:「摘录」,定位(如 PDF 页码)可定位时透出,供审计溯源到页;
  * 按「原文引用→逻辑推理→总结」输出分级处置建议。
  * 容错原则:知识库不可用不阻断主流程,降级为内置通用建议模板。
  */
@@ -25,6 +26,14 @@ interface AnalysisInput {
   severity?: string
 }
 
+/** 引用摘录:正文片段 + 定位信息(如 "第56页";PDF 命中且缓存含分页符时才有,无则不臆造) */
+interface Excerpt {
+  title: string
+  text: string
+  from?: string
+  locator?: string
+}
+
 export const generateAdvice = defineTool({
   name: 'aquasense_advice',
   description: '基于分析结果和知识库生成处置建议。自动查询 IMA 知识库,读取命中条目正文(PDF/笔记)摘取原文引用,按严重程度分级。',
@@ -42,7 +51,7 @@ export const generateAdvice = defineTool({
         medication: { type: 'string' },
         alert_level: { type: 'string', enum: ['P0', 'P1', 'P2'] },
         knowledge_refs: { type: 'array', items: { type: 'string' }, description: '知识库参考来源' },
-        knowledge_excerpt: { type: 'array', items: { type: 'string' }, description: '知识库正文原文引用(三段式之"原文引用",格式:《标题》:「摘录」)' },
+        knowledge_excerpt: { type: 'array', items: { type: 'string' }, description: '知识库正文原文引用(三段式之"原文引用",格式:《标题》[定位]:「摘录」;定位为 PDF 页码,可定位时透出)' },
         reasoning: { type: 'string', description: '逻辑推理说明(三段式之"逻辑推理",含结论边界声明)' }
       }
     },
@@ -74,7 +83,7 @@ export const generateAdvice = defineTool({
 
     // ========== 步骤 2:读取命中条目正文,摘取原文片段(三段式之"原文引用") ==========
     // 正文由 ima-api 正文层提供:PDF 走下载+unpdf 解析缓存,笔记走 notes 接口缓存,冷启动自动建缓存
-    let excerpts: Array<{ title: string; text: string; from?: string }> = []
+    let excerpts: Excerpt[] = []
     if (knowledge && needsExcerpts(analysis)) {
       excerpts = await extractExcerpts(knowledge.items, buildExcerptKeywords(analysis))
       if (excerpts.length > 0) {
@@ -97,7 +106,7 @@ export const generateAdvice = defineTool({
         medication: 'AI 分析失败,请根据现场情况咨询兽医后决定',
         alert_level: 'P1' as const,
         knowledge_refs: knowledgeRefs,
-        knowledge_excerpt: excerpts.map((e) => `《${e.title}》:「${e.text}」`),
+        knowledge_excerpt: excerpts.map(formatExcerpt),
         reasoning: `AI 视觉分析未能给出明确分类(unknown),无法自动判断病情与用药。请人工确认后按实际情况处置。`
       }
     }
@@ -132,7 +141,7 @@ export const generateAdvice = defineTool({
       const treatment = excerpts.find((e) => /用药|药浴|泼洒|拌料|消毒|治疗/.test(e.text))
       const hits = knowledge?.items ?? []
       if (treatment) {
-        medication = `建议咨询专业兽医获取针对性用药方案(知识库《${treatment.title}》原文:「${treatment.text}」)`
+        medication = `建议咨询专业兽医获取针对性用药方案(知识库${formatExcerpt(treatment)})`
       } else if (hits.length > 0) {
         const first = hits[0]
         const summary = first.summary ? `;摘要:${first.summary.slice(0, 120)}` : ''
@@ -158,7 +167,7 @@ export const generateAdvice = defineTool({
       medication,
       alert_level: alertLevel,
       knowledge_refs: knowledgeRefs,
-      knowledge_excerpt: excerpts.map((e) => `《${e.title}》:「${e.text}」`),
+      knowledge_excerpt: excerpts.map(formatExcerpt),
       reasoning: buildReasoning(analysis, excerpts, knowledgeRefs.length)
     }
   }
@@ -210,6 +219,11 @@ function buildExcerptKeywords(analysis: AnalysisInput): string[] {
   return [...new Set(keywords.filter(Boolean))]
 }
 
+/** 引用格式:《标题》[定位]:「摘录」;定位(如 PDF 页码)可定位时透出,供审计溯源到页 */
+function formatExcerpt(e: Excerpt): string {
+  return `《${e.title}》${e.locator ?? ''}:「${e.text}」`
+}
+
 /**
  * 读取命中文档正文并摘取相关片段;单条失败不影响整体(容错)。
  * 优先用 note 高亮:高亮即命中处原文,免下载解析,不受扫描件/超限影响。
@@ -219,15 +233,15 @@ function buildExcerptKeywords(analysis: AnalysisInput): string[] {
 async function extractExcerpts(
   items: KnowledgeItem[],
   keywords: string[]
-): Promise<Array<{ title: string; text: string; from?: string }>> {
-  const results: Array<{ title: string; text: string; from?: string }> = []
+): Promise<Excerpt[]> {
+  const results: Excerpt[] = []
   for (const item of items) {
     if (results.length >= MAX_EXCERPT_DOCS) break
     try {
       // 1. note/pdf_content 命中带高亮:高亮即接口/索引给出的命中处原文,直接作引用
       if (item.highlight) {
         const quote = cleanHighlight(item.highlight, keywords)
-        if (quote) results.push({ title: item.title, text: quote, from: item.from })
+        if (quote) results.push({ title: item.title, text: quote, from: item.from, locator: item.locator })
         continue
       }
       // 2. 无高亮:读正文摘取(note 命中走 note_id 直读,标识与 media_id 不同)
@@ -240,7 +254,7 @@ async function extractExcerpts(
         continue
       }
       const text = extractRelevantSnippet(content, keywords)
-      if (text) results.push({ title: item.title, text, from: item.from })
+      if (text) results.push({ title: item.title, text, from: item.from, locator: item.locator })
     } catch (error) {
       console.warn(`[aquasense] 正文读取失败(《${item.title}》):`, error instanceof Error ? error.message : error)
     }
@@ -328,7 +342,7 @@ function cleanupDisplay(text: string): string {
 /** 三段式之"逻辑推理":说明症状与知识库的比对关系,标注引用来源,并声明结论边界(不确诊) */
 function buildReasoning(
   analysis: AnalysisInput,
-  excerpts: Array<{ title: string; from?: string }>,
+  excerpts: Excerpt[],
   hitCount: number
 ): string {
   const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状'

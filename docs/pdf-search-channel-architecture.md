@@ -347,11 +347,14 @@ const MERGE_CONFIG = {
 
 ```typescript
 function pdfHitToKnowledgeItem(hit: PdfSearchHit): KnowledgeItem {
+  const locator = [hit.page ? `第${hit.page}页` : '', hit.chapter ?? ''].filter(Boolean).join(' ')
   return {
     media_id: hit.mediaId,
     title: hit.title,
-    summary: `[PDF ${hit.page}页${hit.chapter ? ' ' + hit.chapter : ''}]`,
+    summary: locator ? `[PDF ${locator}]` : '[PDF 原文]',
     from: 'pdf_content',
+    // 定位独立回带(缺分页符时为 undefined,不臆造),供引用层拼进 knowledge_excerpt 透出页码
+    locator: locator || undefined,
     // 高亮字段: 将命中关键词用 <em> 标记, 复用现有 cleanHighlight 逻辑
     highlight: markHighlightTerms(hit.text, hit.matchedTerms)
   }
@@ -470,6 +473,7 @@ export interface KnowledgeItem {
   source?: string
   from?: 'wiki' | 'note' | 'pdf_content'  // 新增
   highlight?: string
+  locator?: string  // 新增:引用定位(如"第56页"),仅 pdf_content 且缓存含分页符时可用
 }
 ```
 

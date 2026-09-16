@@ -34,6 +34,8 @@ export interface KnowledgeItem {
   from?: 'wiki' | 'note' | 'pdf_content'
   /** note 命中处的高亮原文(含 <em> 标记):即命中处正文,可直接作引用,免下载解析 */
   highlight?: string
+  /** 引用定位(如 "第56页"),仅 pdf_content 命中且缓存含分页符时可用;透出到 knowledge_excerpt 供审计溯源,缺失时不得臆造 */
+  locator?: string
 }
 
 export interface SearchResult {

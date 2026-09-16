@@ -4,7 +4,7 @@
  * 与实现文档 Step 5 的用例对齐,按实测调整三处:
  *  - 有效文本下限 MIN_TEXT_CHARS=100、切片下限 MIN_CHUNK_CHARS=50,测试语料须足量,否则不建索引;
  *  - 无分页符(\f)的文本按段落切块,页码为 null(不臆造);分页符场景另设用例验证 1-based 页码;
- *  - 补充 pdfHitToKnowledgeItem 映射用例(三通道合并的接入点)。
+ *  - 补充 pdfHitToKnowledgeItem 映射用例(locator 页码回带 + 无分页符不臆造,三通道合并的接入点)。
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -169,9 +169,22 @@ describe('pdf-content-search', () => {
     expect(items.length).toBeGreaterThan(0)
     expect(items[0].from).toBe('pdf_content')
     expect(items[0].summary).toContain('第2页')
+    // 页码独立回带 locator:最终引用(knowledge_excerpt)靠它透出,不能只留在 summary
+    expect(items[0].locator).toContain('第2页')
     expect(items[0].highlight).toContain('<em>网箱</em>')
     // 高亮合并为单次替换:不应出现嵌套标记
     expect(items[0].highlight).not.toContain('<em><em>')
+  })
+
+  it('pdfHitToKnowledgeItem 无分页符命中不应臆造页码', () => {
+    const hits = searchPdfContent('白点病 小瓜虫', TEST_INDEX_DIR)
+    const items = hits.map((hit) => pdfHitToKnowledgeItem(hit))
+
+    expect(items.length).toBeGreaterThan(0)
+    expect(hits[0].page).toBeNull()
+    // 页码不可取时不得臆造:定位只可能来自章节检测,不含"第N页"
+    expect(items[0].locator).not.toMatch(/第\d+页/)
+    expect(items[0].summary).not.toMatch(/第\d+页/)
   })
 
   it('重叠切片不应产生重复引用(同一处命中只保留一条)', async () => {
