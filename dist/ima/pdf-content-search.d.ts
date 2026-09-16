@@ -106,5 +106,6 @@ export declare function getPdfIndexMeta(indexDir: string): PdfIndexMeta | null;
 /**
  * 将 PDF 检索结果转换为 KnowledgeItem
  * highlight 用 <em> 标记命中词(与 note 通道格式一致,展示前由 cleanHighlight 统一剥离)
+ * locator 与展示用 summary 分开回带,由引用层拼进 knowledge_excerpt 透出页码(缺分页符时缺省,不臆造)
  */
 export declare function pdfHitToKnowledgeItem(hit: PdfSearchHit): KnowledgeItem;

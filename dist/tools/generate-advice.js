@@ -4,6 +4,7 @@
  * 自动查询 IMA 获取疾病诊疗参考,三通道合并(见 ima-api.searchKnowledgeMerged):
  * 笔记正文检索(带高亮)+ 本地 PDF 原文检索 + 知识库名称检索;
  * 有高亮的直接引用,其余读取命中条目正文(PDF/笔记)摘取原文片段,
+ * 引用格式《标题》[定位]:「摘录」,定位(如 PDF 页码)可定位时透出,供审计溯源到页;
  * 按「原文引用→逻辑推理→总结」输出分级处置建议。
  * 容错原则:知识库不可用不阻断主流程,降级为内置通用建议模板。
  */
@@ -27,7 +28,7 @@ export const generateAdvice = defineTool({
                 medication: { type: 'string' },
                 alert_level: { type: 'string', enum: ['P0', 'P1', 'P2'] },
                 knowledge_refs: { type: 'array', items: { type: 'string' }, description: '知识库参考来源' },
-                knowledge_excerpt: { type: 'array', items: { type: 'string' }, description: '知识库正文原文引用(三段式之"原文引用",格式:《标题》:「摘录」)' },
+                knowledge_excerpt: { type: 'array', items: { type: 'string' }, description: '知识库正文原文引用(三段式之"原文引用",格式:《标题》[定位]:「摘录」;定位为 PDF 页码,可定位时透出)' },
                 reasoning: { type: 'string', description: '逻辑推理说明(三段式之"逻辑推理",含结论边界声明)' }
             }
         },
@@ -76,7 +77,7 @@ export const generateAdvice = defineTool({
                 medication: 'AI 分析失败,请根据现场情况咨询兽医后决定',
                 alert_level: 'P1',
                 knowledge_refs: knowledgeRefs,
-                knowledge_excerpt: excerpts.map((e) => `《${e.title}》:「${e.text}」`),
+                knowledge_excerpt: excerpts.map(formatExcerpt),
                 reasoning: `AI 视觉分析未能给出明确分类(unknown),无法自动判断病情与用药。请人工确认后按实际情况处置。`
             };
         }
@@ -107,7 +108,7 @@ export const generateAdvice = defineTool({
             const treatment = excerpts.find((e) => /用药|药浴|泼洒|拌料|消毒|治疗/.test(e.text));
             const hits = knowledge?.items ?? [];
             if (treatment) {
-                medication = `建议咨询专业兽医获取针对性用药方案(知识库《${treatment.title}》原文:「${treatment.text}」)`;
+                medication = `建议咨询专业兽医获取针对性用药方案(知识库${formatExcerpt(treatment)})`;
             }
             else if (hits.length > 0) {
                 const first = hits[0];
@@ -137,7 +138,7 @@ export const generateAdvice = defineTool({
             medication,
             alert_level: alertLevel,
             knowledge_refs: knowledgeRefs,
-            knowledge_excerpt: excerpts.map((e) => `《${e.title}》:「${e.text}」`),
+            knowledge_excerpt: excerpts.map(formatExcerpt),
             reasoning: buildReasoning(analysis, excerpts, knowledgeRefs.length)
         };
     }
@@ -182,6 +183,10 @@ function buildExcerptKeywords(analysis) {
         keywords.push('预防', '前兆', '应激', '防治');
     return [...new Set(keywords.filter(Boolean))];
 }
+/** 引用格式:《标题》[定位]:「摘录」;定位(如 PDF 页码)可定位时透出,供审计溯源到页 */
+function formatExcerpt(e) {
+    return `《${e.title}》${e.locator ?? ''}:「${e.text}」`;
+}
 /**
  * 读取命中文档正文并摘取相关片段;单条失败不影响整体(容错)。
  * 优先用 note 高亮:高亮即命中处原文,免下载解析,不受扫描件/超限影响。
@@ -198,7 +203,7 @@ async function extractExcerpts(items, keywords) {
             if (item.highlight) {
                 const quote = cleanHighlight(item.highlight, keywords);
                 if (quote)
-                    results.push({ title: item.title, text: quote, from: item.from });
+                    results.push({ title: item.title, text: quote, from: item.from, locator: item.locator });
                 continue;
             }
             // 2. 无高亮:读正文摘取(note 命中走 note_id 直读,标识与 media_id 不同)
@@ -211,7 +216,7 @@ async function extractExcerpts(items, keywords) {
             }
             const text = extractRelevantSnippet(content, keywords);
             if (text)
-                results.push({ title: item.title, text, from: item.from });
+                results.push({ title: item.title, text, from: item.from, locator: item.locator });
         }
         catch (error) {
             console.warn(`[aquasense] 正文读取失败(《${item.title}》):`, error instanceof Error ? error.message : error);
