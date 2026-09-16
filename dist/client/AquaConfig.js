@@ -1,0 +1,144 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+/**
+ * AquaConfig —— 侧栏一级入口 + 独立配置页(需求 R6.5,UI 对齐 SkillHub 插件广场)
+ *
+ * 注册到 `sidebar.footer.action` 槽位:与设置按钮同级的侧栏页脚动作:
+ *  - 触发器:🐟 AquaSense 配置(wide 显示文字,rail 仅图标,悬停/展开态对齐侧栏导航项);
+ *  - 点击在会话列上打开独立配置页(createPortal 到 body,fixed 定位,随会话列尺寸变化);
+ *  - 页顶二级标题「每日任务提醒」+ 右上角 × 关闭;
+ *  - Esc / 点击面板外关闭(交互与布局对齐 SkillHub 插件广场页面)。
+ *
+ * 配置内容复用 RemindForm(与设置页卡片同一份实现)。
+ */
+import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { RemindForm, useRemindConfig } from './RemindForm.js';
+const STYLE_ID = 'aquasense-config-style';
+/**
+ * 入口与配置页样式(类名 aqs- 前缀,令牌与尺寸对齐 SkillHub 的
+ * .sh-plaza-trigger / .sh-plaza-page / .sh-plaza-close 体系)。
+ */
+const CSS = `
+.aqs-wrap{width:100%}
+.aqs-wrap.rail{display:flex;justify-content:center}
+.aqs-trigger{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:calc(100% + 4px);height:42px;margin:4px -2px;padding:0 10px 0 8px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:14px;line-height:22px;cursor:pointer;overflow:hidden}
+.aqs-wrap.rail .aqs-trigger{width:36px;height:36px;margin:8px 0 10px;padding:0;justify-content:center;border-radius:50%;gap:0}
+.aqs-trigger:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
+.aqs-trigger.on,.aqs-trigger[aria-expanded=true]{background:var(--dsw-specific-sidebar-nav-item-active,#ebeef2)}
+.aqs-ico{flex:none;width:16px;height:16px;display:grid;place-items:center;font-size:14px;line-height:1}
+.aqs-wrap.rail .aqs-ico{width:18px;height:18px;font-size:16px}
+.aqs-txt{white-space:nowrap;overflow:hidden}
+.aqs-page{position:fixed;z-index:40;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#17191c)}
+.aqs-top{display:flex;align-items:center;gap:16px;flex:none;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
+.aqs-title{margin:0;font-size:15px;font-weight:600;line-height:22px}
+.aqs-close{margin-left:auto;width:32px;height:32px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-3,#fff);cursor:pointer;font-size:18px;line-height:1;color:var(--dsw-alias-label-secondary,#4b5563)}
+.aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
+.aqs-body{flex:1;min-height:0;overflow:auto;padding:18px 20px 32px}
+.aqs-form{max-width:760px}
+`;
+/** 注入入口/配置页样式(幂等;返回无操作清理器以适配 ctx.effect) */
+export function ensureAquaConfigStyle() {
+    if (typeof document === 'undefined')
+        return () => { };
+    let style = document.getElementById(STYLE_ID);
+    if (!style) {
+        style = document.createElement('style');
+        style.id = STYLE_ID;
+        document.head.appendChild(style);
+    }
+    style.textContent = CSS;
+    return () => { };
+}
+/** 会话列根节点(SkillHub 同款定位锚点) */
+function conversationRoot() {
+    return typeof document === 'undefined' ? null : document.querySelector('[data-phase]');
+}
+/** 会话列矩形;无会话列时回退整窗(配置页不受会话状态限制) */
+function overlayBox() {
+    const root = conversationRoot();
+    if (root) {
+        const rect = root.getBoundingClientRect();
+        return { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+    }
+    return { top: 0, left: 0, width: window.innerWidth, height: window.innerHeight };
+}
+/** 跟踪会话列矩形(展开时随尺寸/滚动变化更新) */
+function useOverlayBox(active) {
+    const [box, setBox] = useState(null);
+    useEffect(() => {
+        if (!active) {
+            setBox(null);
+            return;
+        }
+        const update = () => {
+            setBox(overlayBox());
+        };
+        update();
+        const root = conversationRoot();
+        const observer = root && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+        if (root && observer)
+            observer.observe(root);
+        window.addEventListener('resize', update);
+        window.addEventListener('scroll', update, true);
+        return () => {
+            if (observer)
+                observer.disconnect();
+            window.removeEventListener('resize', update);
+            window.removeEventListener('scroll', update, true);
+        };
+    }, [active]);
+    return box;
+}
+/** 配置页(portal 内容):二级标题 + 右上角关闭 + 共享表单 */
+function AquaConfigPage({ box, t, api, onClose }) {
+    const model = useRemindConfig(api, t);
+    useEffect(() => {
+        const onKey = (event) => {
+            if (event.key !== 'Escape')
+                return;
+            event.preventDefault();
+            onClose();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => {
+            window.removeEventListener('keydown', onKey);
+        };
+    }, [onClose]);
+    return (_jsxs("div", { className: "aqs-page", role: "dialog", "aria-modal": "false", "aria-label": t('page.title'), style: { top: box.top, left: box.left, width: box.width, height: box.height }, children: [_jsxs("div", { className: "aqs-top", children: [_jsx("h2", { className: "aqs-title", children: t('page.title') }), _jsx("button", { type: "button", className: "aqs-close", onClick: onClose, "aria-label": t('page.close'), title: t('page.close'), children: "\u00D7" })] }), _jsx("div", { className: "aqs-body", children: _jsx("div", { className: "aqs-form", children: _jsx(RemindForm, { model: model, t: t }) }) })] }));
+}
+/**
+ * 渲染侧栏页脚入口:触发器 + (展开时)配置页 portal。
+ * @param props - owner 共享位(wide)+ locale 座位(t)+ 注入面(api)。
+ * @returns 入口元素。
+ */
+export function AquaConfigEntry({ wide, t, api }) {
+    useEffect(() => {
+        ensureAquaConfigStyle();
+    }, []);
+    const [open, setOpen] = useState(false);
+    const box = useOverlayBox(open);
+    const close = useCallback(() => {
+        setOpen(false);
+    }, []);
+    // 点击面板与入口之外关闭(对齐 SkillHub 插件广场)
+    useEffect(() => {
+        if (!open)
+            return;
+        const onPointer = (event) => {
+            const target = event.target;
+            if (target instanceof Element && target.closest('.aqs-page, .aqs-wrap'))
+                return;
+            close();
+        };
+        document.addEventListener('pointerdown', onPointer, true);
+        return () => {
+            document.removeEventListener('pointerdown', onPointer, true);
+        };
+    }, [open, close]);
+    const panel = open && box && typeof document !== 'undefined'
+        ? createPortal(_jsx(AquaConfigPage, { box: box, t: t, api: api, onClose: close }), document.body)
+        : null;
+    return (_jsxs("div", { className: 'aqs-wrap' + (wide ? '' : ' rail'), children: [_jsxs("button", { type: "button", className: 'aqs-trigger' + (open ? ' on' : ''), "aria-label": t('entry.label'), "aria-expanded": open, onClick: () => {
+                    setOpen((value) => !value);
+                }, children: [_jsx("span", { className: "aqs-ico", "aria-hidden": "true", children: "\uD83D\uDC1F" }), wide ? _jsx("span", { className: "aqs-txt", children: t('entry.label') }) : null] }), panel] }));
+}

@@ -2,7 +2,7 @@
 
 > - 总文档：[architecture.md](./architecture.md)（本文为其 S9 专题**分文档**，展开模块级/接口级设计；总文档仅保留概述与引用）
 > - 需求依据：[requirements.md §R6](./requirements.md)
-> - 状态：✅ 已实现（V2 插件内调度 + 原型 3 设置页；见 §3.6 与 §8.5）
+> - 状态：✅ 已实现（V2 插件内调度 + 原型 3 双入口；v1.7 起侧栏一级入口「🐟 AquaSense 配置」+ 会话列独立配置页；见 §3.6 与 §8.5）
 
 ---
 
@@ -228,13 +228,14 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 
 > 对应需求 R6.5 原型 3「管理员配置界面」。Host 侧文件 `src/web/remind-gateway.ts`，浏览器侧 `src/client/`。
 
-**入口与偏差说明**：
+**入口与实现（v1.7 起为双入口）**：
 
 | 项 | 说明 |
 |------|------|
 | 需求原文 | DSH 界面中 AquaSense 插件一级按钮位于**设置图标上方**，点击跳转设置网页 |
-| 平台核实 | DSH 客户端插件无「设置图标上方一级按钮」注册面；合规设置入口为 **设置 → 插件 → 插件配置** tab |
-| 实现入口 | 「插件配置」tab 内以插件卡片承载本设置页（`settings.plugin.item` 键位槽） |
+| 平台核实 | 设置座位旁的一级动作注册面为 `sidebar.footer.action` 列表槽（`@deepseek-ai/dsh-client-ui-sidebar` 声明，owner `{ wide }`，渲染于设置座位旁的 footerActions 容器）；v1.5「无此注册面」结论已由 v1.7 修正 |
+| 主入口（v1.7） | 侧栏页脚「🐟 AquaSense 配置」一级按钮（与设置按钮同级）：点击在会话列上打开**独立配置页**（`src/client/AquaConfig.tsx`，portal + fixed 定位，顶栏二级标题 + 右上角关闭） |
+| 备用入口（v1.5） | 设置 → 插件 → 插件配置 tab 内的**设置卡片**（`settings.plugin.item` 键位槽） |
 
 **配对机制（Host ↔ 浏览器）**：
 
@@ -247,9 +248,10 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 ```
 浏览器半侧 (dist/client.js)                     插件进程 (Host)
 ┌────────────────────────────┐    POST      ┌─────────────────────────────────────┐
-│ RemindCard (React)         │ ───────────▶ │ /aquasense-remind/api/{method}      │
-│  ├─ api.ts    fetch 封装   │   信封回包    │  handleRemindHttp（协议层/校验）      │
-│  └─ locales.ts zh/en 字典  │ ◀─────────── │   └─ createRemindApi（分发）          │
+│ AquaConfigEntry(侧栏入口)  │ ───────────▶ │ /aquasense-remind/api/{method}      │
+│  ├─ AquaConfigPage(配置页) │   信封回包    │  handleRemindHttp（协议层/校验）      │
+│  └─ RemindCard(设置卡片)   │ ◀─────────── │   └─ createRemindApi（分发）          │
+│      └ RemindForm(共享表单)│              │                                      │
 └────────────────────────────┘              │        ├─ get    → 配置 + 当日状态    │
                                             │        ├─ save   → 写 config.json     │
                                             │        │           + 重建当日计划     │
@@ -284,6 +286,14 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 - 头部为「展开区 + 独立收起按钮」：展开区（标题/描述/未保存徽标，`aria-expanded`）+ 28×28 独立按钮（内嵌箭头，展开态 `rotate(180deg)`，`aria-label` 收起/展开）
 - 展开态卡底色切换为 `--dsw-alias-bg-layer-2`；未保存徽标用 warn 色（`--dsw-alias-state-warn-*`）；字段间分隔线；输入框 `--dsw-specific-input-major`
 - 底部操作区：「发送测试 / 放弃修改 / 保存配置」，错误信息在操作行左侧（`--dsw-alias-state-error-primary`）；主按钮用 `--dsw-alias-button-primary-fill`，禁用态 `opacity:.4`
+
+**配置页 UI（v1.7，对齐 SkillHub 插件广场）**：
+
+- 侧栏入口（`sidebar.footer.action`）：宽态为 42px 行内「🐟 + AquaSense 配置」；56px 收起轨道为 36×36 圆形图标按钮；悬停/展开态复用侧栏导航项令牌
+- 配置页：`createPortal` 至 body，`fixed` 覆盖会话列（`[data-phase]` 矩形，经 ResizeObserver 跟踪尺寸变化与滚动；无会话列回退整窗）；顶栏为二级标题「每日任务提醒」（h2）+ 右上角 32×32 关闭按钮；内容区最大宽度 760px
+- 交互：Esc / 点击面板外关闭（忽略面板与入口内的 pointerdown）
+- 表单复用：配置页与设置卡共用 `RemindForm.tsx`（`useRemindConfig` 数据层 + `RemindForm` 视图）
+- 样式注入：`ensureAquaConfigStyle()` 幂等写入 `<style id="aquasense-config-style">`（类名 `aqs-` 前缀，经 `ctx.effect` 挂载）
 
 **降级**：
 
@@ -508,8 +518,10 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | 文件路径 | 变更 | 说明 |
 |----------|------|------|
 | `src/web/remind-gateway.ts` | 新增 | Host 侧：settings 命名空间注册 + `/aquasense-remind/api` 路由（校验/协议层/群列表） |
-| `src/client/index.ts` | 新增 | 浏览器侧入口：字典注册 + `settings.plugin.item` 卡片注册 |
-| `src/client/RemindCard.tsx` | 新增 | 设置卡片组件（启用开关/群选择/任务增删/保存/测试/状态行） |
+| `src/client/index.ts` | 新增 | 浏览器侧入口：字典注册 + `settings.plugin.item` 卡片注册 + `sidebar.footer.action` 侧栏入口注册 |
+| `src/client/RemindCard.tsx` | 新增 | 设置卡片外壳（标题/描述/未保存徽标/展开收起）+ 内嵌 RemindForm |
+| `src/client/RemindForm.tsx` | 新增（v1.7） | 共享表单：`useRemindConfig` 数据层 + `RemindForm` 视图（卡片与配置页复用） |
+| `src/client/AquaConfig.tsx` | 新增（v1.7） | 侧栏一级入口 + 会话列独立配置页（portal 定位 / Esc 与外点关闭 / `aqs-` 样式注入） |
 | `src/client/api.ts` | 新增 | 浏览器侧 API 封装（信封解包） |
 | `src/client/locales.ts` | 新增 | 卡片文案 zh/en 字典 |
 | `src/web/remind-gateway.test.ts` | 新增 | gateway 单元测试（校验/分发/协议层，26 例） |
