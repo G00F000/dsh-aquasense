@@ -98,6 +98,9 @@ export declare function normalizeOcrText(text: string): string;
 export declare function searchPdfContent(query: string, indexDir: string): PdfSearchHit[];
 /** 检查索引是否可用:文件存在且未过期(过期仅告警不阻断,由 kb:warm 重建) */
 export declare function isPdfIndexReady(indexDir: string): boolean;
+export type PdfIndexStatus = 'ready' | 'not_found' | 'expired';
+/** 检查索引状态:区分「不存在」与「过期」,便于调用方给出精准提示 */
+export declare function getPdfIndexStatus(indexDir: string): PdfIndexStatus;
 /** 获取索引元数据(不加载完整索引) */
 export declare function getPdfIndexMeta(indexDir: string): PdfIndexMeta | null;
 /**

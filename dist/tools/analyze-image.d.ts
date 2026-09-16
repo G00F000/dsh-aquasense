@@ -16,5 +16,13 @@ export interface AnalysisResult {
     confidence: number;
     /** 图片场景提示:视觉模型判断该图属于哪类业务场景,供意图路由补充文字缺失时的分类 */
     scene_hint: SceneHint;
+    /** 实际分析的图片数量(由调用方设置,解析函数不填充) */
+    image_count?: number;
+    /** 解剖场景下可见的器官列表(仅 scene_hint=dissection 时填充;枚举与 record-ledger DISSECTION_ORGAN_OPTIONS 一致) */
+    organs?: string[];
+    /** 工人发送的图片总数(由调用方通过 expected_image_count 传入,用于检测丢失) */
+    expected_image_count?: number;
+    /** 数据完整性标记:图片齐全时为 'complete',有图片丢失时标注丢失详情 */
+    data_completeness?: 'complete' | 'partial' | 'empty';
 }
 export declare const analyzeImage: import("@deepseek-ai/dsh-tools").ToolDefinition;

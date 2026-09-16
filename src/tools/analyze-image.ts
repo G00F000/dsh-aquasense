@@ -8,6 +8,7 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { pushAbnormalAlert } from '../scheduler/s9-reminder.js'
 
 export type SceneHint = 'inspection' | 'death' | 'water_quality' | 'medication' | 'feeding' | 'temperature' | 'dissection'
 
@@ -178,6 +179,17 @@ export const analyzeImage = defineTool({
       ]
       result.severity = 'low'
       result.confidence = 0.3
+    }
+
+    // 异常自动预警(S9 卡片 C,见 docs/s9-daily-reminder-architecture.md §4.3)
+    // 不阻断主链路:异步推送,失败仅记录日志(pushAbnormalAlert 内部全量捕获)
+    if (result.abnormal && (result.cls === 'early' || result.cls === 'disease')) {
+      void pushAbnormalAlert({
+        poolId: args.pool_id,
+        cls: result.cls,
+        symptoms: result.symptoms,
+        severity: result.severity
+      })
     }
 
     return result

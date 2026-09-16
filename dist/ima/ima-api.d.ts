@@ -1,6 +1,6 @@
 /**
  * IMA API 封装模块
- * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)与 daily-reminder(S9 手册读取)调用。
+ * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)等主链路调用。
  *
  * 检索层(三通道互补):
  *  - searchKnowledge:知识库检索(wiki/v1/search_knowledge),仅索引名称(文件名/文件夹名),正文词命中为 0。

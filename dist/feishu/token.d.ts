@@ -1,6 +1,6 @@
 /**
  * 飞书 tenant_access_token 获取与进程内缓存
- * 供 record-ledger(台账写入)与 daily-reminder(S9 推送)复用,避免每个工具各自实现鉴权。
+ * 供 record-ledger(台账写入)与 s9-reminder(S9 推送)复用,避免每个工具各自实现鉴权。
  */
 /**
  * 获取飞书 tenant_access_token(自动缓存,官方有效期 2 小时,提前 5 分钟过期)

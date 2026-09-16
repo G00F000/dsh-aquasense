@@ -1,6 +1,6 @@
 /**
  * IMA API 封装模块
- * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)与 daily-reminder(S9 手册读取)调用。
+ * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)等主链路调用。
  *
  * 检索层(三通道互补):
  *  - searchKnowledge:知识库检索(wiki/v1/search_knowledge),仅索引名称(文件名/文件夹名),正文词命中为 0。
@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { extractText, getDocumentProxy } from 'unpdf';
-import { isPdfIndexReady, pdfHitToKnowledgeItem, searchPdfContent } from './pdf-content-search.js';
+import { isPdfIndexReady, pdfHitToKnowledgeItem, searchPdfContent, getPdfIndexStatus } from './pdf-content-search.js';
 const IMA_BASE_URL = 'https://ima.qq.com';
 /**
  * 获取 IMA API 凭证
@@ -209,7 +209,7 @@ export function resolveCacheRoot() {
         return configured;
     return process.platform === 'win32' ? 'D:\\data\\aquasense\\cache' : '/data/aquasense/cache';
 }
-/** 正文缓存子目录(pdf/note;与 daily-reminder 共用 resolveCacheRoot 约定) */
+/** 正文缓存子目录(pdf/note;与 s9-reminder(remind/)共用 resolveCacheRoot 约定) */
 function cacheSubdir(sub) {
     const dir = join(resolveCacheRoot(), sub);
     mkdirSync(dir, { recursive: true });
@@ -389,6 +389,8 @@ export async function getMediaContent(mediaId) {
 // ========== 检索层:三通道合并(方案 D) ==========
 /** PDF 原文索引目录(kb:warm 构建;索引缺失时通道 C 自动跳过) */
 const PDF_INDEX_DIR = join(resolveCacheRoot(), 'pdf-index');
+/** 模块级标记:通道 C 降级警告只输出一次(避免每次检索都刷屏) */
+let pdfIndexWarned = false;
 /** 累加一次检索结果到命中池(同一标识保留首条,重复命中累加计数) */
 function collectHits(result, pool) {
     for (const item of result.items) {
@@ -450,7 +452,16 @@ export async function searchKnowledgeMerged(rawQuery) {
         }
     }
     // 通道 C:本地 PDF 原文检索(索引未构建/已过期时自动跳过)
-    const pdfHits = isPdfIndexReady(PDF_INDEX_DIR) ? searchPdfContent(rawQuery, PDF_INDEX_DIR) : [];
+    const pdfIndexReady = isPdfIndexReady(PDF_INDEX_DIR);
+    if (!pdfIndexReady && !pdfIndexWarned) {
+        const status = getPdfIndexStatus(PDF_INDEX_DIR);
+        const hint = status === 'not_found'
+            ? '索引未构建,请运行 npm run kb:warm'
+            : '索引已过期,请运行 npm run kb:warm 重建';
+        console.warn(`[ima] 通道 C(PDF 原文检索)不可用:${hint}`);
+        pdfIndexWarned = true;
+    }
+    const pdfHits = pdfIndexReady ? searchPdfContent(rawQuery, PDF_INDEX_DIR) : [];
     const pdfItems = pdfHits.map((hit) => pdfHitToKnowledgeItem(hit));
     // 三通道合并去重
     const merged = [];

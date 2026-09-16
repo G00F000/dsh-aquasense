@@ -9,6 +9,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { searchKnowledgeMerged, getMediaContent, getNoteContentByNoteId } from '../ima/ima-api.js';
+import { normalizeOcrText } from '../ima/pdf-content-search.js';
 export const generateAdvice = defineTool({
     name: 'aquasense_advice',
     description: '基于分析结果和知识库生成处置建议。自动查询 IMA 知识库,读取命中条目正文(PDF/笔记)摘取原文引用,按严重程度分级。',
@@ -201,7 +202,9 @@ async function extractExcerpts(items, keywords) {
                 continue;
             }
             // 2. 无高亮:读正文摘取(note 命中走 note_id 直读,标识与 media_id 不同)
-            const content = item.from === 'note' ? await getNoteContentByNoteId(item.media_id) : await getMediaContent(item.media_id);
+            const rawContent = item.from === 'note' ? await getNoteContentByNoteId(item.media_id) : await getMediaContent(item.media_id);
+            // OCR 缓存文件以 [OCR 批处理 ...] 开头,归一化剥离后即为正文;不剥离会被 startsWith('[') 误判为状态标记
+            const content = rawContent ? normalizeOcrText(rawContent).trim() : rawContent;
             if (!content || content.startsWith('[')) {
                 console.log(`[aquasense] 跳过不可读条目(《${item.title}》):${(content || '').slice(0, 60)}`);
                 continue;

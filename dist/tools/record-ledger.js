@@ -51,6 +51,10 @@ const AI_ANALYSIS_COLUMN = {
 };
 /** dissection 场景「解剖器官」下拉框选项(多选;须与飞书表格选项一致,写入值只能是其中之一) */
 const DISSECTION_ORGAN_OPTIONS = ['体表', '鳃', '肝', '胆囊', '肠', '脾', '鳔', '肾', '腹腔'];
+/** 池号白名单:与清徐基地循环水池编号一致,防止任意文本写入台账 */
+const VALID_POOL_IDS = new Set(['池1', '池2', '池3', '池4']);
+/** 上报人占位符/猜测值黑名单:这些值不允许写入台账,必须通过 open_id 解析或追问获得真实姓名 */
+const REPORTER_BLOCKLIST = new Set(['未知', 'unknown', '未知用户', '模型猜的名字', '未知上报人', '不确定', '暂无']);
 export const recordLedger = defineTool({
     name: 'aquasense_ledger',
     description: '将巡检记录写入飞书多维表格。scene 选择表格,池号必填;缺池号时返回追问。同一池号 30 分钟内重复写入会自动更新已有记录。',
@@ -93,6 +97,15 @@ export const recordLedger = defineTool({
         const scene = (args.scene || 'inspection');
         const bitableToken = process.env.FEISHU_BITABLE_APP_TOKEN;
         const tableId = process.env[SCENE_TABLE_ENV[scene]];
+        // inspection 场景需要图片进行分析:缺失时返回追问
+        if (scene === 'inspection' && (!args.images || args.images.length === 0)) {
+            return {
+                success: false,
+                message: 'inspection 场景需要图片进行分析,请补充图片后重试',
+                missing: ['image'],
+                questions: ['请发送巡检照片(支持拍照后直接发送)']
+            };
+        }
         if (!bitableToken || !tableId) {
             return {
                 success: false,
@@ -101,7 +114,17 @@ export const recordLedger = defineTool({
         }
         // 池号校验:缺失时返回追问(Agent 转述给工人),不落脏数据
         const fields = args.fields;
-        const rawPoolId = fields?.['池号'] ?? args.pool_id;
+        // pool_id 与 fields.池号 冲突检测:两者都有值且不同时拒绝写入,防止静默覆盖
+        // 必须在 ?? 合并之前做,否则比较永远相等(死代码)
+        const fieldPoolId = fields?.['池号'] !== undefined ? String(fields['池号']).trim() : undefined;
+        const argPoolId = args.pool_id?.trim();
+        if (fieldPoolId && argPoolId && fieldPoolId !== argPoolId) {
+            return {
+                success: false,
+                message: `池号冲突:args.pool_id="${argPoolId}" 与 fields.池号="${fieldPoolId}" 不一致,请统一使用一个值。`
+            };
+        }
+        const rawPoolId = fieldPoolId ?? argPoolId;
         if (!rawPoolId) {
             return {
                 success: false,
@@ -111,6 +134,15 @@ export const recordLedger = defineTool({
             };
         }
         const poolId = String(rawPoolId);
+        // 池号白名单校验:防止 "1号池" 等非标文本写入(与去重精确匹配冲突)
+        if (!VALID_POOL_IDS.has(poolId)) {
+            return {
+                success: false,
+                message: `池号「${poolId}」不在允许范围内,合法值为:池1/池2/池3/池4`,
+                missing: ['pool_id'],
+                questions: ['池号有误,请问是池1、池2、池3还是池4?']
+            };
+        }
         // 自动解析汇报人:必须以发消息用户的 open_id 为准,防止记忆/猜测中的姓名顶替真实上报人
         // reporter 仅作兜底:拿不到 open_id 或解析失败时才使用
         let reporterName = '';
@@ -118,47 +150,139 @@ export const recordLedger = defineTool({
             reporterName = await getFeishuUserName(args.open_id);
         }
         if (!reporterName) {
-            reporterName = args.reporter || '';
+            const fallback = (args.reporter || '').trim();
+            if (!fallback || REPORTER_BLOCKLIST.has(fallback)) {
+                return {
+                    success: false,
+                    message: `无法识别上报人:open_id 解析失败,且提供的 reporter 值「${fallback || '(空)'}」不可用。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
+                    missing: ['open_id'],
+                    questions: ['请问上报人是谁?(将记入台账)']
+                };
+            }
+            reporterName = fallback;
         }
         // 非 inspection 场景必须提供 fields:缺失时返回列名提示(Agent 补全后重调)
-        if (scene !== 'inspection' && !(fields && Object.keys(fields).length > 0)) {
+        // mutableFields:局部可变引用,dissection 回退 analysis.organs 时可能需要初始化
+        const mutableFields = fields ? { ...fields } : undefined;
+        if (scene !== 'inspection' && !(mutableFields && Object.keys(mutableFields).length > 0)) {
             return {
                 success: false,
                 message: `scene=${scene} 需要提供 fields(键为表格实际列名),可选列:${SCENE_COLUMNS[scene].join('、')}`
             };
         }
         // dissection 场景:「解剖器官」只允许下拉框选项,归一为多选数组,不写入自由文本
-        if (scene === 'dissection' && fields && fields['解剖器官'] !== undefined) {
-            const { organs, unknown } = normalizeDissectionOrgans(fields['解剖器官']);
-            if (organs.length === 0) {
+        // 优先级:Agent 显式提供的 fields["解剖器官"] > analysis.organs(视觉模型识别) > 追问
+        if (scene === 'dissection') {
+            const analysisOrgans = args.analysis?.organs;
+            if (fields && fields['解剖器官'] !== undefined) {
+                // Agent 显式提供:归一化校验
+                const { organs, unknown } = normalizeDissectionOrgans(fields['解剖器官']);
+                if (organs.length === 0) {
+                    return {
+                        success: false,
+                        message: `「解剖器官」只能从下拉选项中选择(当前值 ${JSON.stringify(fields['解剖器官'])} 无法识别)。合法选项:${DISSECTION_ORGAN_OPTIONS.join('/')}`,
+                        missing: ['解剖器官'],
+                        questions: [`解剖器官请从以下选项中选(可多选):${DISSECTION_ORGAN_OPTIONS.join('/')}`]
+                    };
+                }
+                if (unknown.length > 0) {
+                    console.warn(`[aquasense] 解剖器官忽略无法识别的内容:${unknown.join('、')}`);
+                }
+                fields['解剖器官'] = organs;
+            }
+            else if (Array.isArray(analysisOrgans) && analysisOrgans.length > 0) {
+                // 回退到视觉模型识别的 organs(已归一化,可直接使用)
+                if (!mutableFields) {
+                    const newFields = { '解剖器官': analysisOrgans };
+                    args.fields = newFields;
+                }
+                else {
+                    mutableFields['解剖器官'] = analysisOrgans;
+                    args.fields = mutableFields;
+                }
+                console.log(`[aquasense] dissection 回退:使用 aquasense_analyze 识别的器官 [${analysisOrgans.join('/')}]`);
+            }
+            else {
+                // 两处都无值:照旧追问
                 return {
                     success: false,
-                    message: `「解剖器官」只能从下拉选项中选择(当前值 ${JSON.stringify(fields['解剖器官'])} 无法识别)。合法选项:${DISSECTION_ORGAN_OPTIONS.join('/')}`,
+                    message: `dissection 场景需要「解剖器官」字段(下拉框选项)。请从以下选项中选(可多选):${DISSECTION_ORGAN_OPTIONS.join('/')}`,
                     missing: ['解剖器官'],
                     questions: [`解剖器官请从以下选项中选(可多选):${DISSECTION_ORGAN_OPTIONS.join('/')}`]
                 };
             }
-            if (unknown.length > 0) {
-                console.warn(`[aquasense] 解剖器官忽略无法识别的内容:${unknown.join('、')}`);
-            }
-            fields['解剖器官'] = organs;
         }
         // 上报人仍无法确定(fields 也未显式提供人列):返回追问,不写"未知"等脏数据
+        // 同时拦截占位符值(如 "未知")写入台账
         const reporterCol = REPORTER_COLUMN[scene];
-        const fieldReporter = reporterCol && fields ? fields[reporterCol] : undefined;
-        if (!reporterName && !fieldReporter) {
+        const fieldReporter = reporterCol && fields ? String(fields[reporterCol] || '') : '';
+        const isValidReporter = (name) => name.trim() && !REPORTER_BLOCKLIST.has(name.trim());
+        if (!isValidReporter(reporterName) && !isValidReporter(fieldReporter)) {
             return {
                 success: false,
-                message: `无法识别上报人:缺少当前消息发送者的 open_id,且未提供「${reporterCol ?? '上报人'}」。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
+                message: `无法识别上报人:缺少当前消息发送者的 open_id,且未提供有效的「${reporterCol ?? '上报人'}」。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
                 missing: ['open_id'],
                 questions: ['请问上报人是谁?(将记入台账)']
             };
         }
-        const recordFields = await buildFields(scene, args, poolId, reporterName);
+        let recordFields;
+        try {
+            recordFields = await buildFields(scene, args, poolId, reporterName);
+        }
+        catch (error) {
+            return {
+                success: false,
+                message: error instanceof Error ? error.message : String(error),
+                questions: scene === 'inspection' ? ['AI 分析结果无效,请先让工人拍摄清晰照片并重新分析后再落表。'] : undefined
+            };
+        }
         // 查询 30 分钟内同池号已有记录(存在则更新,否则新增)
         const token = await getFeishuToken();
         const timeColumn = SCENE_TIME_COLUMN[scene];
         const recentRecord = await findRecentRecord(token, bitableToken, tableId, poolId, timeColumn);
+        // dissection 场景:每个器官独立一条记录,不合并
+        if (scene === 'dissection') {
+            const organValue = recordFields['解剖器官'];
+            const organList = Array.isArray(organValue) ? organValue : [organValue];
+            try {
+                const recordIds = [];
+                for (const organ of organList) {
+                    // 每个器官独立一行:从 recordFields 派生,「解剖器官」只放单个值
+                    const organFields = { ...recordFields, '解剖器官': [organ] };
+                    // 30 分钟内有同池号记录时,合并公共字段(池号/汇报人/时间/AI辅助判断),不跨器官合并
+                    if (recentRecord) {
+                        const { '解剖器官': _oldOrgan, ...commonFields } = recentRecord.fields;
+                        Object.assign(organFields, commonFields);
+                    }
+                    const response = await fetch(`https://open.feishu.cn/open-apis/bitable/v1/apps/${bitableToken}/tables/${tableId}/records`, {
+                        method: 'POST',
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ fields: organFields })
+                    });
+                    const result = (await response.json());
+                    if (result.code === 0 && result.data?.record?.record_id) {
+                        recordIds.push(result.data.record.record_id);
+                    }
+                    else {
+                        console.error(`[aquasense] dissection 器官「${organ}」写入失败:${result.msg}`);
+                    }
+                }
+                if (recordIds.length > 0) {
+                    return {
+                        success: true,
+                        message: `已写入台账(scene=${scene},${recordIds.length} 条记录,器官:${organList.join('/')})`,
+                        record_id: recordIds[0]
+                    };
+                }
+                return { success: false, message: `所有器官写入失败` };
+            }
+            catch (error) {
+                return { success: false, message: `操作异常:${error instanceof Error ? error.message : String(error)}` };
+            }
+        }
         try {
             if (recentRecord) {
                 // 更新已有记录(合并字段,保留未覆盖的旧值)
@@ -238,10 +362,25 @@ function normalizeDissectionOrgans(value) {
 }
 /**
  * 批量上传图片 URL 到飞书云文档,返回 Bitable 附件格式数组
+ * 逐张容错:单张失败不影响其余图片写入
  */
 async function uploadImages(urls) {
-    const results = await Promise.all(urls.map((url) => uploadImageToFeishu(url)));
-    return results.filter((r) => r !== null);
+    const results = await Promise.allSettled(urls.map((url) => uploadImageToFeishu(url)));
+    const succeeded = [];
+    for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === 'fulfilled' && r.value !== null) {
+            succeeded.push(r.value);
+        }
+        else {
+            const reason = r.status === 'rejected' ? (r.reason?.message ?? String(r.reason)) : 'uploadImageToFeishu returned null';
+            console.error(`[aquasense] image[${i}] upload failed, skipped: ${reason}`);
+        }
+    }
+    if (succeeded.length < urls.length) {
+        console.warn(`[aquasense] image upload summary: ${succeeded.length}/${urls.length} succeeded`);
+    }
+    return succeeded;
 }
 /** 查询 30 分钟内同池号的最近一条记录(用于判断更新还是新增) */
 async function findRecentRecord(token, appToken, tableId, poolId, timeColumn) {
@@ -269,6 +408,28 @@ async function buildFields(scene, args, poolId, reporterName) {
     const analysis = args.analysis;
     const advice = args.advice;
     const fields = {};
+    // inspection 场景:analysis 缺失或 cls 为 unknown 时拒绝落表(避免将未分析记录伪装成健康记录)
+    if (scene === 'inspection') {
+        if (!analysis || analysis.cls === 'unknown') {
+            throw new Error('inspection 场景缺少有效 AI 分析结果(analysis.cls 为 unknown 或未提供),无法写入台账。请先调用 aquasense_analyze 获取分析结果。');
+        }
+        // 防漏诊:图片数据不完整时,禁止将 normal 结论写入台账
+        // 场景:工人发了 N 张图,harness 丢了 M 张,视觉模型只看到 N-M 张就判定 normal
+        // 此时 normal 结论不可靠——丢失的图可能包含病灶(已有实际案例:5 张图丢了 4 张,实际为 disease)
+        const dataComplete = analysis.data_completeness;
+        if (dataComplete === 'partial' || dataComplete === 'empty') {
+            const received = analysis.image_count ?? 0;
+            const expected = analysis.expected_image_count ?? '?';
+            throw new Error(`图片数据不完整(获取 ${received}/${expected} 张),无法给出可靠的诊断结论。` +
+                `当前基于部分图片的分析结果不可作为落表依据。请等待图片补全或人工现场复核后再落表。`);
+        }
+    }
+    // symptoms 归一化:模型可能返回字符串而非数组,统一为数组防止 .join() TypeError
+    const normalizedSymptoms = Array.isArray(analysis?.symptoms)
+        ? analysis.symptoms.filter((s) => typeof s === 'string')
+        : typeof analysis?.symptoms === 'string'
+            ? [analysis.symptoms]
+            : [];
     // 显式 fields 优先(其他场景必须由 Agent 提供)
     if (args.fields && Object.keys(args.fields).length > 0) {
         Object.assign(fields, args.fields);
@@ -277,6 +438,21 @@ async function buildFields(scene, args, poolId, reporterName) {
         const reporterCol = REPORTER_COLUMN[scene];
         if (reporterCol && reporterName) {
             fields[reporterCol] = reporterName;
+        }
+        // 自动填充时间列:时间列缺失时填入当前时间戳(非巡检场景 Agent 可能漏传)
+        const timeCol = SCENE_TIME_COLUMN[scene];
+        if (timeCol && !(timeCol in fields)) {
+            fields[timeCol] = Date.now();
+        }
+        else if (timeCol && timeCol in fields) {
+            // Agent 传入字符串日期(如 "2026-03-01 08:20")时自动解析为毫秒时间戳
+            const timeVal = fields[timeCol];
+            if (typeof timeVal === 'string') {
+                const parsed = Date.parse(timeVal);
+                if (!Number.isNaN(parsed)) {
+                    fields[timeCol] = parsed;
+                }
+            }
         }
         // 自动填充「图片」字段(未显式提供时)
         if (!('图片' in fields) && args.images?.length) {
@@ -296,7 +472,7 @@ async function buildFields(scene, args, poolId, reporterName) {
         '巡检时间': Date.now(),
         '巡检人': reporterName,
         '鱼群状态': analysis?.cls || 'normal',
-        '症状描述': analysis?.symptoms?.join('、') || '',
+        '症状描述': normalizedSymptoms.join('、'),
         '严重程度': analysis?.severity || 'low',
         'AI诊断': advice?.diagnosis_summary || analysis?.cls || '',
         '处置建议': advice?.immediate_actions?.join('; ') || '',

@@ -7,7 +7,7 @@
  *  - aquasense_ledger    :写入飞书多维表格台账(S1-S8 落表)
  *
  * 意图路由(intent-router)为纯函数模块,由消息宿主/Agent 技能调用,不注册为 Tool;
- * S9 定时提醒由独立的 daily-reminder 调度器进程负责,与本插件并行运行。
+ * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。
  */
 import type { Context } from '@deepseek-ai/cordis';
 export declare const name = "aquasense-plugin";

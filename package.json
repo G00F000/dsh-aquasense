@@ -7,9 +7,6 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "dsh-aquasense-remind": "./dist/scheduler/daily-reminder.js"
-  },
   "files": [
     "dist",
     "cordis.patch.yml",
@@ -35,8 +32,6 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepare": "npm run build",
-    "remind": "tsx src/scheduler/daily-reminder.ts",
-    "remind:prod": "node dist/scheduler/daily-reminder.js",
     "kb:warm": "tsx src/scripts/warm-kb-cache.ts",
     "ocr": "tsx src/scripts/ocr-scanned-pdfs.ts",
     "test": "vitest run"

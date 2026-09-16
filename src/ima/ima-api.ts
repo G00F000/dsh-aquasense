@@ -1,6 +1,6 @@
 /**
  * IMA API 封装模块
- * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)与 daily-reminder(S9 手册读取)调用。
+ * 封装 IMA 知识库查询接口,供 generate-advice(处置建议内置查询)等主链路调用。
  *
  * 检索层(三通道互补):
  *  - searchKnowledge:知识库检索(wiki/v1/search_knowledge),仅索引名称(文件名/文件夹名),正文词命中为 0。
@@ -279,7 +279,7 @@ export function resolveCacheRoot(): string {
   return process.platform === 'win32' ? 'D:\\data\\aquasense\\cache' : '/data/aquasense/cache'
 }
 
-/** 正文缓存子目录(pdf/note;与 daily-reminder 共用 resolveCacheRoot 约定) */
+/** 正文缓存子目录(pdf/note;与 s9-reminder(remind/)共用 resolveCacheRoot 约定) */
 function cacheSubdir(sub: string): string {
   const dir = join(resolveCacheRoot(), sub)
   mkdirSync(dir, { recursive: true })

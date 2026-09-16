@@ -7,13 +7,14 @@
  *  - aquasense_ledger    :写入飞书多维表格台账(S1-S8 落表)
  *
  * 意图路由(intent-router)为纯函数模块,由消息宿主/Agent 技能调用,不注册为 Tool;
- * S9 定时提醒由独立的 daily-reminder 调度器进程负责,与本插件并行运行。
+ * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { analyzeImage } from './tools/analyze-image.js'
 import { generateAdvice } from './tools/generate-advice.js'
 import { recordLedger } from './tools/record-ledger.js'
+import { setupS9Reminder } from './scheduler/s9-reminder.js'
 
 export const name = 'aquasense-plugin'
 export const inject = ['tools']
@@ -25,6 +26,9 @@ export function apply(ctx: Context) {
   ctx.tools.register(analyzeImage)
   ctx.tools.register(generateAdvice)
   ctx.tools.register(recordLedger)
+
+  // S9 每日任务提醒(插件内调度,enabled=false 时内部直接跳过)
+  setupS9Reminder(ctx)
 
   console.log('[aquasense] 工具加载完成')
   console.log('[aquasense] 知识库查询:generate-advice 内置 IMA API 自动查询')
