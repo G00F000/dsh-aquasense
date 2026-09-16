@@ -1,0 +1,458 @@
+# AquaSense 水产养殖 AI 巡检系统 — 需求文档
+
+> **版本**: v1.0 (已实现)
+> **基线日期**: 2026-09-16
+> **目标用户**: 清徐基地 4 池循环水鲈鱼养殖工人(飞书端)
+> **技术载体**: DeepSeek Harness 插件(dsh-aquasense)，配合 dsh-lark 桥接层对接飞书
+
+---
+
+## 一、系统定位
+
+AquaSense 是一个运行在 DeepSeek Harness 上的 AI 巡检插件，工人通过飞书群发消息（文字/图片）即可完成：
+1. 鱼体状态智能识别（视觉分析）
+2. 处置建议生成（知识库检索 + 推理）
+3. 巡检台账自动登记（飞书多维表格）
+
+---
+
+## 二、已实现需求清单
+
+### R1 — 图片视觉分析（aquasense_analyze）
+
+| 属性 | 说明 |
+|------|------|
+| 对应工具 | `aquasense_analyze` |
+| 实现文件 | `src/tools/analyze-image.ts` |
+| 状态 | ✅ 已实现 |
+
+#### R1.1 基本能力
+
+- [x] 调用 DeepSeek Vision 模型对图片进行分析
+- [x] 输出 6 项诊断结果：`cls`（分类）、`symptoms`（症状列表）、`severity`（严重度）、`confidence`（置信度）、`scene_hint`（场景提示）、`abnormal`（异常标记）
+- [x] 支持传入池号参数（pool），结果中显示所属池号
+
+#### R1.2 状态三分类
+
+- [x] `normal`：集群巡游、摄食积极 — 正常，仅登记
+- [x] `early`：离群独游、游动迟缓、蹭壁摩擦、呼吸急促、聚群不动 — 前兆，重点观察
+- [x] `disease`：浮头、侧翻失衡、烂身、白点、狂游乱窜、死亡漂浮 — 发病，紧急处置
+- [x] early 分类提供 12~48h 领先预警信号，不等待恶化
+
+#### R1.3 多图分析
+
+- [x] 单图入参：`image_data`（base64）或 `image_url`（HTTP URL）
+- [x] 多图入参：`image_data_list`（base64 数组）或 `image_urls`（URL 数组）
+- [x] 视觉模型一次性分析所有图片，给出统一的 scene_hint 和分析结论
+- [x] 多图内容差异大时取最严重场景落表，回复中说明各图内容
+- [x] `Promise.allSettled` 容错：部分图片下载失败不影响其他图片分析
+
+#### R1.4 数据完整性检测
+
+- [x] `expected_image_count`：期望图片总数，由 Agent 从消息上下文传入
+- [x] `data_completeness` 输出：`complete`（齐全）/ `partial`（部分丢失）/ `empty`（全部丢失）
+- [x] `partial` 时自动将 `cls` 从 `normal` 降级为 `unknown`，防止漏诊
+- [x] `image_count`：实际收到并成功分析的图片数量
+
+#### R1.5 诊断器官识别
+
+- [x] `organs`：视觉模型识别出的可见器官列表（如"体表"、"鳃"、"眼"）
+- [x] `expected_image_count`：基于 scene_hint 预估应有图片数，用于数据完整性检测
+
+#### R1.6 容错设计
+
+- [x] 图片下载失败（网络超时/404）：返回降级结果 `{cls:"unknown", symptoms:["图片获取失败"], severity:0, confidence:0}`
+- [x] 视觉模型 API 异常：返回降级结果，不抛出异常
+- [x] 描述(description)不进入视觉模型，仅用于意图路由，防止文字覆盖结论
+
+---
+
+### R2 — 处置建议生成（aquasense_advice）
+
+| 属性 | 说明 |
+|------|------|
+| 对应工具 | `aquasense_advice` |
+| 实现文件 | `src/tools/generate-advice.ts` |
+| 状态 | ✅ 已实现 |
+
+#### R2.1 IMA 知识库检索（三通道混合检索）
+
+- [x] **通道 A — wiki 标题检索**：调用 `wiki/v1/search_knowledge`，索引文件名/文件夹名
+- [x] **通道 B — note 正文检索**：调用 `note/v1/search_note`，索引正文并回带高亮原文
+- [x] **通道 C — PDF 原文检索**：本地索引 + 线性扫描 PDF 切片，在预热缓存上匹配原文
+- [x] 三通道由 `searchKnowledgeMerged` 统一合并
+
+#### R2.2 合并策略（方案 D）
+
+- [x] 优先级：note 高亮 > PDF 原文 > note 正文 > wiki 标题
+- [x] 配额限制：`noteHighlightLimit: 2`, `pdfContentLimit: 3`, `noteBodyLimit: 1`, `wikiLimit: 1`
+- [x] 总上限：`totalLimit: 7` 条
+- [x] 同一知识库条目跨通道命中时自动去重合并
+
+#### R2.3 三段式建议输出
+
+- [x] **knowledge_excerpt**：检索命中的知识库原文摘录
+- [x] **reasoning**：推理过程，含来源标注（PDF 原文 / 笔记正文）
+- [x] **diagnosis_summary**：最终诊断与处置摘要
+
+#### R2.4 安全约束
+
+- [x] disease 且知识库无命中时，明确建议"咨询专业兽医"，不代替兽医开药
+- [x] 不编造药方，所有建议基于知识库检索结果
+- [x] 遵循水产品质量安全相关法规
+
+---
+
+### R3 — 巡检台账写入（aquasense_ledger）
+
+| 属性 | 说明 |
+|------|------|
+| 对应工具 | `aquasense_ledger` |
+| 实现文件 | `src/tools/record-ledger.ts` |
+| 状态 | ✅ 已实现 |
+
+#### R3.1 七场景台账
+
+| 场景 | 表格 | 字段特点 |
+|------|------|----------|
+| S2 巡检记录 | inspection | 基于 analysis + advice 自动组装 |
+| S1 水质汇报 | water_quality | 溶氧/氨氮/pH/亚硝酸等水质指标 |
+| S4 死亡记录 | death | 死亡数量、预警级别、病因 |
+| S5 用药记录 | medication | 药品名称、用量、用药方式 |
+| S6 投喂记录 | feeding | 饲料类型、投喂量 |
+| S7 温度汇报 | temperature | 水温/棚温 |
+| S8 解剖记录 | dissection | 解剖器官、病变描述 |
+
+#### R3.2 池号管理
+
+- [x] 支持池1~池4（清徐基地 4 池循环水鲈鱼养殖）
+- [x] 池号白名单校验，缺失池号时追问
+- [x] 池号传入 `aquasense_analyze` 时用于结果展示，写入台账时作为必填字段
+
+#### R3.3 上报人自动解析
+
+- [x] 通过 `open_id` 调用飞书通讯录 API 自动解析真实姓名
+- [x] 填入「巡检人/检测人/汇报人」列
+- [x] 只认发消息的人（当前消息发送者 open_id），禁止凭记忆或历史对话填写
+
+#### R3.4 编辑窗口
+
+- [x] 同池号 30 分钟内重复写入自动合并更新（非追加新行）
+- [x] 通过 `filter` + `update` 实现，避免重复记录
+
+#### R3.5 S8 解剖特殊处理
+
+- [x] 每个器官独立一行记录
+- [x] 「解剖器官」列仅接受下拉选项：体表/鳃/肝/胆囊/肠/脾/鳔/肾/腹腔
+
+#### R3.6 图片附件上传
+
+- [x] 支持上传巡检图片到飞书多维表格附件字段
+- [x] 单图传 `image_data`/`image_url`，多图传 `image_data_list`/`image_urls`
+- [x] 所有图片统一上传至台账
+
+#### R3.7 完整性校验
+
+- [x] 必填字段校验，缺失时返回 `success: false` + `questions` 列表
+- [x] `data_completeness` 为 `partial` 时拒绝写入 normal/低风险结论
+- [x] Agent 将 `questions` 原样转述给工人补齐后重新写入
+
+---
+
+### R4 — 意图路由
+
+| 属性 | 说明 |
+|------|------|
+| 实现文件 | `src/router/intent-router.ts` |
+| 状态 | ✅ 已实现 |
+
+#### R4.1 八种场景识别
+
+- [x] S1 水质汇报、S2 巡检(默认)、S3 知识询问、S4 死亡汇报(紧急)
+- [x] S5 用药、S6 喂食汇报、S7 温度汇报、S8 解剖汇报
+
+#### R4.2 两级合并策略
+
+- [x] **文字关键词优先**：消息含文字时按关键词匹配，置信度 ≥ 0.85 直接采用
+- [x] **视觉 scene_hint 兜底**：纯图片无文字时用 analyze 输出的 scene_hint 判断
+- [x] 两者冲突时以文字为准（工人自己知道在汇报什么）
+
+#### R4.3 追问流程
+
+- [x] `scene_hint = inspection` 且无文字描述时触发追问
+- [x] 列出 7 个可选场景（带编号），工人回复数字或文字均可
+- [x] 追问仅一轮，Worker 回复后立即落表
+- [x] 回复仍不明确时按巡检表兜底
+
+---
+
+### R5 — PDF 原文检索引擎
+
+| 属性 | 说明 |
+|------|------|
+| 实现文件 | `src/ima/pdf-content-search.ts` |
+| 状态 | ✅ 已实现 |
+
+#### R5.1 索引与缓存
+
+- [x] PDF 文本提取：使用 unpdf (pdf.js) 提取文本层
+- [x] 按 `media_id` 缓存提取结果，避免重复下载
+- [x] 扫描件（无文本层）留标记，支持离线 OCR 覆写
+
+#### R5.2 切片与搜索
+
+- [x] 文本切片：`CHUNK_SIZE = 512` 字符，`CHUNK_OVERLAP = 100` 字符
+- [x] 运行时线性扫描匹配（非倒排索引），适合中小规模知识库
+- [x] 返回命中切片的 `page`（页码，可为 null）、`offset`（字符偏移）、`chunk`（原文片段）
+
+#### R5.3 笔记文本处理
+
+- [x] 笔记(media_type=11)通过 `notebook_id` 调用 notes 接口读取纯文本
+- [x] 按 `media_id` 缓存，权限类确定性失败留标记
+- [x] 临时失败（频控/网络）不缓存，下次重试
+
+#### R5.4 OCR 扫描件兜底
+
+- [x] `npm run ocr` 离线 OCR 处理扫描件 PDF
+- [x] OCR 结果覆写同名缓存文件
+- [x] 支持中文语言包（tessdata_best 4.0.0）
+- [x] OCR 文本归一化处理（正则清洗）
+
+---
+
+### R6 — S9 每日任务提醒
+
+| 属性 | 说明 |
+|------|------|
+| 实现文件 | `src/scheduler/daily-reminder.ts` |
+| 状态 | ✅ 已实现 |
+
+#### R6.1 定时推送
+
+- [x] 定时触发，向飞书巡检群推送当日任务提醒
+- [x] 从 IMA 知识库读取 S9 手册内容
+- [x] 消息格式化后通过飞书消息 API 推送
+
+#### R6.2 缓存管理
+
+- [x] 使用 `AQUASENSE_CACHE_DIR` 绝对路径存储缓存
+- [x] 支持 `resolveCacheRoot()` 平台绝对路径解析（Linux/Windows）
+
+---
+
+### R7 — SKILL 专家知识
+
+| 属性 | 说明 |
+|------|------|
+| 实现文件 | `skills/aquasense-expert/SKILL.md` |
+| 状态 | ✅ 已实现 |
+
+#### R7.1 专家定义
+
+- [x] 水产养殖巡检专家角色定义（鲈鱼方向）
+- [x] 状态三分类语义说明与典型表现
+- [x] 场景路由规则（S1-S8 关键词、是否落表、调用链）
+
+#### R7.2 工具编排规范
+
+- [x] 三个工具的调用顺序与参数规范
+- [x] 图片入参规范（来源、MIME、多图、数据完整性）
+- [x] 台账写入规范（open_id、上报人、字段映射）
+
+#### R7.3 数据准确度约束
+
+- [x] 池号缺失追问、上报人只认发消息的人
+- [x] 口语/错别字语义补全
+- [x] 多信息混杂自动拆分多条记录
+
+---
+
+## 三、外部依赖
+
+| 依赖 | 用途 | 配置方式 |
+|------|------|----------|
+| DeepSeek Vision API | 图片视觉分析 | `DEEPSEEK_API_KEY` + `DEEPSEEK_VISION_MODEL` |
+| IMA 开放平台 API | 知识库检索（wiki + note） | `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY` |
+| 飞书开放平台 API | 多维表格读写、通讯录解析、消息推送 | `FEISHU_APP_ID` + `FEISHU_APP_SECRET` |
+| unpdf (pdf.js) | PDF 文本层提取 | 内置依赖 |
+| Tesseract.js | 扫描件 OCR 兜底 | 可选，`@tesseract.js-data/chi_sim` |
+
+---
+
+## 四、环境配置
+
+| 变量 | 必填 | 说明 |
+|------|:----:|------|
+| `DEEPSEEK_API_KEY` | ✅ | DeepSeek API 密钥 |
+| `DEEPSEEK_VISION_MODEL` | 否 | 视觉模型名，默认 deepseek-flash |
+| `DEEPSEEK_BASE_URL` | 否 | API 基础 URL |
+| `IMA_OPENAPI_CLIENTID` | ✅ | IMA 客户端 ID |
+| `IMA_OPENAPI_APIKEY` | ✅ | IMA API 密钥 |
+| `FEISHU_APP_ID` | ✅ | 飞书应用 ID |
+| `FEISHU_APP_SECRET` | ✅ | 飞书应用密钥 |
+| `FEISHU_BITABLE_APP_TOKEN` | ✅ | 飞书多维表格 app_token |
+| `FEISHU_BITABLE_TABLE_ID_INSPECTION` | ✅ | 巡检记录表 ID |
+| `FEISHU_BITABLE_TABLE_ID_WATER_QUALITY` | 否 | 水质汇报表 ID |
+| `FEISHU_BITABLE_TABLE_ID_MEDICATION` | 否 | 用药记录表 ID |
+| `FEISHU_BITABLE_TABLE_ID_FEEDING` | 否 | 投喂记录表 ID |
+| `FEISHU_BITABLE_TABLE_ID_TEMPERATURE` | 否 | 温度汇报表 ID |
+| `FEISHU_BITABLE_TABLE_ID_DEATH` | 否 | 死亡记录表 ID |
+| `FEISHU_BITABLE_TABLE_ID_DISSECTION` | 否 | 解剖记录表 ID |
+| `FEISHU_WORKER_GROUP` | 否 | 巡检群 chat_id（S9 提醒用） |
+| `AQUASENSE_CACHE_DIR` | 否 | 缓存目录绝对路径（PDF/笔记缓存） |
+| `AQUASENSE_OCR_LANG_PATH` | 否 | OCR 语言包路径 |
+
+---
+
+## 五、项目目录结构
+
+```
+dsh-aquasense/
+├── docs/                          # 项目文档
+│   ├── architecture.md            # 系统架构设计
+│   ├── deployment.md              # 部署指南
+│   ├── user-manual.md             # 用户手册
+│   ├── requirements.md            # 需求文档（本文）
+│   ├── pdf-search-channel-architecture.md   # PDF 检索通道架构设计
+│   ├── pdf-search-channel-implementation.md # PDF 检索通道实现说明
+│   ├── ima-pdf-note-limitation.md           # IMA 限制讨论
+│   ├── fix-feishu-image-resource-crash.md   # 飞书图片资源崩溃修复方案
+│   └── knowledge-base-alternatives.md       # 知识库替代方案评估
+├── skills/
+│   └── aquasense-expert/
+│       └── SKILL.md               # 专家知识定义
+├── src/
+│   ├── index.ts                   # 插件入口，注册 3 个 Tool
+│   ├── router/
+│   │   └── intent-router.ts       # 意图路由（8 种场景）
+│   ├── ima/
+│   │   ├── ima-api.ts             # IMA API 封装 + 三通道合并
+│   │   ├── pdf-content-search.ts  # PDF 原文本地检索引擎
+│   │   └── pdf-content-search.test.ts  # PDF 检索单元测试
+│   ├── tools/
+│   │   ├── analyze-image.ts       # 视觉分析工具
+│   │   ├── analyze-image.test.ts  # 视觉分析单元测试
+│   │   ├── generate-advice.ts     # 处置建议工具
+│   │   ├── record-ledger.ts       # 台账写入工具
+│   │   └── train_aquaspecies.py   # 水产种类训练脚本
+│   ├── scheduler/
+│   │   └── daily-reminder.ts      # S9 每日任务提醒
+│   └── scripts/
+│       ├── ocr-scanned-pdfs.ts    # 扫描件 OCR 离线处理
+│       ├── ocr-scanned-pdfs.test.ts # OCR 脚本单元测试
+│       └── warm-kb-cache.ts       # 知识库缓存预热
+├── package.json
+├── tsconfig.json
+├── .env.example
+└── cordis.patch.yml
+```
+
+---
+
+## 六、核心流程
+
+```
+工人(飞书) ──→ dsh-lark(桥接层) ──→ dsh-aquasense(本插件)
+                                          │
+                    ┌───────────────────────┤
+                    │                       │
+              intent-router            aquasense_expert
+              (场景识别)              (SKILL 专家知识)
+                    │                       │
+                    ▼                       ▼
+              ┌─────────┐            ┌──────────┐
+              │ analyze  │───→───→──│  advice  │
+              │ (视觉)   │           │(知识检索) │
+              └────┬─────┘           └────┬─────┘
+                   │                      │
+                   ▼                      ▼
+              ┌──────────────────────────────────┐
+              │           ledger (台账)           │
+              │  飞书多维表格 ← open_id → 通讯录  │
+              └──────────────────────────────────┘
+```
+
+### 典型调用链
+
+| 场景 | 流程 |
+|------|------|
+| S2 巡检(带图) | analyze → advice → ledger |
+| S4 死亡(带图) | analyze → advice → ledger |
+| S8 解剖(带图) | analyze → advice → ledger(每器官一行) |
+| S1 水质(有图) | analyze → ledger |
+| S1 水质(无图) | ledger 直写 |
+| S5 用药(有图) | analyze → ledger |
+| S6 喂食 | ledger 直写 |
+| S7 温度 | ledger 直写 |
+| S3 知识询问 | advice(知识库查询)直接回答 |
+| 纯图片无文字 | analyze → scene_hint判断 → 追问/落表 |
+
+---
+
+## 七、数据模型
+
+### 7.1 AnalysisResult（视觉分析输出）
+
+```typescript
+interface AnalysisResult {
+  abnormal: boolean           // 是否异常
+  cls: 'normal' | 'early' | 'disease' | 'unknown'  // 状态分类
+  symptoms: string[]          // 症状描述列表
+  severity: number            // 严重度 0-10
+  confidence: number          // 置信度 0-1
+  scene_hint: string          // 场景提示（巡检/死亡/水质/用药/喂食/温度/解剖）
+  image_count: number         // 实际分析的图片数
+  organs: string[]            // 可见器官列表
+  expected_image_count: number // 期望图片总数
+  data_completeness: 'complete' | 'partial' | 'empty'  // 数据完整性
+}
+```
+
+### 7.2 台账写入参数
+
+```typescript
+interface LedgerParams {
+  scene: string               // 场景类型
+  pool: string                // 池号（池1~池4）
+  open_id?: string            // 发消息者飞书 ID（自动解析姓名）
+  description?: string        // 文字描述
+  analysis?: AnalysisResult   // 视觉分析结果
+  advice?: AdviceResult       // 处置建议
+  fields?: Record<string, string>  // 自定义字段（键=列名）
+  images?: ImageData[]        // 图片数据（上传至台账附件）
+}
+```
+
+---
+
+## 八、单元测试覆盖
+
+| 测试文件 | 覆盖模块 |
+|----------|----------|
+| `analyze-image.test.ts` | 视觉分析工具 |
+| `pdf-content-search.test.ts` | PDF 原文检索引擎 |
+| `ocr-scanned-pdfs.test.ts` | OCR 扫描件处理脚本 |
+
+---
+
+## 九、npm Scripts
+
+| 命令 | 说明 |
+|------|------|
+| `npm run build` | TypeScript 编译 |
+| `npm run dev` | 开发模式（watch） |
+| `npm test` | 运行单元测试 |
+| `npm run ocr` | 离线 OCR 处理扫描件 PDF |
+| `npm run warm-cache` | 预热知识库 PDF 缓存 |
+
+---
+
+## 十、版本历史
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| v1.0 | 2026-09-16 | 初始版本，包含 R1-R7 全部已实现需求 |
+
+---
+
+> **下一步**: 基于本文档继续编写下一阶段需求，请在下方标注新增或变更内容。

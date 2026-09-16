@@ -812,6 +812,8 @@ dsh-aquasense/
 │   ├── pdf-search-channel-implementation.md # 方案 D: 三通道混合检索实现记录
 │   ├── ima-pdf-note-limitation.md      # IMA PDF 读取问题讨论与解决方案
 │   ├── fix-feishu-image-resource-crash.md  # 飞书图片下载崩溃修复规范
+│   ├── requirements.md                # 需求文档(已实现 + 待开发)
+│   ├── knowledge-base-alternatives.md # 知识库替代方案评估
 │   └── user-manual.md                 # 使用手册
 ├── .env.example                       # 环境变量模板
 ├── cordis.patch.yml                   # DSH 插件注册补丁
