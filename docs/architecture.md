@@ -11,7 +11,7 @@ dsh-aquasense 是一个基于 DeepSeek Harness (DSH) 的水产养殖 AI 巡检�
 - 工人拍照发飞书 → AI 自动诊断健康状态 → 知识库匹配处置方案 → 台账自动登记
 - 鱼病前兆提前 12~48 小时预警（`early` 分类）
 - 满足政府要求的 2 年养殖台账保存规范
-- 每日操作手册自动定时提醒工人巡检任务
+- 每日任务定时提醒工人执行巡检操作（S9，随插件运行无独立进程）
 
 ---
 
@@ -47,8 +47,8 @@ dsh-aquasense 是一个基于 DeepSeek Harness (DSH) 的水产养殖 AI 巡检�
 │  └─────────────────────────────────────────────────────┘    │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │         daily-reminder (S9 独立调度器)               │    │
-│  │  IMA 知识库《每日操作手册》→ 定时推送飞书群          │    │
+│  │            s9-reminder (S9 插件内调度)              │    │
+│  │  任务表配置 → 到点调用飞书消息 API 推送巡检群       │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -333,7 +333,7 @@ interface AnalysisResult {
 | S6 | 投喂记录 | `feeding` | 投喂记录表 | 喂食/投喂/吃料/饲料 |
 | S7 | 温度汇报 | `temperature` | 温度汇报表 | 水温/棚温/温度 |
 | S8 | 解剖汇报 | `dissection` | 解剖记录表 | 解剖/内脏/肝/胆/肠/鳃 |
-| S9 | 每日提醒 | — | **不落表** | 定时触发（独立调度器） |
+| S9 | 每日提醒 | — | **不落表** | 定时触发（插件内调度，详见分文档） |
 
 #### 3.3.2 意图路由：文字优先 + 视觉兜底
 
@@ -758,20 +758,22 @@ Worker 回复仍不明确(如"就那个"):
 Agent: 按巡检表兜底落表,回复中说明"已按常规巡检记录"
 ```
 
-### 4.4 S9 每日提醒流程（独立调度器）
+### 4.4 S9 每日提醒流程（插件内调度）
+
+> S9 完整架构设计（配置模型/推送计划/tick 语义/卡片与回调/容错/里程碑）见专题分文档：**[s9-daily-reminder-architecture.md](./s9-daily-reminder-architecture.md)**。
 
 ```
-daily-reminder 启动 (独立进程,不经过 intent-router)
+插件 apply() → setupS9Reminder (enabled=false 则跳过)
     │
     ▼
-从 IMA 知识库搜索《每日操作手册》
-    │ → searchKnowledge → getMediaContent → 解析 "HH:MM 任务"
+读取配置(任务表) → 生成当日推送计划(总览 + 各时间点单条)
+    │ → 落盘 plan-{date}.json, 恢复 sent 标记
     ▼
-07:00 → 推送当日任务总览到飞书群
-每分钟 tick → 匹配任务时间点 → 推送单条提醒
-    │ → 复用飞书 token 缓存 + 推送 API
+插件内 tick 到点 → 调用飞书消息 API 推送卡片到飞书群
+    │ → 重启恢复当日剩余计划; 已推送不重复, 已过时间点不补推
     ▼
 工人按提醒执行 → 发消息汇报 → 进入 S1-S8 流程
+    │ → analyze 检出 early/disease → 推送异常预警卡片
 ```
 
 ---
@@ -801,12 +803,13 @@ dsh-aquasense/
 │   ├── router/
 │   │   └── intent-router.ts           # 消息意图识别 (S1-S8 纯函数,文字+视觉两级合并)
 │   └── scheduler/
-│       └── daily-reminder.ts          # S9 每日任务提醒独立进程
+│       └── s9-reminder.ts             # S9 每日任务提醒(插件内调度)
 ├── skills/
 │   └── aquasense-expert/
 │       └── SKILL.md                   # Agent 专家技能定义
 ├── docs/
 │   ├── architecture.md                # 架构说明 (本文件)
+│   ├── s9-daily-reminder-architecture.md  # S9 每日任务提醒架构设计 (分文档)
 │   ├── deployment.md                  # 部署文档
 │   ├── pdf-search-channel-architecture.md  # 方案 D: 三通道混合检索架构设计
 │   ├── pdf-search-channel-implementation.md # 方案 D: 三通道混合检索实现记录
@@ -828,8 +831,8 @@ dsh-aquasense/
 | 服务 | 用途 | 凭证 | 模块 |
 |------|------|------|------|
 | DeepSeek Vision API | 图片三分类 + scene_hint | `DEEPSEEK_API_KEY` | analyze-image |
-| IMA 知识库 | 三通道检索(名称+正文+PDF原文) + 正文读取 + 每日操作手册 | `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY` | ima-api, generate-advice, daily-reminder |
-| 飞书开放平台 | 消息接收 + 多维表格写入 + 用户名解析 + 图片上传 | `FEISHU_APP_ID` + `FEISHU_APP_SECRET` | token, record-ledger, daily-reminder |
+| IMA 知识库 | 三通道检索(名称+正文+PDF原文) + 正文读取 | `IMA_OPENAPI_CLIENTID` + `IMA_OPENAPI_APIKEY` | ima-api, generate-advice |
+| 飞书开放平台 | 消息接收 + 多维表格写入 + 用户名解析 + 图片上传 + 卡片推送 | `FEISHU_APP_ID` + `FEISHU_APP_SECRET` | token, record-ledger, s9-reminder |
 | DeepSeek Harness | Agent 框架 + 工具注册 + 消息路由 | 框架自身 | index, SKILL.md |
 
 ---
@@ -846,5 +849,5 @@ dsh-aquasense/
 - **知识库三通道互补**: wiki(仅标题) + note(笔记正文) + pdf_content(PDF原文),三通道覆盖不同语料,仅用其一会出现召回缺口
 - **知识库降级容错**: IMA 不可用时使用内置通用建议模板，不阻断主流程
 - **用药不代替兽医**: 疾病场景明确建议咨询专业兽医，知识库仅作参考
-- **S9 重启不补推**: 防止重启后重复推送已过时间点的任务
+- **S9 插件内调度**: 无独立进程；重启恢复当日剩余计划，已推送不重复，已过时间点不补推（详见分文档）
 - **仅 3 个 Tool**: 最大化复用 DSH 生态，降低维护成本
