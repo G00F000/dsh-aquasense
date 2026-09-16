@@ -1,5 +1,5 @@
 /**
- * S9 设置页 Web 面(gateway)单元测试
+ * S9 配置页 Web 面(gateway)单元测试
  *
  * 测试重点:
  *  - parseRemindConfigInput:保存请求校验(字段类型/长度/任务归一化)

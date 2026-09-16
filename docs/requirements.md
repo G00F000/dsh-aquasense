@@ -1,6 +1,6 @@
 # AquaSense 水产养殖 AI 巡检系统 — 需求文档
 
-> **版本**: v1.7 (R6 已实现：V2 插件内调度 + 原型 3 双入口——侧栏「🐟 AquaSense 配置」独立配置页 + 设置卡片；UI 对齐 SkillHub)
+> **版本**: v1.8 (R6 已实现：V2 插件内调度 + 原型 3 单入口——侧栏「🐟 AquaSense 配置」独立配置页（v1.8 移除设置卡片入口）；UI 对齐 SkillHub；页脚动作各自整行)
 > **基线日期**: 2026-09-16
 > **目标用户**: 清徐基地 4 池循环水鲈鱼养殖工人(飞书端)
 > **技术载体**: DeepSeek Harness 插件(dsh-aquasense)，配合 dsh-lark 桥接层对接飞书
@@ -224,10 +224,10 @@ AquaSense 是一个运行在 DeepSeek Harness 上的 AI 巡检插件，工人通
 
 | 属性 | 说明 |
 |------|------|
-| 实现文件 | `src/scheduler/s9-reminder.ts`（插件内模块）；设置页：`src/web/remind-gateway.ts` + `src/client/` |
+| 实现文件 | `src/scheduler/s9-reminder.ts`（插件内模块）；配置页：`src/web/remind-gateway.ts` + `src/client/` |
 | 方案 | 插件端配置提醒规则 + 插件内调度推送（飞书即时消息 API） |
 | 设计文档 | [s9-daily-reminder-architecture.md](./s9-daily-reminder-architecture.md)（专题分文档） |
-| 状态 | ✅ 已实现（V2 插件内调度 + 原型 3 设置页） |
+| 状态 | ✅ 已实现（V2 插件内调度 + 原型 3 配置页） |
 
 #### R6.1 设计变更说明
 
@@ -385,7 +385,7 @@ S9_REMIND_TASKS=[                                # 任务列表(JSON)
 
 ---
 
-##### 原型 3：管理员配置界面（插件设置页）
+##### 原型 3：管理员配置界面（插件配置页）
 
 **入口**：DeepSeek Harness 界面中，AquaSense 插件一级按钮位于**设置图标上方**，点击后跳转到本设置网页：
 
@@ -397,11 +397,11 @@ S9_REMIND_TASKS=[                                # 任务列表(JSON)
 └──────────────────────────┘
 ```
 
-> **入口实现注（v1.5）**：DSH 客户端未提供「设置图标上方一级按钮」注册面，原入口无法落地。实际交付采用平台合规入口：**设置 → 插件 → 插件配置** tab 内的「每日任务提醒」卡片（`settings.plugin.item` 键位槽，key 与宿主 settings 命名空间 `aquasense-remind` 配对）。偏差说明与配对机制详见 [s9-daily-reminder-architecture.md §3.6](./s9-daily-reminder-architecture.md)。
+> **入口实现注（v1.5，已于 v1.8 废止）**：DSH 客户端未提供「设置图标上方一级按钮」注册面，原入口无法落地。当时交付采用平台合规入口：**设置 → 插件 → 插件配置** tab 内的「每日任务提醒」卡片（`settings.plugin.item` 键位槽，key 与宿主 settings 命名空间 `aquasense-remind` 配对）。**该卡片入口已于 v1.8 整体移除**（单入口制），配对机制与演进详见 [s9-daily-reminder-architecture.md §3.6](./s9-daily-reminder-architecture.md)。
 
-> **入口实现注（v1.7）**：设置座位旁的一级动作注册面已定位为 `sidebar.footer.action` 列表槽（由 `@deepseek-ai/dsh-client-ui-sidebar` 声明，渲染于设置座位旁的 footerActions 容器），原型图「🐟 AquaSense 配置按钮 / ⚙ 设置」的层级得以原生落地：点击按钮在会话列上打开**独立配置页**（不跳转设置页），页顶为二级标题「每日任务提醒」+ 右上角关闭按钮，布局对齐 SkillHub 插件广场。v1.5 的设置卡片入口保留，作为备用入口（详见专题文档 §3.6）。
+> **入口实现注（v1.7）**：设置座位旁的一级动作注册面已定位为 `sidebar.footer.action` 列表槽（由 `@deepseek-ai/dsh-client-ui-sidebar` 声明，渲染于设置座位旁的 footerActions 容器），原型图「🐟 AquaSense 配置按钮 / ⚙ 设置」的层级得以原生落地：点击按钮在会话列上打开**独立配置页**（不跳转设置页），页顶为二级标题「每日任务提醒」+ 右上角关闭按钮，布局对齐 SkillHub 插件广场。**v1.8 起为唯一入口**（设置卡片入口已移除；另修复页脚动作容器单行 flex 挤压问题——经 `:has()` 允许换行，「插件广场 / AquaSense 配置 / 设置」各占整行）。
 
-管理员经由上述入口打开设置页，在其中配置 S9 提醒规则：
+管理员经由上述入口打开配置页，在其中配置 S9 提醒规则：
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -444,9 +444,9 @@ S9_REMIND_TASKS=[                                # 任务列表(JSON)
 - 「发送测试提醒」：立即推送一次总览卡片到目标群，验证配置
 - 「保存配置」：持久化配置并重建当日推送计划（调度随插件运行）
 
-> **UI 实现注（v1.6）**：卡片视觉与交互对齐 SkillHub（插件广场）设置卡——头部为「展开区 + 独立收起按钮」（28×28，箭头随展开旋转 180°，aria-label 收起/展开）；未保存修改时头部显示 warn 徽标，且「发送测试提醒」禁用（须先保存）；底部新增「放弃修改」（草稿回滚为已保存快照，详见专题文档 §3.6）。
+> **UI 实现注（v1.6，随卡片于 v1.8 移除）**：卡片视觉与交互对齐 SkillHub（插件广场）设置卡——头部为「展开区 + 独立收起按钮」（28×28，箭头随展开旋转 180°，aria-label 收起/展开）；未保存修改时头部显示 warn 徽标，且「发送测试提醒」禁用（须先保存）；底部新增「放弃修改」（草稿回滚为已保存快照，详见专题文档 §3.6）。
 
-> **配置页实现注（v1.7）**：配置页（`src/client/AquaConfig.tsx`）与设置卡片复用同一份表单实现（`src/client/RemindForm.tsx`：`useRemindConfig` 数据层 + `RemindForm` 视图）；侧栏按钮宽态显示「🐟 AquaSense 配置」文字、56px 收起轨道仅显示 🐟 图标；交互（Esc / 点击面板外关闭、随会话列尺寸自适应）与版式（顶栏二级标题 + 右上角 32×32 关闭按钮、内容区 760px 上限）对齐 SkillHub 插件广场页面。
+> **配置页实现注（v1.7）**：配置页（`src/client/AquaConfig.tsx`）表单由 `src/client/RemindForm.tsx` 提供（`useRemindConfig` 数据层 + `RemindForm` 视图，v1.8 起为唯一使用方）；侧栏按钮宽态显示「🐟 AquaSense 配置」文字、56px 收起轨道仅显示 🐟 图标；交互（Esc / 点击面板外关闭、随会话列尺寸自适应）与版式（顶栏二级标题 + 右上角 32×32 关闭按钮、内容区 760px 上限）对齐 SkillHub 插件广场页面。
 
 ---
 
@@ -594,13 +594,14 @@ dsh-aquasense/
 │   ├── scheduler/
 │   │   └── s9-reminder.ts         # S9 每日任务提醒（插件内调度）
 │   ├── web/
-│   │   ├── remind-gateway.ts      # S9 设置页 API 网关（原型 3 Host 侧）
+│   │   ├── remind-gateway.ts      # S9 配置页 API 网关（原型 3 Host 侧）
 │   │   └── remind-gateway.test.ts # 网关单元测试
 │   ├── client/
-│   │   ├── index.ts               # 浏览器半侧入口（设置卡片注册）
-│   │   ├── RemindCard.tsx         # 设置卡片组件（原型 3）
+│   │   ├── index.ts               # 浏览器半侧入口（字典 + 侧栏配置入口注册）
+│   │   ├── AquaConfig.tsx         # 侧栏一级入口 + 独立配置页（原型 3）
+│   │   ├── RemindForm.tsx         # 配置表单（useRemindConfig 数据层 + 视图）
 │   │   ├── api.ts                 # 浏览器侧 API 封装
-│   │   └── locales.ts             # 卡片文案 zh/en 字典
+│   │   └── locales.ts             # 配置页文案 zh/en 字典
 │   └── scripts/
 │       ├── ocr-scanned-pdfs.ts    # 扫描件 OCR 离线处理
 │       ├── ocr-scanned-pdfs.test.ts # OCR 脚本单元测试
@@ -697,7 +698,7 @@ interface LedgerParams {
 | `analyze-image.test.ts` | 视觉分析工具 |
 | `pdf-content-search.test.ts` | PDF 原文检索引擎 |
 | `ocr-scanned-pdfs.test.ts` | OCR 扫描件处理脚本 |
-| `remind-gateway.test.ts` | S9 设置页 API 网关（校验/分发/协议层） |
+| `remind-gateway.test.ts` | S9 配置页 API 网关（校验/分发/协议层） |
 
 ---
 
@@ -726,6 +727,7 @@ interface LedgerParams {
 | v1.5 | 2026-09-16 | R6.5 原型 3 设置页实现；入口调整：DSH 无「设置图标上方一级按钮」槽位，改用「设置→插件→插件配置」卡片（详见专题文档 §3.6）；目录树与 npm 命令表同步 |
 | v1.6 | 2026-09-16 | R6.5 原型 3 UI 对齐 SkillHub（插件广场）设置卡：展开区 + 独立收起按钮、未保存 warn 徽标、字段分隔线、底部「发送测试 / 放弃修改 / 保存配置」；修正测试按钮禁用逻辑（dirty 时禁用） |
 | v1.7 | 2026-09-16 | R6.5 原型 3 入口落地：侧栏页脚一级入口「🐟 AquaSense 配置」（`sidebar.footer.action` 槽）+ 会话列独立配置页（二级标题「每日任务提醒」+ 右上角关闭，布局对齐 SkillHub 插件广场）；表单抽取为 `RemindForm` 供卡片与配置页复用 |
+| v1.8 | 2026-09-16 | R6.5 原型 3 单入口制：「设置→插件→插件配置」S9 每日任务提醒卡片整链路移除（客户端注册/组件/文案 + Host 侧 settings 配对命名空间 + `settings-plugins` 依赖）；修复页脚动作容器单行 flex 挤压——经 `:has()` 允许换行，「插件广场 / 🐟 AquaSense 配置 / 设置」各占整行 |
 | v1.1 | 2026-09-16 | R6.5 新增：S9 每日任务页面原型设计（5 个原型） |
 
 ---

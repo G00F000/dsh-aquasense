@@ -1,5 +1,5 @@
 /**
- * 设置页 API 客户端(浏览器侧)
+ * 配置页 API 客户端(浏览器侧)
  *
  * 与 Host 侧 src/web/remind-gateway.ts 的 /aquasense-remind/api 路由对应:
  *   get    → { config, status }
@@ -39,7 +39,7 @@ export interface RemindStatus {
     nextTime: string | null;
     running: boolean;
 }
-/** 设置页 API 合同 */
+/** 配置页 API 合同 */
 export interface RemindApi {
     get(): Promise<{
         config: RemindConfig;
@@ -60,5 +60,5 @@ export interface RemindApi {
 /** 请求失败(信封 error.message 或 HTTP 状态) */
 export declare class RemindApiError extends Error {
 }
-/** 设置页 API 客户端 */
+/** 配置页 API 客户端 */
 export declare const remindApi: RemindApi;

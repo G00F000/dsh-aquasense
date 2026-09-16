@@ -8,8 +8,8 @@
  *
  * 意图路由(intent-router)为纯函数模块,由消息宿主/Agent 技能调用,不注册为 Tool;
  * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。
- * S9 设置页(原型 3)由 web/remind-gateway 提供:settings 配对命名空间 +
- * /aquasense-remind/api 路由(web 面缺失时静默跳过,不影响定时推送)。
+ * S9 配置页(原型 3)由 web/remind-gateway 提供:/aquasense-remind/api 路由
+ * (浏览器侧「🐟 AquaSense 配置」入口读写;web 面缺失时静默跳过,不影响定时推送)。
  */
 import { analyzeImage } from './tools/analyze-image.js';
 import { generateAdvice } from './tools/generate-advice.js';
@@ -26,7 +26,7 @@ export function apply(ctx) {
     ctx.tools.register(recordLedger);
     // S9 每日任务提醒(插件内调度,enabled=false 时内部直接跳过)
     setupS9Reminder(ctx);
-    // S9 设置页(原型 3):settings 配对命名空间 + HTTP API 路由
+    // S9 配置页(原型 3):HTTP API 路由(侧栏入口经 /aquasense-remind/api 读写)
     installRemindWeb(ctx);
     console.log('[aquasense] 工具加载完成');
     console.log('[aquasense] 知识库查询:generate-advice 内置 IMA API 自动查询');

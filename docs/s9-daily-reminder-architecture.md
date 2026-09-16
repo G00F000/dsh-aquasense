@@ -2,7 +2,7 @@
 
 > - 总文档：[architecture.md](./architecture.md)（本文为其 S9 专题**分文档**，展开模块级/接口级设计；总文档仅保留概述与引用）
 > - 需求依据：[requirements.md §R6](./requirements.md)
-> - 状态：✅ 已实现（V2 插件内调度 + 原型 3 双入口；v1.7 起侧栏一级入口「🐟 AquaSense 配置」+ 会话列独立配置页；见 §3.6 与 §8.5）
+> - 状态：✅ 已实现（V2 插件内调度 + 原型 3 单入口；v1.7 起侧栏一级入口「🐟 AquaSense 配置」+ 会话列独立配置页，v1.8 移除设置卡片入口；见 §3.6 与 §8.5）
 
 ---
 
@@ -22,7 +22,7 @@
 ### 1.2 设计目标
 
 - 去掉独立调度器进程，S9 生命周期由插件托管（`apply()` 启动）
-- 提醒内容仅来自插件端配置，支持部署（环境变量）与设置页（配置文件）两种来源
+- 提醒内容仅来自插件端配置，支持部署（环境变量）与配置页（配置文件）两种来源
 - 到点推送任务提醒卡片；工人按提醒拍照/汇报（落场景台账），异常自动预警
 - 重启可恢复、当日不重复、已过时间点不补推
 - 不新增 Tool、不引入外部调度组件（Redis/队列/cron 系统服务等）
@@ -130,7 +130,7 @@ export async function pushAbnormalAlert(input: AbnormalAlertInput): Promise<void
 
 ### 3.2 配置模型
 
-配置来源与优先级：**插件配置文件 > 环境变量**（配置文件为设置页「保存配置」的持久化产物；环境变量用于部署初始化；设置页入口见 §4.1）。
+配置来源与优先级：**插件配置文件 > 环境变量**（配置文件为配置页「保存配置」的持久化产物；环境变量用于部署初始化；配置页入口见 §4.1）。
 
 | 配置项 | 必填 | 默认 | 说明 |
 |--------|:----:|------|------|
@@ -224,24 +224,23 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 - 消息类型：`interactive`（卡片）；卡片 JSON 构造异常时降级为 `text` 文本消息（沿用 V1 文本格式）
 - 凭证：复用 `getFeishuToken()`（缓存 + 自动刷新）
 
-### 3.6 设置页（原型 3，Web 面）
+### 3.6 配置页（原型 3，Web 面）
 
 > 对应需求 R6.5 原型 3「管理员配置界面」。Host 侧文件 `src/web/remind-gateway.ts`，浏览器侧 `src/client/`。
 
-**入口与实现（v1.7 起为双入口）**：
+**入口与实现（v1.7 单入口；v1.8 起为唯一入口）**：
 
 | 项 | 说明 |
 |------|------|
 | 需求原文 | DSH 界面中 AquaSense 插件一级按钮位于**设置图标上方**，点击跳转设置网页 |
 | 平台核实 | 设置座位旁的一级动作注册面为 `sidebar.footer.action` 列表槽（`@deepseek-ai/dsh-client-ui-sidebar` 声明，owner `{ wide }`，渲染于设置座位旁的 footerActions 容器）；v1.5「无此注册面」结论已由 v1.7 修正 |
-| 主入口（v1.7） | 侧栏页脚「🐟 AquaSense 配置」一级按钮（与设置按钮同级）：点击在会话列上打开**独立配置页**（`src/client/AquaConfig.tsx`，portal + fixed 定位，顶栏二级标题 + 右上角关闭） |
-| 备用入口（v1.5） | 设置 → 插件 → 插件配置 tab 内的**设置卡片**（`settings.plugin.item` 键位槽） |
+| 唯一入口（v1.7 起） | 侧栏页脚「🐟 AquaSense 配置」一级按钮（与设置按钮同级）：点击在会话列上打开**独立配置页**（`src/client/AquaConfig.tsx`，portal + fixed 定位，顶栏二级标题 + 右上角关闭） |
 
-**配对机制（Host ↔ 浏览器）**：
+**v1.8 变更注（单入口制 + 页脚换行）**：
 
-- Host 侧注册 settings 命名空间 `aquasense-remind`（`registerRemindSettingsNamespace`，schema 字段与 config.json 同口径）
-- 浏览器侧在 `settings.plugin.item` 槽注册**同 key** 卡片（key = 命名空间名），「插件配置」tab 扫描到同名宿主命名空间后自动派发
-- settings 命名空间**仅作配对键**：配置读写不走 settings 服务，唯一事实源仍是 `config.json`（§9）
+- 设置卡片入口（`settings.plugin.item` 键位槽，v1.5 交付）与 Host 侧 settings 配对命名空间（`registerRemindSettingsNamespace`）随 v1.8 整体移除；「🐟 AquaSense 配置」为唯一入口
+- 宿主页脚动作容器（footerActions）为单行 flex（nowrap），多个整宽条目并排会互相挤压（插件广场被压窄、本入口贴边）；v1.8 在样式注入中以 `div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}` 允许换行，使「插件广场 / AquaSense 配置 / 设置」各占一整行（56px 收起轨道下圆钮亦垂直堆叠）
+- 配置读写仍不走宿主 settings 服务，唯一事实源是 `config.json`（§9），经 `/aquasense-remind/api` 直连读写
 
 **组件架构**：
 
@@ -249,9 +248,8 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 浏览器半侧 (dist/client.js)                     插件进程 (Host)
 ┌────────────────────────────┐    POST      ┌─────────────────────────────────────┐
 │ AquaConfigEntry(侧栏入口)  │ ───────────▶ │ /aquasense-remind/api/{method}      │
-│  ├─ AquaConfigPage(配置页) │   信封回包    │  handleRemindHttp（协议层/校验）      │
-│  └─ RemindCard(设置卡片)   │ ◀─────────── │   └─ createRemindApi（分发）          │
-│      └ RemindForm(共享表单)│              │                                      │
+│  └─ AquaConfigPage(配置页) │ ◀─────────── │  handleRemindHttp（协议层/校验）      │
+│      └ RemindForm(共享表单)│              │   └─ createRemindApi（分发）          │
 └────────────────────────────┘              │        ├─ get    → 配置 + 当日状态    │
                                             │        ├─ save   → 写 config.json     │
                                             │        │           + 重建当日计划     │
@@ -272,7 +270,7 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 - 响应信封：`{ ok: true, value }` / `{ ok: false, error: { code, message } }`
 - 协议层防护：仅 POST（405）、同源校验（403，无 Origin 放行）、JSON Content-Type（415）、路径解析（404）、请求体 ≤ 16KB（413）、非法 JSON（400）、兜底 500
 - 服务端校验：任务 ≤ 50 条、`time` 为 `HH:MM`（自动补零）、`task` 非空且 ≤ 200 字、`group` ≤ 128 字符
-- `cron` 不在设置页暴露，保存时保留现值（§3.2）
+- `cron` 不在配置页暴露，保存时保留现值（§3.2）
 
 **保存 / 测试语义**（对应 §4.1 流程）：
 
@@ -281,7 +279,7 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 - 「放弃修改」→ 草稿回滚为已保存快照（不清空提示，回到 idle）
 - 前端草稿未保存（dirty）时禁用「发送测试提醒」并提示先保存；加载失败可重试
 
-**卡片 UI**（对齐 SkillHub 插件广场设置卡，详见 requirements.md 原型 3「UI 实现注（v1.6）」）：
+**卡片 UI（v1.6 交付，随卡片于 v1.8 移除）**（对齐 SkillHub 插件广场设置卡，详见 requirements.md 原型 3「UI 实现注（v1.6）」）：
 
 - 头部为「展开区 + 独立收起按钮」：展开区（标题/描述/未保存徽标，`aria-expanded`）+ 28×28 独立按钮（内嵌箭头，展开态 `rotate(180deg)`，`aria-label` 收起/展开）
 - 展开态卡底色切换为 `--dsw-alias-bg-layer-2`；未保存徽标用 warn 色（`--dsw-alias-state-warn-*`）；字段间分隔线；输入框 `--dsw-specific-input-major`
@@ -292,7 +290,7 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 - 侧栏入口（`sidebar.footer.action`）：宽态为 42px 行内「🐟 + AquaSense 配置」；56px 收起轨道为 36×36 圆形图标按钮；悬停/展开态复用侧栏导航项令牌
 - 配置页：`createPortal` 至 body，`fixed` 覆盖会话列（`[data-phase]` 矩形，经 ResizeObserver 跟踪尺寸变化与滚动；无会话列回退整窗）；顶栏为二级标题「每日任务提醒」（h2）+ 右上角 32×32 关闭按钮；内容区最大宽度 760px
 - 交互：Esc / 点击面板外关闭（忽略面板与入口内的 pointerdown）
-- 表单复用：配置页与设置卡共用 `RemindForm.tsx`（`useRemindConfig` 数据层 + `RemindForm` 视图）
+- 表单：配置页使用 `RemindForm.tsx`（`useRemindConfig` 数据层 + `RemindForm` 视图；v1.8 起为唯一使用方）
 - 样式注入：`ensureAquaConfigStyle()` 幂等写入 `<style id="aquasense-config-style">`（类名 `aqs-` 前缀，经 `ctx.effect` 挂载）
 
 **降级**：
@@ -340,9 +338,9 @@ setupS9Reminder(ctx)
 返回: 已加载 N 项推送(其中 M 项已推送)
 ```
 
-- 设置页入口：**设置 → 插件 → 插件配置** tab 的「每日任务提醒」卡片（需求原文“设置图标上方一级按钮”无对应平台槽位，偏差说明见 §3.6）
-- 设置页「保存配置」→ 写 `config.json` → 重新调用 `setupS9Reminder`（重建计划）
-- 设置页「发送测试提醒」→ 直接调用推送器发送一次总览卡片（不注册、不落计划）
+- 配置页入口：侧栏页脚「🐟 AquaSense 配置」一级按钮（`sidebar.footer.action` 槽，v1.7 交付；原型还原与 v1.8 调整见 §3.6）
+- 配置页「保存配置」→ 写 `config.json` → 重新调用 `setupS9Reminder`（重建计划）
+- 配置页「发送测试提醒」→ 直接调用推送器发送一次总览卡片（不注册、不落计划）
 
 ### 4.2 到点推送
 
@@ -393,7 +391,7 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | B 单条任务提醒 | 任务 `time` 到点 | 原型 2 | 拍照汇报（引导） |
 | C 异常预警 | `analyze` 检出 `early`/`disease` | 原型 4 | 查看详情 / 通知负责人 |
 
-> 原型 3（管理员配置界面）不是飞书消息卡片，而是 DSH 设置页内的插件配置卡片，见 §3.6。
+> 原型 3（管理员配置界面）不是飞书消息卡片，而是 DSH 侧栏入口打开的独立配置页，见 §3.6。
 
 ### 5.2 卡片 JSON 骨架（以卡片 B 为例）
 
@@ -513,20 +511,20 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | `src/tools/*` | 主链路不变；仅 `analyze` 结果驱动预警卡片（新增调用点） |
 | `src/router/intent-router.ts` | S9 不经意图路由 |
 
-### 8.5 原型 3（设置页）文件清单
+### 8.5 原型 3（配置页）文件清单
 
 | 文件路径 | 变更 | 说明 |
 |----------|------|------|
-| `src/web/remind-gateway.ts` | 新增 | Host 侧：settings 命名空间注册 + `/aquasense-remind/api` 路由（校验/协议层/群列表） |
-| `src/client/index.ts` | 新增 | 浏览器侧入口：字典注册 + `settings.plugin.item` 卡片注册 + `sidebar.footer.action` 侧栏入口注册 |
-| `src/client/RemindCard.tsx` | 新增 | 设置卡片外壳（标题/描述/未保存徽标/展开收起）+ 内嵌 RemindForm |
-| `src/client/RemindForm.tsx` | 新增（v1.7） | 共享表单：`useRemindConfig` 数据层 + `RemindForm` 视图（卡片与配置页复用） |
-| `src/client/AquaConfig.tsx` | 新增（v1.7） | 侧栏一级入口 + 会话列独立配置页（portal 定位 / Esc 与外点关闭 / `aqs-` 样式注入） |
+| `src/web/remind-gateway.ts` | 新增 | Host 侧：`/aquasense-remind/api` 路由（校验/协议层/群列表）；v1.8 移除 settings 配对命名空间 |
+| `src/client/index.ts` | 新增 | 浏览器侧入口：字典注册 + `sidebar.footer.action` 侧栏入口注册（v1.8 移除卡片注册） |
+| `src/client/RemindCard.tsx` | 新增（v1.5）→ 删除（v1.8） | 设置卡片外壳（单入口制后移除，表单由 RemindForm 承接） |
+| `src/client/RemindForm.tsx` | 新增（v1.7） | 配置表单：`useRemindConfig` 数据层 + `RemindForm` 视图（v1.8 起为配置页唯一使用方） |
+| `src/client/AquaConfig.tsx` | 新增（v1.7） | 侧栏一级入口 + 会话列独立配置页（portal 定位 / Esc 与外点关闭 / `aqs-` 样式注入 / v1.8 页脚换行适配） |
 | `src/client/api.ts` | 新增 | 浏览器侧 API 封装（信封解包） |
-| `src/client/locales.ts` | 新增 | 卡片文案 zh/en 字典 |
+| `src/client/locales.ts` | 新增 | 配置页文案 zh/en 字典 |
 | `src/web/remind-gateway.test.ts` | 新增 | gateway 单元测试（校验/分发/协议层，26 例） |
 | `tsdown.config.ts` | 新增 | 浏览器 bundle 构建配置 |
-| `src/scheduler/s9-reminder.ts` | 扩展 | 新增 §7 设置页接口（get/save/test/status）+ 导出 `DEFAULT_CRON` |
+| `src/scheduler/s9-reminder.ts` | 扩展 | 新增 §7 配置页接口（get/save/test/status）+ 导出 `DEFAULT_CRON` |
 | `src/index.ts` | 接入 | `apply()` 增调 `installRemindWeb(ctx)` |
 | `package.json` | 更新 | `exports['./client']`、`dsh.client`、`build:client` 脚本、客户端 peer 声明 |
 | `tsconfig.json` | 更新 | `jsx: react-jsx`（客户端 TSX 编译） |
@@ -539,7 +537,7 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 $AQUASENSE_CACHE_DIR/          # 绝对路径(Linux: /data/aquasense/cache)
   pdf/  note/  pdf-index/      # [已有] 知识库通道
   remind/                      # [新增] S9 运行状态
-    config.json                #   设置页「保存配置」持久化(优先于环境变量)
+    config.json                #   配置页「保存配置」持久化(优先于环境变量)
     plan-2026-09-16.json       #   当日推送计划(重启复用)
     sent-2026-09-16.json       #   当日已推送标记(防重启重复)
 ```

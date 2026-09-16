@@ -1,9 +1,8 @@
 /**
- * RemindForm —— S9 每日任务提醒的共享配置表单(需求 R6.5 原型 3)
+ * RemindForm —— S9 每日任务提醒的配置表单(需求 R6.5 原型 3)
  *
- * 两处复用同一份实现:
- *  - RemindCard:设置 → 插件 → 插件配置 内的卡片;
- *  - AquaConfigPage:侧栏「🐟 AquaSense 配置」一级入口打开的独立配置页。
+ * 由侧栏「🐟 AquaSense 配置」一级入口打开的独立配置页(AquaConfigPage)使用
+ * (v1.8 起设置页卡片已移除,本组件为唯一表单实现)。
  *
  * 配置状态与动作由 useRemindConfig 提供(拉取/草稿/dirty/保存/发送测试/放弃修改),
  * 本组件只负责渲染;样式对齐 SkillHub 设置卡(.sh-cfg 体系):字段分隔线、
@@ -31,9 +30,9 @@ type ApplyState = {
     kind: 'error';
     message: string;
 };
-/** 配置模型:useRemindConfig 的返回值,表单与卡片头部共用 */
+/** 配置模型:useRemindConfig 的返回值 */
 export interface RemindModel {
-    /** 拉取阶段(卡片在 unavailable 时强制展开) */
+    /** 拉取阶段 */
     readonly phase: 'loading' | 'ready' | 'unavailable';
     /** 编辑草稿(未就绪时为 null) */
     readonly draft: RemindConfigInput | null;
@@ -71,10 +70,10 @@ export interface RemindModel {
     sendTest: () => Promise<void>;
 }
 /**
- * 配置状态与动作(卡片与配置页共用的数据层)。
+ * 配置状态与动作(配置页数据层)。
  * @param api - 浏览器半侧 API(经槽位注入面传入)。
  * @param t - 词典翻译函数。
- * @returns 表单渲染与卡片头部所需的全部状态与动作。
+ * @returns 表单渲染所需的全部状态与动作。
  */
 export declare function useRemindConfig(api: RemindApi, t: RemindTranslate): RemindModel;
 /**

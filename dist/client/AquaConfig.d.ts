@@ -7,7 +7,12 @@
  *  - 页顶二级标题「每日任务提醒」+ 右上角 × 关闭;
  *  - Esc / 点击面板外关闭(交互与布局对齐 SkillHub 插件广场页面)。
  *
- * 配置内容复用 RemindForm(与设置页卡片同一份实现)。
+ * 布局适配(v1.8):宿主页脚动作容器(footerActions)为单行 flex(nowrap),
+ * 多个整宽条目并排会互相挤压(插件广场被压窄、本入口贴边);样式注入中以
+ * :has() 命中该容器并允许换行,使「插件广场 / AquaSense 配置 / 设置」
+ * 各占一整行(rail 收起态下圆钮亦垂直堆叠)。
+ *
+ * 配置内容由 RemindForm 提供(v1.8 起为唯一使用方)。
  */
 import type { ReactNode } from 'react';
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';

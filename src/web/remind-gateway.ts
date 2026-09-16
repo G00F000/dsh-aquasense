@@ -1,22 +1,20 @@
 /**
- * S9 提醒设置页 Web 面(Host 侧,原型 3)
+ * S9 提醒配置页 Web 面(Host 侧,原型 3)
  *
- *  - settings 配对:注册命名空间 'aquasense-remind'(仅作配对键——设置页插件
- *    tab 扫描到命名空间后才派发浏览器侧同 key 卡片;配置读写仍以
- *    remind/config.json 为唯一事实源,见 s9-reminder 第 7 节)
- *  - HTTP 路由:在宿主 webServer 上注册 /aquasense-remind/api 前缀,供浏览器
- *    卡片 fetch 调用 get/save/test/groups 四个方法
+ * HTTP 路由:在宿主 webServer 上注册 /aquasense-remind/api 前缀,供浏览器侧
+ * 「🐟 AquaSense 配置」入口 fetch 调用 get/save/test/groups 四个方法
+ * (配置读写以 remind/config.json 为唯一事实源,见 s9-reminder 第 7 节)。
  *
- * 说明:本地 DSH 依赖线为 0.0.1-rc.5,而 dsh-settings 及 client 包为 0.1.5-rc.2,
- * 混装会引发 peer 冲突,故 settings/webServer 均按最小鸭子类型访问,不引入其类型。
+ * v1.8 起移除 settings 配对命名空间(设置页卡片入口已删除,配置页为唯一入口)。
+ *
+ * 说明:本地 DSH 依赖线为 0.0.1-rc.5,而 client 包为 0.1.5-rc.2,混装会引发
+ * peer 冲突,故 webServer 按最小鸭子类型访问,不引入其类型。
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
 import { getFeishuToken } from '../feishu/token.js'
 import {
-  DEFAULT_CRON,
   getRemindConfig,
   getRemindStatus,
   normalizeRemindTask,
@@ -27,12 +25,10 @@ import type { RemindConfig, RemindConfigInput, RemindStatus } from '../scheduler
 
 // ========== 常量 ==========
 
-/** 设置页 API 路由前缀(同源 fetch;方法追加在其后,如 /get) */
+/** 配置页 API 路由前缀(同源 fetch;方法追加在其后,如 /get) */
 export const REMIND_API_PREFIX = '/aquasense-remind/api'
-/** settings 命名空间(小写连字符;仅作 Host/浏览器卡片配对键) */
-export const REMIND_SETTINGS_NAMESPACE = 'aquasense-remind'
 
-/** 设置页允许的最大任务条数 */
+/** 配置页允许的最大任务条数 */
 const MAX_TASKS = 50
 /** 单条任务内容最大长度(字符) */
 const MAX_TASK_LENGTH = 200
@@ -47,7 +43,7 @@ const GROUPS_TIMEOUT_MS = 15_000
 
 // ========== 类型 ==========
 
-/** 飞书群条目(设置页下拉选项;机器人已加入的群) */
+/** 飞书群条目(配置页下拉选项;机器人已加入的群) */
 export interface FeishuGroup {
   chatId: string
   name: string
@@ -64,18 +60,13 @@ export interface ApiResult {
   body: ApiEnvelope
 }
 
-/** 设置页 API 数据依赖(注入以便独立测试) */
+/** 配置页 API 数据依赖(注入以便独立测试) */
 export interface RemindApiDeps {
   getConfig(): RemindConfig
   getStatus(): RemindStatus
   saveConfig(input: RemindConfigInput): RemindConfig
   sendTest(): Promise<void>
   listGroups(): Promise<FeishuGroup[]>
-}
-
-/** settings 服务最小鸭子类型(仅用到 register) */
-interface SettingsLike {
-  register(ns: string, schema: unknown, options?: { base?: unknown }): unknown
 }
 
 /** webServer 服务最小鸭子类型(仅用到 register) */
@@ -89,7 +80,6 @@ interface WebServerLike {
 
 /** 携带宿主可选服务的 Context(本地未安装对应类型包,按需访问) */
 type ContextWithServices = Context & {
-  settings?: SettingsLike
   webServer?: WebServerLike
 }
 
@@ -104,44 +94,11 @@ export class HttpError extends Error {
   }
 }
 
-// ========== settings 命名空间(配对键) ==========
-
-/**
- * settings 命名空间 schema:与 RemindConfig 形状对齐(base 取当前生效配置)。
- * 仅用于设置页配对与展示;实际持久化仍走 remind/config.json。
- */
-const RemindConfigSchema = z.object({
-  enabled: z.boolean().default(false),
-  group: z.string().default(''),
-  cron: z.string().default(DEFAULT_CRON),
-  tasks: z
-    .array(z.object({ time: z.string(), task: z.string() }))
-    .default([])
-})
-
-/**
- * 注册 settings 命名空间。
- * 设置页插件 tab 只有扫描到命名空间才派发本插件卡片(见 ui-settings-plugins
- * 的 settings.plugin.item 合同);重复注册属多 fiber 正常情形,静默跳过。
- */
-export function registerRemindSettingsNamespace(ctx: Context): void {
-  ctx.inject(['settings'], (sctx) => {
-    const settings = (sctx as ContextWithServices).settings
-    if (!settings || typeof settings.register !== 'function') return
-    try {
-      settings.register(REMIND_SETTINGS_NAMESPACE, RemindConfigSchema, { base: getRemindConfig() })
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('already registered')) return
-      console.warn('[aquasense-remind] settings 命名空间注册失败(设置页卡片可能不可用):', error)
-    }
-  })
-}
-
 // ========== 请求校验 ==========
 
 /**
  * 校验并归一化「保存配置」请求体(导出供测试)。
- * body 形如 { config: { enabled, group, tasks } };cron 不在设置页暴露。
+ * body 形如 { config: { enabled, group, tasks } };cron 不在配置页暴露。
  */
 export function parseRemindConfigInput(body: unknown): RemindConfigInput {
   const raw = (body as { config?: unknown } | null)?.config
@@ -180,7 +137,7 @@ export function parseRemindConfigInput(body: unknown): RemindConfigInput {
 // ========== API 分发 ==========
 
 /**
- * 创建设置页 API 分发函数(注入依赖便于测试)。
+ * 创建配置页 API 分发函数(注入依赖便于测试)。
  * 返回 (method, body) => ApiResult;HTTP 层负责信封序列化。
  */
 export function createRemindApi(deps: RemindApiDeps): (method: string, body: unknown) => Promise<ApiResult> {
@@ -374,13 +331,11 @@ function messageOf(error: unknown): string {
 // ========== 插件接线 ==========
 
 /**
- * 安装设置页 Web 面:settings 配对命名空间 + HTTP API 路由。
- * 由插件 apply() 调用;web 面缺失(无 settings/webServer 服务)时静默跳过,
+ * 安装配置页 Web 面:HTTP API 路由。
+ * 由插件 apply() 调用;web 面缺失(无 webServer 服务)时静默跳过,
  * 不影响 S9 定时推送本身。
  */
 export function installRemindWeb(ctx: Context): void {
-  registerRemindSettingsNamespace(ctx)
-
   const dispatch = createRemindApi({
     getConfig: getRemindConfig,
     getStatus: getRemindStatus,
@@ -398,6 +353,6 @@ export function installRemindWeb(ctx: Context): void {
         path: REMIND_API_PREFIX,
         handler: (req, res) => handleRemindHttp(dispatch, req, res)
       })
-    }, 'aquasense: S9 提醒设置页 API 路由')
+    }, 'aquasense: S9 提醒配置页 API 路由')
   })
 }

@@ -1,5 +1,5 @@
 /**
- * 设置页 API 客户端(浏览器侧)
+ * 配置页 API 客户端(浏览器侧)
  *
  * 与 Host 侧 src/web/remind-gateway.ts 的 /aquasense-remind/api 路由对应:
  *   get    → { config, status }
@@ -9,7 +9,7 @@
  * 信封协议 { ok, value } / { ok, error: { code, message } }。
  */
 
-/** 设置页 API 前缀(与 Host 侧常量一致) */
+/** 配置页 API 前缀(与 Host 侧常量一致) */
 const API_PREFIX = '/aquasense-remind/api'
 
 /** 飞书群条目(下拉选项) */
@@ -48,7 +48,7 @@ export interface RemindStatus {
   running: boolean
 }
 
-/** 设置页 API 合同 */
+/** 配置页 API 合同 */
 export interface RemindApi {
   get(): Promise<{ config: RemindConfig; status: RemindStatus }>
   save(input: RemindConfigInput): Promise<{ config: RemindConfig; status: RemindStatus }>
@@ -84,7 +84,7 @@ async function call<T>(method: string, body?: unknown): Promise<T> {
   return envelope.value as T
 }
 
-/** 设置页 API 客户端 */
+/** 配置页 API 客户端 */
 export const remindApi: RemindApi = {
   get: () => call('get'),
   save: (input) => call('save', { config: input }),

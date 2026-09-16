@@ -1,15 +1,10 @@
 /**
- * 设置卡片文案(命名空间 aquasense-remind,zh/en 双语词典)
+ * 配置页文案(命名空间 aquasense-remind,zh/en 双语词典)
  */
-/** 字典命名空间(与 Host 侧 settings 命名空间、卡片 key 三者一致) */
+/** 字典命名空间(与 Host 侧 API 路径前缀同源) */
 export declare const NS = "aquasense-remind";
 /** 中文字典 */
 export declare const zh: {
-    readonly 'card.title': "S9 每日任务提醒";
-    readonly 'card.intro': "巡检任务定时提醒(每日总览 + 到点任务卡片),经飞书群推送";
-    readonly 'card.unsaved': "未保存";
-    readonly 'card.expand': "展开";
-    readonly 'card.collapse': "收起";
     readonly 'card.loading': "加载中…";
     readonly 'card.unavailable': "设置接口不可用,请确认插件已随 Web 界面加载后重试";
     readonly 'card.retry': "重试";
@@ -44,5 +39,5 @@ export declare const zh: {
 };
 /** 英文字典(与中文 key 一一对应) */
 export declare const en: Record<keyof typeof zh, string>;
-/** 卡片文案的 key 联合(LocaleNamespaceMap 合并用) */
-export type RemindCardKey = keyof typeof zh;
+/** 配置页文案的 key 联合(LocaleNamespaceMap 合并用) */
+export type RemindLocaleKey = keyof typeof zh;

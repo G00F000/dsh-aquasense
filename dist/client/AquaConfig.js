@@ -8,7 +8,12 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
  *  - 页顶二级标题「每日任务提醒」+ 右上角 × 关闭;
  *  - Esc / 点击面板外关闭(交互与布局对齐 SkillHub 插件广场页面)。
  *
- * 配置内容复用 RemindForm(与设置页卡片同一份实现)。
+ * 布局适配(v1.8):宿主页脚动作容器(footerActions)为单行 flex(nowrap),
+ * 多个整宽条目并排会互相挤压(插件广场被压窄、本入口贴边);样式注入中以
+ * :has() 命中该容器并允许换行,使「插件广场 / AquaSense 配置 / 设置」
+ * 各占一整行(rail 收起态下圆钮亦垂直堆叠)。
+ *
+ * 配置内容由 RemindForm 提供(v1.8 起为唯一使用方)。
  */
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -21,6 +26,9 @@ const STYLE_ID = 'aquasense-config-style';
 const CSS = `
 .aqs-wrap{width:100%}
 .aqs-wrap.rail{display:flex;justify-content:center}
+/* 宿主页脚动作容器:默认单行 flex(nowrap),多个整宽条目并排会互相挤压;
+   允许换行使各条目独占整行(与设置行堆叠)。 */
+div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-trigger{box-sizing:border-box;display:flex;align-items:center;gap:8px;width:calc(100% + 4px);height:42px;margin:4px -2px;padding:0 10px 0 8px;border:0;border-radius:12px;background:transparent;color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:14px;line-height:22px;cursor:pointer;overflow:hidden}
 .aqs-wrap.rail .aqs-trigger{width:36px;height:36px;margin:8px 0 10px;padding:0;justify-content:center;border-radius:50%;gap:0}
 .aqs-trigger:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
