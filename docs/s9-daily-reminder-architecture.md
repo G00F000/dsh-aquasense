@@ -354,19 +354,20 @@ current = "10:00"
 匹配计划项 time === "10:00" 且未推送
     │
     ├─ 总览项 → 总览卡片 (任务表 + 台账链接)
-    └─ 任务项 → 单条提醒卡片 (任务 + 检查要点 + 拍照引导 + 剩余任务)
+    └─ 任务项 → 单条提醒卡片 (任务 + 检查要点 + 拍照URL跳转 + 剩余任务)
     │
     ▼
 推送成功 → sent-{date}.json 追加记录
 ```
 
+卡片中「📷 拍照汇报」按钮为 URL 类型，点击后在飞书内置浏览器打开 H5 上传页（§5.4），工人选图+填描述+提交 → 服务端 AI 分析 → 落台账。
+
 ### 4.3 异常预警卡片
 
 ```
-工人拍照汇报 (响应提醒)
-    │
-    ▼
-S1-S8 主链路: intent-router → analyze → advice → ledger
+工人响应提醒(两种路径):
+  路径A: 点击卡片「📷 拍照汇报」→ H5 上传页 → 提交 → 服务端分析
+  路径B: 群聊中直接发送图片 → S1-S8 主链路(降级路径)
     │
     ▼
 analyze.abnormal === true (cls = early/disease) ?
@@ -388,7 +389,7 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | 卡片 | 触发时机 | 需求原型 | 关键按钮 |
 |------|----------|----------|----------|
 | A 每日任务总览 | 每日 cron 时刻（默认 07:00） | 原型 1 | 查看今日台账 |
-| B 单条任务提醒 | 任务 `time` 到点 | 原型 2 | 拍照汇报（引导） |
+| B 单条任务提醒 | 任务 `time` 到点 | 原型 2 | 拍照汇报（URL → H5 上传页） |
 | C 异常预警 | `analyze` 检出 `early`/`disease` | 原型 4 | 查看详情 / 通知负责人 |
 
 > 原型 3（管理员配置界面）不是飞书消息卡片，而是 DSH 侧栏入口打开的独立配置页，见 §3.6。
@@ -403,28 +404,135 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
     { "tag": "div", "text": { "tag": "lark_md", "content": "**📋 巡检各池鱼群状态（池1→池4）**" } },
     { "tag": "div", "text": { "tag": "lark_md", "content": "**检查要点:**\n• 鱼群活动状态（集群/离群/浮头）\n• 水色变化\n• 有无死鱼" } },
     { "tag": "action", "actions": [
-      { "tag": "button", "text": { "tag": "plain_text", "content": "📷 拍照汇报" }, "type": "primary", "value": { "action": "photo_report", "time": "10:00" } }
+      { "tag": "button", "text": { "tag": "plain_text", "content": "📷 拍照汇报" }, "type": "primary",
+        "url": "http://SERVER:PORT/aquasense-remind/report?task=巡检各池鱼群状态&time=10:00&chat_id=oc_xxx" }
     ]},
     { "tag": "note", "elements": [ { "tag": "plain_text", "content": "剩余任务: 14:00 投喂午餐 / 16:00 下午巡检 / 18:00 晚餐" } ] }
   ]
 }
 ```
 
-### 5.3 按钮回调链路
+> 按钮采用 `url` 类型（非 `value` 回调），点击后在飞书内置浏览器打开 H5 上传页。URL 参数携带任务描述、时间和群 ID，H5 页面据此初始化表单。
+
+### 5.3 按钮交互链路（URL 跳转 → H5 上传页）
 
 ```
-按钮点击 (卡片 value.action)
+按钮点击 (卡片 url 属性,飞书内置浏览器打开)
     │
     ▼
-飞书卡片回调事件 → dsh-lark 消息桥 → 插件回调处理
+H5 上传页加载 (/aquasense-remind/report?task=...&time=...&chat_id=...)
     │
-    ├─ photo_report  → 机器人回复引导文案("请直接拍照发送到本群, 我会自动记录台账")
-    │                  → 工人拍照发送 → S2 巡检流程(主链路)
-    ├─ view_ledger / view_detail → 链接按钮, 直接跳转多维表格
-    └─ notify_owner  → 群内 @负责人(沿用群成员解析)
+    ├─ 顶部:展示任务描述 + 时间(从 URL 参数读取)
+    ├─ 照片区:<input type="file" accept="image/*" multiple capture="environment">
+    │         → 手机端自动调起相机/相册,支持多选
+    ├─ 池号:下拉选择(池1/池2/池3/池4)
+    ├─ 描述:文字输入框(可选)
+    │
+    ▼
+工人点击「完成汇报」→ 前端压缩图片(≤1024px) → multipart POST
+    │
+    ▼
+POST /aquasense-remind/api/report/submit
+    │
+    ├─ 1. 接收:images[] + description + pool_id + task + time + chat_id
+    ├─ 2. 图片转 base64(复用 analyze-image.ts 逻辑)
+    ├─ 3. 调用 DeepSeek 视觉模型分析(aquasense_analyze)
+    ├─ 4. 生成处置建议(aquasense_advice)
+    ├─ 5. 落入多维表格台账(aquasense_ledger)
+    │
+    ├─ 成功 → 返回分析结果 JSON → H5 页面展示摘要
+    │         + 可选:群内推送分析摘要消息
+    └─ 失败 → 返回错误 → H5 页面展示错误提示
 ```
 
-> 实现注：飞书卡片按钮无法直接调用客户端相机，故「拍照汇报」采用"引导文案 + 工人拍照发送"实现同等交互（点击一次即下发明确提示，避免工人不知道下一步做什么）。
+**降级路径（H5 上传页不可达时）**：
+
+如果工人手机无法访问 H5 页面（网络不通、服务器未启动等），保留原有引导文案作为降级——卡片按钮回调触发机器人回复 "请直接拍照发送到本群,我会自动记录台账"，工人在群聊中手动发送图片走 S1-S8 主链路。
+
+> 实现注：飞书卡片 `url` 类型按钮在手机端自动用内置浏览器打开，可同时支持 `<input capture="environment">`（后置摄像头拍照）和相册多选。服务端复用现有 `callVisionModel` + `buildFields` + 飞书多维表格 API，无需新增 AI 分析能力。
+
+### 5.4 H5 上传页设计
+
+**页面路由**：`GET /aquasense-remind/report`（静态 HTML，由插件 Web 服务托管）
+
+**URL 参数**（由卡片按钮携带）：
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `task` | 是 | 任务描述（URL 编码），如 `巡检各池鱼群状态` |
+| `time` | 是 | 任务时间 `HH:MM` |
+| `chat_id` | 否 | 群 ID，用于服务端关联消息上下文 |
+
+**页面结构**：
+
+```
+┌─────────────────────────────────────┐
+│  📋 {task}                          │
+│  ⏰ {time}                          │
+├─────────────────────────────────────┤
+│                                     │
+│  📷 选择照片                         │
+│  ┌─────────────────────────────┐    │
+│  │  拍照  |  从相册选择          │    │
+│  │  支持多张，建议 ≤5 张         │    │
+│  └─────────────────────────────┘    │
+│  已选: [缩略图1 ✕] [缩略图2 ✕]     │
+│                                     │
+│  池号: [请选择 ▼]                    │
+│  描述: [________________]           │
+│                                     │
+│  [ ✅ 完成汇报 ]                     │
+└─────────────────────────────────────┘
+```
+
+**前端处理**：
+
+1. 图片选择：`<input type="file" accept="image/*" multiple capture="environment" />`
+   - 移动端：点击触发相机/相册选择器（系统原生 UI）
+   - 桌面端：文件选择器
+2. 图片压缩：Canvas 缩放至最长边 ≤1024px，JPEG 质量 0.8（减少上传体积，手机原图通常 3-5MB → 压缩后 ~200-500KB）
+3. 提交：`multipart/form-data` POST 到 `/aquasense-remind/api/report/submit`
+4. 结果展示：页面显示分析摘要（状态/置信度/症状）
+
+**服务端 API**：
+
+```
+POST /aquasense-remind/api/report/submit
+Content-Type: multipart/form-data
+
+字段:
+  images[]     - 图片文件(多张)
+  description  - 文字描述(可选)
+  pool_id      - 池号
+  task         - 任务描述
+  time         - 任务时间
+  chat_id      - 群 ID(可选)
+```
+
+**服务端处理链路**（复用现有模块）：
+
+```
+接收 multipart → 图片 Buffer → base64 编码
+    │
+    ▼
+callVisionModel(images, prompt)    ← 复用 analyze-image.ts
+    │
+    ▼
+生成处置建议                        ← 复用 generate-advice.ts
+    │
+    ▼
+buildFields + 飞书多维表格 API      ← 复用 record-ledger.ts
+    │
+    ▼
+返回 { success, analysis, advice, ledger_url }
+```
+
+**安全性**：
+
+- 同源校验：与现有 `/aquasense-remind/api` 路由共用 Origin 检查
+- 图片大小限制：单张 ≤10MB，总数 ≤9 张
+- 池号白名单：仅允许 池1/池2/池3/池4
+- 无认证 token 场景：依赖同源校验 + 群 ID 关联；如需更强认证可后续增加一次性 token
 
 ---
 
@@ -441,6 +549,9 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | 重启 | 启动时加载 | 复用当日计划 + sent 标记；已推送不重复、已过时间点不补推 |
 | 跨天滚动 | tick 日期比对 | 自动生成新一日计划 |
 | 同分钟重复 tick | 进程内 Set | 跳过重复推送 |
+| H5 上传页不可达（网络不通/服务器未启动） | 卡片按钮 URL 打开失败 | 工人回退到群聊手动发送图片 → S1-S8 主链路 |
+| H5 上传页图片提交失败 | POST 返回非 200 | 页面展示错误提示，工人可重试或回退群聊发图 |
+| H5 上传页图片超限（>10MB 或 >9 张） | 前端校验 | 提交前拦截并提示工人减少图片数量或压缩 |
 
 ---
 
@@ -493,6 +604,8 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | 文件路径 | 变更类型 | 变更说明 |
 |----------|---------|----------|
 | `src/index.ts` | 接入 | `apply()` 调用 `setupS9Reminder(ctx)` |
+| `src/scheduler/s9-reminder.ts` | 扩展 | 卡片 B 按钮从 `value` 回调改为 `url` 跳转（§5.2） |
+| `src/web/remind-gateway.ts` | 扩展 | 新增 `/report` 静态页面路由 + `/api/report/submit` 上传处理路由（§5.4） |
 | `package.json` | 清理 | 移除 `bin` 与 `remind`/`remind:prod` scripts |
 | `.env.example` | 更新 | S9 段与 `S9_REMIND_*` 对齐（移除 `FEISHU_WORKER_GROUP` 旧项） |
 | `docs/architecture.md` | 引用 | S9 概述改为摘要 + 指向本文（分-总关系） |
@@ -529,6 +642,15 @@ pushAbnormalAlert() → 异常预警卡片 (卡片 C):
 | `package.json` | 更新 | `exports['./client']`、`dsh.client`、`build:client` 脚本、客户端 peer 声明 |
 | `tsconfig.json` | 更新 | `jsx: react-jsx`（客户端 TSX 编译） |
 
+### 8.6 H5 拍照上传页文件清单
+
+| 文件路径 | 变更 | 说明 |
+|----------|------|------|
+| `src/web/report-upload.html` | 新增 | H5 拍照上传页（移动端优先，含图片压缩 + 表单提交 + 结果展示） |
+| `src/web/report-handler.ts` | 新增 | 服务端上传处理：multipart 解析 → 图片 base64 → 调用 analyzeImage + generateAdvice + recordLedger |
+| `src/web/remind-gateway.ts` | 扩展 | 新增 `GET /report` 路由（返回静态 HTML）+ `POST /api/report/submit` 路由（调用 report-handler） |
+| `src/scheduler/s9-reminder.ts` | 扩展 | `buildTaskCard()` 按钮从 `value` 改为 `url`，URL 指向 H5 上传页 |
+
 ---
 
 ## 9. 存储设计
@@ -558,9 +680,12 @@ $AQUASENSE_CACHE_DIR/          # 绝对路径(Linux: /data/aquasense/cache)
 [aquasense-remind] 重试仍失败(10:00 巡检): <error>
 [aquasense-remind] 跨天滚动: 生成 2026-09-17 计划
 [aquasense-remind] 预警卡片已推送: 池3 early(medium)
+[aquasense-remind] H5 汇报已接收: 池1 巡检, 2 张图片, 来源 chat_id=oc_xxx
+[aquasense-remind] H5 汇报分析完成: 池1 normal(0.92), 已落台账
+[aquasense-remind] H5 汇报分析异常: 池3 early(0.85), 已落台账 + 预警卡片已推送
 ```
 
-关键事件：配置加载、计划生成、逐条推送、失败重试、跨天滚动、预警推送。
+关键事件：配置加载、计划生成、逐条推送、失败重试、跨天滚动、预警推送、H5 汇报接收与分析。
 
 ---
 
@@ -574,6 +699,7 @@ $AQUASENSE_CACHE_DIR/          # 绝对路径(Linux: /data/aquasense/cache)
 | M4 | 按钮回调（拍照引导/台账跳转） | M3 | 🔄 部分实现（卡片按钮已下发；回调链见 §5.3） |
 | M5 | 异常预警卡片 + 主链路接入 | M4 | ✅ 已实现 |
 | M6 | V1 下线（进程/包入口/旧状态清理）+ 部署验证 | M5 | ✅ 已实现（部署验证见下方验收要点） |
+| M7 | H5 拍照上传页 + 服务端分析链路 | M3 | 🔲 待实现（§5.4；卡片按钮 URL 跳转 → H5 选图 → AI 分析 → 落台账） |
 
 **验收要点**（对应需求 R6.6）：
 
@@ -583,3 +709,7 @@ $AQUASENSE_CACHE_DIR/          # 绝对路径(Linux: /data/aquasense/cache)
 - [ ] 仅提醒：卡片无打卡交互，S9 不写任何多维表格
 - [ ] 飞书不可用/群未配置/Cron 非法/任务表为空：降级为日志，不阻断插件启动
 - [ ] `early`/`disease` 分析后自动推送异常预警卡片
+- [ ] M7：卡片「拍照汇报」按钮点击后打开 H5 上传页
+- [ ] M7：H5 页支持拍照+相册多选，图片压缩后提交
+- [ ] M7：服务端接收图片 → AI 分析 → 落台账，结果回显 H5 页面
+- [ ] M7：H5 不可达时降级为群聊发图走 S1-S8 主链路
