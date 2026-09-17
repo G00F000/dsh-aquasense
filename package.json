@@ -40,7 +40,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsdown -c tsdown.config.ts",
+    "build": "tsc -p tsconfig.build.json && tsdown -c tsdown.config.ts && mkdir -p dist/web && cp src/web/*.html dist/web/",
     "build:client": "tsdown -c tsdown.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepare": "npm run build",

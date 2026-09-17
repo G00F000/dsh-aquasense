@@ -1,0 +1,479 @@
+<!doctype html>
+<!--
+  R8 H5 拍照汇报页（S9 卡片 B「📷 拍照汇报」按钮的落地页，见 docs/s9-daily-reminder-architecture.md §5.4）
+  URL 参数：task=任务描述 & time=任务时间 & chat_id=群ID
+  流程：选图/拍照 → 客户端压缩(≤1024px JPEG 0.8) → multipart 提交 →
+        轮询 /aquasense-remind/api/report/progress 展示 5 步进度 →
+        完成后自动跳转分析详情页（R8 入口 A）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>拍照汇报 · AquaSense</title>
+<style>
+:root{
+  --bg-primary:#ffffff;--bg-secondary:#f5f7fa;--bg-card:#ffffff;
+  --text-primary:#1a1a1a;--text-secondary:#666666;--border:#e0e0e0;
+  --accent:#1677ff;--success:#52c41a;--warning:#faad14;--danger:#ff4d4f;
+  --chip:#eef2f7;--shadow:0 2px 10px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg-primary:#1a1a1a;--bg-secondary:#242424;--bg-card:#232323;
+    --text-primary:#e0e0e0;--text-secondary:#999999;--border:#3a3a3a;
+    --accent:#4096ff;--success:#49aa19;--warning:#d89614;--danger:#dc4446;
+    --chip:#2f2f2f;--shadow:none;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-secondary);color:var(--text-primary);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;padding-bottom:32px}
+header{position:sticky;top:0;z-index:5;padding:12px 16px;background:var(--bg-primary);border-bottom:1px solid var(--border)}
+header h1{margin:0;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px}
+header .meta{margin-top:2px;font-size:12px;color:var(--text-secondary)}
+main{max-width:560px;margin:0 auto;padding:12px 14px}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:14px;margin:10px 0;box-shadow:var(--shadow)}
+h2{margin:16px 4px 6px;font-size:13px;font-weight:600;color:var(--text-secondary)}
+h2 .req{color:var(--danger);margin-left:2px}
+/* ---- 照片区 ---- */
+.photo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.thumb{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--chip)}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.thumb .del{position:absolute;top:4px;right:4px;width:22px;height:22px;border:0;border-radius:50%;
+  background:rgba(0,0,0,.55);color:#fff;font-size:14px;line-height:22px;text-align:center;padding:0;cursor:pointer}
+.thumb .sz{position:absolute;left:0;right:0;bottom:0;padding:2px 6px;font-size:10px;color:#fff;background:rgba(0,0,0,.45)}
+.add-tile{position:relative;aspect-ratio:1;border:1.5px dashed var(--border);border-radius:10px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--text-secondary);
+  font-size:12px;cursor:pointer;background:var(--bg-card)}
+.add-tile .plus{font-size:26px;line-height:1;color:var(--accent)}
+.add-tile input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.hint{font-size:12px;color:var(--text-secondary);margin-top:8px}
+/* ---- 池号选择 ---- */
+.pools{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.pool{padding:10px 0;text-align:center;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);
+  color:var(--text-primary);font-size:15px;font-weight:600;cursor:pointer;transition:all .15s ease}
+.pool.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+/* ---- 输入 ---- */
+input[type=text],textarea{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;
+  background:var(--bg-card);color:var(--text-primary);font-size:15px;font-family:inherit}
+textarea{min-height:64px;resize:vertical}
+input[type=text]:focus,textarea:focus{outline:none;border-color:var(--accent)}
+.counter{text-align:right;font-size:11px;color:var(--text-secondary);margin-top:2px}
+/* ---- 提交按钮 ---- */
+.submit{display:block;width:100%;margin:18px 0 0;padding:13px 0;border:0;border-radius:12px;
+  background:var(--accent);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+.submit:disabled{opacity:.55;cursor:not-allowed}
+/* ---- 进度面板 ---- */
+.steps{list-style:none;margin:0;padding:0}
+.steps li{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:14px}
+.steps li .ic{width:20px;text-align:center}
+.steps li .nm{flex:1}
+.steps li .pc{color:var(--text-secondary);font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.bar-track{height:10px;border-radius:999px;background:var(--chip);overflow:hidden;margin:10px 0 4px}
+.bar-fill{height:100%;width:0;border-radius:999px;background:var(--accent);transition:width .5s ease}
+.bar-label{display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary)}
+/* ---- 结果 ---- */
+.result .cls{display:inline-block;padding:2px 12px;border-radius:999px;color:#fff;font-size:13px;font-weight:600}
+.result .cls.normal{background:var(--success)}.result .cls.early{background:var(--warning)}
+.result .cls.disease{background:var(--danger)}.result .cls.unknown{background:var(--text-secondary)}
+.sym{display:inline-block;margin:4px 6px 0 0;padding:1px 10px;border-radius:999px;background:var(--chip);font-size:13px}
+.err-card{border-color:var(--danger)}
+.err-card .msg{color:var(--danger);font-size:14px;margin:6px 0}
+.actions{display:flex;gap:10px;margin-top:12px}
+.btn{flex:1;padding:11px 0;border-radius:10px;border:1px solid var(--border);background:var(--bg-card);
+  color:var(--text-primary);font-size:15px;font-weight:600;text-align:center;text-decoration:none;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);max-width:88vw;padding:10px 16px;
+  border-radius:10px;background:rgba(0,0,0,.8);color:#fff;font-size:14px;z-index:20;display:none}
+.hidden{display:none !important}
+</style>
+</head>
+<body>
+<header>
+  <h1>📷 拍照汇报</h1>
+  <div class="meta" id="task-meta">加载中…</div>
+</header>
+<main>
+  <div id="form-area">
+    <h2>现场照片<span class="req">*</span>（最多 9 张，自动压缩）</h2>
+    <div class="card">
+      <div class="photo-grid" id="photo-grid"></div>
+      <div class="hint">拍摄后请确认照片清晰；点击缩略图右上角 ✕ 可删除。</div>
+    </div>
+
+    <h2>池号<span class="req">*</span></h2>
+    <div class="card">
+      <div class="pools" id="pools"></div>
+    </div>
+
+    <h2>上报人<span class="req">*</span></h2>
+    <div class="card">
+      <input type="text" id="reporter" maxlength="32" placeholder="请输入你的姓名（记入台账）" autocomplete="name">
+    </div>
+
+    <h2>补充描述（可选）</h2>
+    <div class="card">
+      <textarea id="description" maxlength="500" placeholder="如：今天早上发现水面有少量浮头…"></textarea>
+      <div class="counter" id="desc-counter">0/500</div>
+    </div>
+
+    <button type="button" class="submit" id="btn-submit">完成汇报</button>
+    <p class="hint" style="text-align:center">提交后 AI 将自动分析并写入台账，请稍候查看进度。</p>
+  </div>
+
+  <div id="progress-area" class="hidden">
+    <h2>分析进度</h2>
+    <div class="card">
+      <ul class="steps" id="step-list"></ul>
+      <div class="bar-track"><div class="bar-fill" id="bar-fill"></div></div>
+      <div class="bar-label"><span id="bar-step">上传图片…</span><span id="bar-pct">0%</span></div>
+    </div>
+  </div>
+
+  <div id="result-area" class="hidden"></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  var MAX_PHOTOS = 9;
+  var MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+  var MAX_EDGE = 1024;
+  var JPEG_QUALITY = 0.8;
+  var POLL_INTERVAL_MS = 1500;
+  var POLL_TIMEOUT_MS = 3 * 60 * 1000;
+  var AUTO_JUMP_SECONDS = 5;
+
+  var params = new URLSearchParams(location.search);
+  var task = params.get('task') || '';
+  var taskTime = params.get('time') || '';
+  var chatId = params.get('chat_id') || '';
+
+  var formArea = document.getElementById('form-area');
+  var progressArea = document.getElementById('progress-area');
+  var resultArea = document.getElementById('result-area');
+  var grid = document.getElementById('photo-grid');
+  var poolsEl = document.getElementById('pools');
+  var reporterEl = document.getElementById('reporter');
+  var descEl = document.getElementById('description');
+  var descCounter = document.getElementById('desc-counter');
+  var submitBtn = document.getElementById('btn-submit');
+  var stepList = document.getElementById('step-list');
+  var barFill = document.getElementById('bar-fill');
+  var barStep = document.getElementById('bar-step');
+  var barPct = document.getElementById('bar-pct');
+  var toastEl = document.getElementById('toast');
+
+  var photos = [];   // { key, file, url }
+  var photoSeq = 0;
+  var pool = '池1';
+  var submitting = false;
+
+  var STEPS = [
+    { pct: 20,  name: '上传图片' },
+    { pct: 40,  name: 'AI 视觉分析' },
+    { pct: 60,  name: '知识库检索' },
+    { pct: 80,  name: '处置建议' },
+    { pct: 100, name: '台账写入' }
+  ];
+  var CLS_NAME = { normal: '正常', early: '前兆', disease: '发病', unknown: '未知' };
+
+  // ---- 工具函数 ----
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  var toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.style.display = 'none'; }, 2600);
+  }
+  function fmtBytes(n) {
+    if (typeof n !== 'number' || n <= 0) return '';
+    return n >= 1048576 ? (n / 1048576).toFixed(1) + 'MB' : Math.round(n / 1024) + 'KB';
+  }
+
+  // ---- 头部任务信息 ----
+  (function initHeader() {
+    var meta = document.getElementById('task-meta');
+    var parts = [];
+    if (task) parts.push('📋 ' + task);
+    if (taskTime) parts.push('⏰ ' + taskTime);
+    meta.textContent = parts.length ? parts.join(' · ') : '现场拍照，AI 自动分析并记入台账';
+  })();
+
+  // ---- 照片选择与压缩 ----
+  function renderPhotos() {
+    var html = '';
+    photos.forEach(function (p) {
+      html += '<div class="thumb">' +
+        '<img src="' + esc(p.url) + '" alt="现场照片">' +
+        '<button type="button" class="del" data-key="' + esc(p.key) + '" aria-label="删除">✕</button>' +
+        '<span class="sz">' + esc(fmtBytes(p.file.size)) + '</span>' +
+      '</div>';
+    });
+    if (photos.length < MAX_PHOTOS) {
+      html += '<label class="add-tile"><span class="plus">＋</span><span>' + (photos.length ? '继续添加' : '拍照 / 相册') + '</span>' +
+        '<input type="file" id="file-input" accept="image/*" multiple capture="environment"></label>';
+    }
+    grid.innerHTML = html;
+    var input = document.getElementById('file-input');
+    if (input) input.addEventListener('change', onPick);
+  }
+
+  function onPick(ev) {
+    var files = Array.prototype.slice.call(ev.target.files || []);
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      if (photos.length >= MAX_PHOTOS) { toast('最多 ' + MAX_PHOTOS + ' 张照片'); break; }
+      if (f.type && f.type.indexOf('image/') !== 0) { toast('「' + (f.name || '文件') + '」不是图片，已跳过'); continue; }
+      if (f.size > MAX_PHOTO_BYTES) { toast('「' + (f.name || '图片') + '」超过 10MB，请压缩后重试'); continue; }
+      photoSeq += 1;
+      photos.push({ key: 'p' + photoSeq, file: f, url: URL.createObjectURL(f) });
+    }
+    renderPhotos();
+  }
+
+  grid.addEventListener('click', function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest('.del') : null;
+    if (!btn) return;
+    var key = btn.getAttribute('data-key');
+    for (var i = 0; i < photos.length; i++) {
+      if (photos[i].key === key) {
+        URL.revokeObjectURL(photos[i].url);
+        photos.splice(i, 1);
+        break;
+      }
+    }
+    renderPhotos();
+  });
+
+  /** 客户端压缩：长边 ≤1024px，JPEG 0.8（失败时退回原图） */
+  function compressPhoto(file) {
+    return new Promise(function (resolve) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var w = img.naturalWidth || img.width;
+          var h = img.naturalHeight || img.height;
+          var scale = Math.min(1, MAX_EDGE / Math.max(w, h));
+          var canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(w * scale));
+          canvas.height = Math.max(1, Math.round(h * scale));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(function (blob) {
+            URL.revokeObjectURL(url);
+            if (!blob) { resolve(file); return; }
+            var name = String(file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg';
+            resolve(new File([blob], name, { type: 'image/jpeg' }));
+          }, 'image/jpeg', JPEG_QUALITY);
+        } catch (err) {
+          URL.revokeObjectURL(url);
+          resolve(file);
+        }
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  }
+
+  // ---- 池号选择 ----
+  (function initPools() {
+    ['池1', '池2', '池3', '池4'].forEach(function (p) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pool' + (p === pool ? ' on' : '');
+      btn.textContent = p;
+      btn.addEventListener('click', function () {
+        pool = p;
+        Array.prototype.forEach.call(poolsEl.children, function (c) {
+          c.className = 'pool' + (c.textContent === p ? ' on' : '');
+        });
+      });
+      poolsEl.appendChild(btn);
+    });
+  })();
+
+  // ---- 上报人记忆（H5 无 open_id，姓名必填并本地记忆） ----
+  try {
+    var saved = localStorage.getItem('aquasense.reporter');
+    if (saved) reporterEl.value = saved;
+  } catch (err) { /* 隐私模式忽略 */ }
+  reporterEl.addEventListener('change', function () {
+    try { localStorage.setItem('aquasense.reporter', reporterEl.value.trim()); } catch (err) { /* 忽略 */ }
+  });
+
+  descEl.addEventListener('input', function () { descCounter.textContent = descEl.value.length + '/500'; });
+
+  // ---- 进度渲染 ----
+  function renderSteps(progress) {
+    var doneCount = 0;
+    STEPS.forEach(function (s) { if (progress >= s.pct) doneCount += 1; });
+    stepList.innerHTML = STEPS.map(function (s, i) {
+      var ic = i < doneCount ? '✅' : (i === doneCount ? '🔄' : '⬜');
+      return '<li><span class="ic">' + ic + '</span><span class="nm">' + esc(s.name) + '</span>' +
+        '<span class="pc">' + s.pct + '%</span></li>';
+    }).join('');
+    var pct = Math.max(0, Math.min(100, progress));
+    barFill.style.width = pct + '%';
+    barPct.textContent = pct + '%';
+  }
+
+  // ---- 提交与轮询 ----
+  function submit() {
+    if (submitting) return;
+    if (photos.length === 0) { toast('请先拍摄或选择至少 1 张照片'); return; }
+    var reporter = reporterEl.value.trim();
+    if (!reporter) { toast('请填写上报人姓名'); reporterEl.focus(); return; }
+    try { localStorage.setItem('aquasense.reporter', reporter); } catch (err) { /* 忽略 */ }
+
+    submitting = true;
+    submitBtn.disabled = true;
+    submitBtn.textContent = '正在处理…';
+    formArea.classList.add('hidden');
+    resultArea.classList.add('hidden');
+    progressArea.classList.remove('hidden');
+    renderSteps(5);
+
+    var filesPromise = Promise.all(photos.map(function (p) { return compressPhoto(p.file); }));
+    filesPromise.then(function (files) {
+      var form = new FormData();
+      files.forEach(function (f) { form.append('images', f, f.name); });
+      form.append('pool_id', pool);
+      form.append('reporter', reporter);
+      form.append('description', descEl.value.trim());
+      if (task) form.append('task', task);
+      if (taskTime) form.append('time', taskTime);
+      if (chatId) form.append('chat_id', chatId);
+      return fetch('/aquasense-remind/api/report/submit', { method: 'POST', body: form });
+    }).then(function (resp) {
+      return resp.json().then(function (body) {
+        if (!resp.ok || !body || !body.ok) {
+          throw new Error((body && body.error && body.error.message) || ('提交失败（HTTP ' + resp.status + '）'));
+        }
+        return body.value;
+      });
+    }).then(function (value) {
+      poll(value.job_id);
+    }).catch(function (err) {
+      showError(err.message || '网络异常，请重试');
+    });
+  }
+
+  function poll(jobId) {
+    var startedAt = Date.now();
+    var timer = setInterval(function () {
+      fetch('/aquasense-remind/api/report/progress?job_id=' + encodeURIComponent(jobId))
+        .then(function (resp) { return resp.json(); })
+        .then(function (body) {
+          if (!body || !body.ok) throw new Error((body && body.error && body.error.message) || '进度查询失败');
+          var job = body.value;
+          renderSteps(job.progress || 0);
+          if (job.step) barStep.textContent = job.step;
+          if (job.status === 'running') {
+            if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+              clearInterval(timer);
+              showError('分析超时，请稍后在「分析记录」中查看结果，或重新提交');
+            }
+            return;
+          }
+          clearInterval(timer);
+          if (job.status === 'done') showDone(job);
+          else showLedgerError(job);
+        })
+        .catch(function (err) {
+          clearInterval(timer);
+          showError(err.message || '网络异常，请重试');
+        });
+    }, POLL_INTERVAL_MS);
+  }
+
+  function showDone(job) {
+    progressArea.classList.add('hidden');
+    var cls = job.cls || 'unknown';
+    var syms = (job.symptoms || []).map(function (s) { return '<span class="sym">' + esc(s) + '</span>'; }).join('');
+    resultArea.innerHTML =
+      '<h2>分析结果</h2>' +
+      '<div class="card result">' +
+        '<p><span class="cls ' + esc(cls) + '">' + esc(CLS_NAME[cls] || cls) + '</span>' +
+        (typeof job.confidence === 'number' ? ' <span style="color:var(--text-secondary);font-size:13px">置信度 ' + esc(job.confidence.toFixed(2)) + '</span>' : '') + '</p>' +
+        (syms ? '<p>' + syms + '</p>' : '<p style="color:var(--text-secondary);font-size:13px">未检出异常症状</p>') +
+        (job.message ? '<p style="color:var(--text-secondary);font-size:13px">' + esc(job.message) + '</p>' : '') +
+        '<div class="actions"><a class="btn primary" id="jump" href="/aquasense-reports/report?id=' + encodeURIComponent(job.record_id || '') + '">查看完整分析详情 →</a></div>' +
+        '<p class="hint" id="jump-hint"></p>' +
+      '</div>';
+    resultArea.classList.remove('hidden');
+    window.scrollTo(0, 0);
+
+    var left = AUTO_JUMP_SECONDS;
+    var hint = document.getElementById('jump-hint');
+    var timer = setInterval(function () {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(timer);
+        location.href = '/aquasense-reports/report?id=' + encodeURIComponent(job.record_id || '');
+        return;
+      }
+      if (hint) hint.textContent = left + ' 秒后自动跳转…';
+    }, 1000);
+    if (hint) hint.textContent = left + ' 秒后自动跳转…';
+  }
+
+  function showLedgerError(job) {
+    progressArea.classList.add('hidden');
+    resultArea.innerHTML =
+      '<h2>未能写入台账</h2>' +
+      '<div class="card err-card">' +
+        '<p class="msg">' + esc(job.message || '台账写入失败') + '</p>' +
+        (job.record_id ? '<p class="hint">分析过程已记录（' + esc(job.record_id) + '），可查看详情了解原因。</p>' : '') +
+        '<div class="actions">' +
+          (job.record_id ? '<a class="btn" href="/aquasense-reports/report?id=' + encodeURIComponent(job.record_id) + '">查看分析详情</a>' : '') +
+          '<button type="button" class="btn primary" id="btn-retry">重新汇报</button>' +
+        '</div>' +
+      '</div>';
+    resultArea.classList.remove('hidden');
+    bindRetry();
+  }
+
+  function showError(message) {
+    progressArea.classList.add('hidden');
+    resultArea.innerHTML =
+      '<h2>提交失败</h2>' +
+      '<div class="card err-card">' +
+        '<p class="msg">' + esc(message) + '</p>' +
+        '<p class="hint">也可以回到群里直接发送照片，机器人会自动记录台账。</p>' +
+        '<div class="actions"><button type="button" class="btn primary" id="btn-retry">重新汇报</button></div>' +
+      '</div>';
+    resultArea.classList.remove('hidden');
+    bindRetry();
+  }
+
+  function bindRetry() {
+    var btn = document.getElementById('btn-retry');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      submitting = false;
+      submitBtn.disabled = false;
+      submitBtn.textContent = '完成汇报';
+      resultArea.classList.add('hidden');
+      progressArea.classList.add('hidden');
+      formArea.classList.remove('hidden');
+      window.scrollTo(0, 0);
+    });
+  }
+
+  submitBtn.addEventListener('click', submit);
+  renderPhotos();
+  renderSteps(0);
+})();
+</script>
+</body>
+</html>

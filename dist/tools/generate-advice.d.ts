@@ -8,7 +8,48 @@
  * 按「原文引用→逻辑推理→总结」输出分级处置建议。
  * 容错原则:知识库不可用不阻断主流程,降级为内置通用建议模板。
  */
+import { type SearchResult } from '../ima/ima-api.js';
+export interface AnalysisInput {
+    abnormal?: boolean;
+    cls?: string;
+    symptoms?: string[];
+    severity?: string;
+}
+/** 引用摘录:正文片段 + 定位信息(如 "第56页";PDF 命中且缓存含分页符时才有,无则不臆造) */
+export interface Excerpt {
+    title: string;
+    text: string;
+    from?: string;
+    locator?: string;
+}
+/** 处置建议产出(与工具 output.schema 一致) */
+export interface AdviceResult {
+    diagnosis_summary: string;
+    immediate_actions: string[];
+    follow_up_actions: string[];
+    medication: string;
+    alert_level: 'P0' | 'P1' | 'P2';
+    knowledge_refs: string[];
+    knowledge_excerpt: string[];
+    reasoning: string;
+}
+/** 知识检索结果(retrieve 步骤产出:查询词 + 三通道命中 + 原文摘录) */
+export interface KnowledgeRetrieval {
+    query: string;
+    knowledge: SearchResult | null;
+    excerpts: Excerpt[];
+}
 export declare const generateAdvice: import("@deepseek-ai/dsh-tools").ToolDefinition;
+/**
+ * 步骤 1-2:查询 IMA 知识库(三通道合并)并读取命中条目正文摘取原文片段。
+ * 导出供 R8 H5 管线分段埋点(retrieve span)复用;任何失败降级不抛异常。
+ */
+export declare function retrieveKnowledge(analysis: AnalysisInput): Promise<KnowledgeRetrieval>;
+/**
+ * 步骤 3-5:根据严重程度生成分级处置建议(用药建议 + 预警级别)。
+ * 导出供 R8 H5 管线分段埋点(advice span)复用;knowledge/excerpts 来自 retrieveKnowledge。
+ */
+export declare function generateAdviceInternal(analysis: AnalysisInput, knowledge: SearchResult | null, excerpts: Excerpt[]): Promise<AdviceResult>;
 /**
  * 从正文中定位与症状最相关的片段:
  * 按句切分 → 命中关键词最多的句子取前后各一句作上下文 → 限长截断;

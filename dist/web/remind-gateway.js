@@ -12,6 +12,7 @@
  */
 import { getFeishuToken } from '../feishu/token.js';
 import { getRemindConfig, getRemindStatus, normalizeRemindTask, saveRemindConfig, sendTestReminder } from '../scheduler/s9-reminder.js';
+import { REPORT_PROGRESS_PATH, REPORT_SUBMIT_PATH, handleReportHttp } from './report-handler.js';
 // ========== 常量 ==========
 /** 配置页 API 路由前缀(同源 fetch;方法追加在其后,如 /get) */
 export const REMIND_API_PREFIX = '/aquasense-remind/api';
@@ -151,9 +152,17 @@ export async function fetchFeishuGroups() {
 /**
  * 处理一次 HTTP 请求:协议层校验 + 方法分发 + 信封写回。
  * 协议:POST only、同源(Origin 与 Host 一致)、Content-Type application/json。
+ * R8:H5 拍照汇报的提交/进度子路径(`/report/*`)分流给 report-handler
+ * (multipart 提交与 GET 轮询,协议由其自行校验)。
  */
 export async function handleRemindHttp(dispatch, req, res) {
     try {
+        const pathname = new URL(req.url ?? '/', 'http://dsh.internal').pathname;
+        // R8 H5 拍照汇报:提交(POST multipart)/进度(GET 轮询)
+        if (pathname === REPORT_SUBMIT_PATH || pathname === REPORT_PROGRESS_PATH) {
+            await handleReportHttp(req, res);
+            return;
+        }
         if ((req.method ?? '') !== 'POST') {
             writeEnvelope(res, 405, fail(405, 'method-not-allowed', '仅支持 POST').body);
             return;
@@ -179,7 +188,6 @@ export async function handleRemindHttp(dispatch, req, res) {
             writeEnvelope(res, 415, fail(415, 'content-type-not-supported', '请求体需为 application/json').body);
             return;
         }
-        const pathname = new URL(req.url ?? '/', 'http://dsh.internal').pathname;
         const method = pathname.startsWith(`${REMIND_API_PREFIX}/`)
             ? pathname.slice(REMIND_API_PREFIX.length + 1)
             : '';

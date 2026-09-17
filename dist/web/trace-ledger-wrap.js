@@ -1,0 +1,167 @@
+/**
+ * R8 群聊场景 trace 集成(后置收集,见 docs/r8-traceability-architecture.md §4.1 方案 A)
+ *
+ * 以包装器替换 recordLedger 注册(不修改其实现):台账写入完成后,从
+ * args(analysis/advice/open_id)与返回值(record_id/message)组装**简化版**
+ * AnalysisRecord(source='group_chat')并落盘。
+ *
+ * 简化模式说明:群聊场景由 Agent 编排调用,无法分段计时,故只有 ledger
+ * 步骤有真实耗时(包装器测量);analyze/advice 数据来自 Agent 透传的参数,
+ * 无 Token 数据(记录中为 0)。
+ *
+ * 安全边界:
+ *  - trace 写入为 fire-and-forget,任何失败不影响台账主链路(内部全量捕获);
+ *  - 追问类失败(missing 非空)不记录(高频且无分析价值,避免噪声);
+ *  - H5 场景调用原始 recordLedger(未包装),由 report-handler 全量埋点,不重复记录。
+ */
+import { getFeishuUserName } from '../feishu/token.js';
+import { AnalysisTracer } from './trace-recorder.js';
+// ========== 常量 ==========
+/** 场景 → 中文表名(详情页展示 target_table) */
+const SCENE_TABLE_NAME = {
+    inspection: '巡检记录表',
+    water_quality: '水质检测表',
+    medication: '用药记录表',
+    feeding: '喂食记录表',
+    temperature: '温度记录表',
+    death: '死鱼记录表',
+    dissection: '解剖记录表'
+};
+/** 症状/输出原始文本截断长度(简化模式不保留模型原文) */
+const REASONING_PREVIEW_LENGTH = 200;
+/** 从 args 提取 trace 需要的字段(非对象/无池号时返回 null) */
+function pickTraceInput(args) {
+    if (!args || typeof args !== 'object')
+        return null;
+    const a = args;
+    const fields = a.fields && typeof a.fields === 'object' ? a.fields : undefined;
+    const pool = String(a.pool_id ?? fields?.['池号'] ?? '').trim();
+    if (!pool)
+        return null;
+    const analysis = a.analysis && typeof a.analysis === 'object' ? a.analysis : null;
+    const advice = a.advice && typeof a.advice === 'object' ? a.advice : null;
+    // 无 AI 数据可追溯时不记录(如纯手工台账场景)
+    if (!analysis && !advice)
+        return null;
+    return {
+        scene: typeof a.scene === 'string' && a.scene ? a.scene : 'inspection',
+        pool,
+        reporter: String(a.reporter ?? '').trim(),
+        openId: String(a.open_id ?? '').trim(),
+        analysis,
+        advice
+    };
+}
+/** 从返回值提取 trace 需要的字段 */
+function pickTraceResult(result) {
+    if (!result || typeof result !== 'object')
+        return null;
+    const r = result;
+    if (typeof r.success !== 'boolean')
+        return null;
+    return {
+        success: r.success,
+        message: typeof r.message === 'string' ? r.message : '',
+        record_id: typeof r.record_id === 'string' ? r.record_id : undefined,
+        missing: Array.isArray(r.missing) ? r.missing : undefined
+    };
+}
+/** 字符串数组归一化(analysis.symptoms 可能是 string 或 string[]) */
+function toStringArray(value) {
+    if (Array.isArray(value))
+        return value.filter((v) => typeof v === 'string');
+    return typeof value === 'string' && value ? [value] : [];
+}
+/** 操作类型判定:recordLedger 以消息文案区分更新/新增 */
+function operationOf(message) {
+    return message.includes('已更新') ? 'update' : 'create';
+}
+// ========== 后置收集 ==========
+/**
+ * 组装并写入一条简化分析记录;全量捕获异常,不向调用方抛出。
+ */
+export async function recordChatTrace(args, result, ledgerDurationMs) {
+    try {
+        const input = pickTraceInput(args);
+        const output = pickTraceResult(result);
+        if (!input || !output)
+            return;
+        // 追问类失败(缺池号/缺 open_id 等)不记录:高频且无分析价值
+        if (!output.success && output.missing && output.missing.length > 0)
+            return;
+        // 上报人:优先 open_id 解析(与 recordLedger 同源),失败降级 args.reporter
+        let reporter = input.reporter;
+        if (input.openId) {
+            const resolved = await getFeishuUserName(input.openId).catch(() => '');
+            if (resolved)
+                reporter = resolved;
+        }
+        const tracer = new AnalysisTracer({
+            pool: input.pool,
+            reporter,
+            reporter_open_id: input.openId,
+            source: 'group_chat'
+        });
+        // analyze:数据来自 Agent 透传的分析结果(无耗时/Token)
+        const analysis = input.analysis;
+        if (analysis) {
+            tracer.recordSpan('analyze', {
+                prompt_length: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                output_raw: '',
+                cls: String(analysis.cls ?? 'unknown'),
+                symptoms: toStringArray(analysis.symptoms),
+                severity: String(analysis.severity ?? 'low'),
+                confidence: typeof analysis.confidence === 'number' ? analysis.confidence : 0,
+                scene_hint: String(analysis.scene_hint ?? input.scene)
+            });
+        }
+        // advice:数据来自 Agent 透传的处置建议
+        const advice = input.advice;
+        if (advice) {
+            const refs = toStringArray(advice.knowledge_refs);
+            tracer.recordSpan('advice', {
+                input_cls: String(analysis?.cls ?? input.scene),
+                alert_level: String(advice.alert_level ?? 'P2'),
+                knowledge_refs_count: refs.length,
+                diagnosis_summary: String(advice.diagnosis_summary ?? ''),
+                reasoning_preview: String(advice.reasoning ?? '').slice(0, REASONING_PREVIEW_LENGTH)
+            });
+        }
+        // ledger:真实耗时来自包装器测量
+        tracer.recordSpan('ledger', {
+            target_table: SCENE_TABLE_NAME[input.scene] ?? input.scene,
+            operation: operationOf(output.message),
+            record_id: output.record_id,
+            success: output.success,
+            message: output.message
+        }, ledgerDurationMs);
+        if (!output.success) {
+            tracer.setTraceMeta({ status: 'error', error: output.message });
+        }
+        const id = await tracer.flush();
+        console.log(`[aquasense-trace] 群聊 trace: ${id}, 简化模式(无 Token)`);
+    }
+    catch (error) {
+        // 埋点失败不影响台账主链路
+        console.warn('[aquasense-trace] 群聊 trace 写入失败:', error instanceof Error ? error.message : error);
+    }
+}
+// ========== 工具包装 ==========
+/**
+ * 包装台账工具:透传全部定义,仅在 execute 后追加一次后置收集。
+ * trace 写入为 fire-and-forget(不 await),不改变工具返回时机与结果。
+ */
+export function wrapLedgerWithTrace(tool) {
+    return {
+        ...tool,
+        async execute(args, exec) {
+            const started = performance.now();
+            const result = await tool.execute(args, exec);
+            const durationMs = Math.round(performance.now() - started);
+            void recordChatTrace(args, result, durationMs);
+            return result;
+        }
+    };
+}

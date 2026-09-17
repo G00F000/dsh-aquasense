@@ -1,0 +1,362 @@
+<!doctype html>
+<!--
+  R8 池号趋势页（原型 C，见 docs/r8-traceability-requirements.md §4.3）
+  状态分布（CSS 柱状图）+ 语义聚类图（TF-IDF 向量 → 简化 PCA 2D 投影 → Canvas 散点）
+  + 症状频次 + 最近 10 条记录。
+  数据源：GET /aquasense-reports/api/trend/:pool?days=7
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>池号趋势 · AquaSense</title>
+<style>
+:root{
+  --bg-primary:#ffffff;--bg-secondary:#f5f7fa;--bg-card:#ffffff;
+  --text-primary:#1a1a1a;--text-secondary:#666666;--border:#e0e0e0;
+  --accent:#1677ff;--success:#52c41a;--warning:#faad14;--danger:#ff4d4f;
+  --chip:#eef2f7;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg-primary:#1a1a1a;--bg-secondary:#242424;--bg-card:#232323;
+    --text-primary:#e0e0e0;--text-secondary:#999999;--border:#3a3a3a;
+    --accent:#4096ff;--success:#49aa19;--warning:#d89614;--danger:#dc4446;
+    --chip:#2f2f2f;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-secondary);color:var(--text-primary);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.top{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+  padding:12px 16px;background:var(--bg-primary);border-bottom:1px solid var(--border)}
+.back{flex:none;color:var(--accent);text-decoration:none;font-size:14px}
+.top .sp{flex:1}
+select{appearance:none;padding:6px 26px 6px 10px;border:1px solid var(--border);border-radius:8px;
+  background:var(--bg-card);color:var(--text-primary);font-size:13px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--text-secondary) 50%),linear-gradient(135deg,var(--text-secondary) 50%,transparent 50%);
+  background-position:calc(100% - 13px) 52%,calc(100% - 9px) 52%;background-size:4px 4px;background-repeat:no-repeat}
+main{max-width:760px;margin:0 auto;padding:14px 16px 60px}
+h2{margin:20px 2px 8px;font-size:13px;font-weight:600;color:var(--text-secondary)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+.dist-row{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px}
+.dist-name{flex:none;width:56px}
+.dist-track{flex:1;height:16px;background:var(--chip);border-radius:4px;overflow:hidden}
+.dist-bar{height:100%;border-radius:4px;transition:width .4s ease}
+.dist-bar.normal{background:var(--success)}.dist-bar.early{background:var(--warning)}
+.dist-bar.disease{background:var(--danger)}.dist-bar.unknown{background:var(--text-secondary)}
+.dist-val{flex:none;width:96px;text-align:right;font-size:12px;color:var(--text-secondary)}
+canvas{display:block;width:100%;height:240px;border-radius:8px}
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:12px;color:var(--text-secondary)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px}
+.sym-row{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px}
+.sym-name{flex:none;width:88px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sym-track{flex:1;height:14px;background:var(--chip);border-radius:4px;overflow:hidden}
+.sym-bar{height:100%;border-radius:4px;background:var(--accent);transition:width .4s ease}
+.sym-cnt{flex:none;width:44px;text-align:right;font-size:12px;color:var(--text-secondary)}
+.rec{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);
+  color:inherit;text-decoration:none;font-size:13px}
+.rec:last-child{border-bottom:0}
+.rec:hover{background:var(--bg-secondary)}
+.rec .t{flex:none;width:86px;color:var(--text-secondary);font-size:12px}
+.rec .cls{flex:none;font-weight:600;width:44px}
+.rec .cls.normal{color:var(--success)}.rec .cls.early{color:var(--warning)}.rec .cls.disease{color:var(--danger)}
+.rec .conf{flex:none;width:38px;color:var(--text-secondary);font-size:12px}
+.rec .sym{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}
+.rec .d{flex:none;color:var(--text-secondary);font-size:12px}
+.empty{padding:36px 0;text-align:center;color:var(--text-secondary)}
+.err{margin:12px 0;padding:10px 12px;border-radius:10px;border:1px solid var(--danger);color:var(--danger);font-size:13px;background:var(--bg-card)}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="back" href="/aquasense-reports">← 返回</a>
+  <span class="sp"></span>
+  <select id="f-pool" aria-label="池号">
+    <option>池1</option><option>池2</option><option>池3</option><option>池4</option>
+  </select>
+  <select id="f-days" aria-label="时间范围">
+    <option value="7">近7天</option>
+    <option value="30">近30天</option>
+    <option value="3650">全部</option>
+  </select>
+</header>
+<main id="main"><p class="empty">加载中…</p></main>
+<script>
+(function () {
+  'use strict';
+  var main = document.getElementById('main');
+  var poolSel = document.getElementById('f-pool');
+  var daysSel = document.getElementById('f-days');
+  var params = new URLSearchParams(location.search);
+  var pool = params.get('pool') || '池1';
+  var days = params.get('days') || '7';
+  if (['池1', '池2', '池3', '池4'].indexOf(pool) < 0) pool = '池1';
+  if (['7', '30', '3650'].indexOf(days) < 0) days = '7';
+  poolSel.value = pool;
+  daysSel.value = days;
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function clsName(c) { return { normal: '正常', early: '前兆', disease: '发病', unknown: '未知' }[c] || c || '未知'; }
+  function dur(ms) { return typeof ms === 'number' && ms > 0 ? (ms / 1000).toFixed(1) + 's' : '—'; }
+  function timeText(iso) {
+    var d = new Date(iso);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return (d.getMonth() + 1) + '/' + d.getDate();
+  }
+
+  // ---- 状态分布 ----
+  function renderDist(data) {
+    var dist = data.distribution || {};
+    var total = data.total || 0;
+    var order = ['normal', 'early', 'disease', 'unknown'];
+    var html = '';
+    order.forEach(function (k) {
+      var n = dist[k] || 0;
+      var pct = total > 0 ? Math.round(n / total * 100) : 0;
+      html += '<div class="dist-row">' +
+        '<span class="dist-name">' + esc(clsName(k)) + '</span>' +
+        '<span class="dist-track"><span class="dist-bar ' + k + '" style="width:' + pct + '%"></span></span>' +
+        '<span class="dist-val">' + pct + '% (' + n + '次)</span>' +
+      '</div>';
+    });
+    return '<h2>── 状态分布 ──</h2><div class="card">' + (total > 0 ? html : '<p class="empty">暂无数据</p>') + '</div>';
+  }
+
+  // ---- 症状频次 ----
+  function renderSymptoms(data) {
+    var list = data.top_symptoms || [];
+    if (list.length === 0) {
+      return '<h2>── 症状频次 TOP ──</h2><div class="card"><p class="empty">暂无异常症状记录</p></div>';
+    }
+    var max = list[0].count || 1;
+    var html = list.map(function (s) {
+      return '<div class="sym-row">' +
+        '<span class="sym-name">' + esc(s.symptom) + '</span>' +
+        '<span class="sym-track"><span class="sym-bar" style="width:' + Math.round(s.count / max * 100) + '%"></span></span>' +
+        '<span class="sym-cnt">' + esc(s.count) + '次</span>' +
+      '</div>';
+    }).join('');
+    return '<h2>── 症状频次 TOP ──</h2><div class="card">' + html + '</div>';
+  }
+
+  // ---- 最近 10 条 ----
+  function renderRecent(data) {
+    var list = data.recent_records || [];
+    if (list.length === 0) return '';
+    var html = list.map(function (r) {
+      var cls = r.cls || 'unknown';
+      return '<a class="rec" href="/aquasense-reports/report?id=' + encodeURIComponent(r.id) + '">' +
+        '<span class="t">' + esc(timeText(r.created_at)) + '</span>' +
+        '<span class="cls ' + esc(cls) + '">' + esc(clsName(cls)) + '</span>' +
+        '<span class="conf">' + esc((r.confidence || 0).toFixed(2)) + '</span>' +
+        '<span class="sym">' + esc((r.symptoms && r.symptoms.length) ? r.symptoms.join('、') : '无异常') + '</span>' +
+        '<span class="d">' + esc(dur(r.total_duration_ms)) + '</span>' +
+      '</a>';
+    }).join('');
+    return '<h2>── 最近 10 条记录 ──</h2><div class="card">' + html + '</div>';
+  }
+
+  // ---- 语义聚类图（症状向量 → 简化 PCA → Canvas） ----
+  function buildVectors(records) {
+    var words = [];
+    var seen = {};
+    records.forEach(function (r) {
+      (r.symptoms || []).forEach(function (s) {
+        var w = String(s).trim();
+        if (!w || seen[w]) return;
+        seen[w] = 1;
+        words.push(w);
+      });
+    });
+    var vectors = records.map(function (r) {
+      return words.map(function (w) { return (r.symptoms || []).indexOf(w) >= 0 ? 1 : 0; });
+    });
+    return { words: words, vectors: vectors };
+  }
+
+  // 幂迭代求前两个主成分方向（零依赖简化 PCA）
+  function pca2(vectors) {
+    var n = vectors.length;
+    if (n === 0) return [];
+    var d = vectors[0].length;
+    if (d === 0) return vectors.map(function () { return [0, 0]; });
+
+    var mean = new Array(d).fill(0);
+    vectors.forEach(function (v) { for (var j = 0; j < d; j++) mean[j] += v[j] / n; });
+    var X = vectors.map(function (v) { return v.map(function (x, j) { return x - mean[j]; }); });
+
+    function powerIter(M) {
+      var v = new Array(d).fill(1 / Math.sqrt(d));
+      for (var it = 0; it < 80; it++) {
+        var next = new Array(d).fill(0);
+        for (var i = 0; i < n; i++) {
+          var dot = 0;
+          for (var j = 0; j < d; j++) dot += M[i][j] * v[j];
+          for (var k = 0; k < d; k++) next[k] += dot * M[i][k];
+        }
+        var norm = Math.sqrt(next.reduce(function (s, x) { return s + x * x; }, 0));
+        if (norm < 1e-9) return null;
+        v = next.map(function (x) { return x / norm; });
+      }
+      return v;
+    }
+
+    var v1 = powerIter(X) || new Array(d).fill(0).map(function (_, j) { return j === 0 ? 1 : 0; });
+    var X2 = X.map(function (row) {
+      var dot = 0;
+      for (var j = 0; j < d; j++) dot += row[j] * v1[j];
+      return row.map(function (x, j) { return x - dot * v1[j]; });
+    });
+    var v2 = powerIter(X2) || new Array(d).fill(0).map(function (_, j) { return j === 1 ? 1 : 0; });
+
+    return X.map(function (row) {
+      var a = 0, b = 0;
+      for (var j = 0; j < d; j++) { a += row[j] * v1[j]; b += row[j] * v2[j]; }
+      return [a, b];
+    });
+  }
+
+  function hashCode(str) {
+    var h = 0;
+    for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+    return h;
+  }
+
+  var clusterPoints = [];
+
+  function renderCluster(data, canvas) {
+    var records = (data.recent_records || []).slice();
+    var ctx = canvas.getContext('2d');
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth || 720;
+    var h = 240;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.height = h + 'px';
+    ctx.scale(dpr, dpr);
+
+    var built = buildVectors(records);
+    var proj = pca2(built.vectors);
+
+    // 归一化到画布坐标（留边距），并加确定性微抖动防止完全重叠
+    var xs = proj.map(function (p) { return p[0]; });
+    var ys = proj.map(function (p) { return p[1]; });
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    var minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+    var spanX = (maxX - minX) || 1, spanY = (maxY - minY) || 1;
+    var pad = 34;
+    var pts = records.map(function (r, i) {
+      var seed = Math.abs(hashCode(r.id));
+      var jx = ((seed % 17) - 8) / 60;
+      var jy = ((Math.floor(seed / 17) % 17) - 8) / 60;
+      var nx = (proj[i][0] - minX) / spanX + jx;
+      var ny = (proj[i][1] - minY) / spanY + jy;
+      var x = pad + Math.min(1, Math.max(0, nx)) * (w - pad * 2);
+      var y = pad + (1 - Math.min(1, Math.max(0, ny))) * (h - pad * 2);
+      return { x: x, y: y, r: r };
+    });
+
+    var colors = { normal: '#52c41a', early: '#faad14', disease: '#ff4d4f', unknown: '#8c8c8c' };
+    var labelColor = getComputedStyle(document.body).color;
+    ctx.clearRect(0, 0, w, h);
+    pts.forEach(function (p, i) {
+      var cls = p.r.cls || 'unknown';
+      var conf = typeof p.r.confidence === 'number' ? p.r.confidence : 0;
+      var radius = 4 + conf * 5;
+      ctx.beginPath();
+      ctx.fillStyle = colors[cls] || colors.unknown;
+      ctx.globalAlpha = 0.9;
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      // 最新（第一条）标 ★，最远（最后一条）标 ●
+      if (i === 0 || i === pts.length - 1) {
+        ctx.fillStyle = labelColor;
+        ctx.font = '600 11px -apple-system,PingFang SC,sans-serif';
+        ctx.textAlign = 'left';
+        var label = (i === 0 ? '★ ' : '● ') + timeText(p.r.created_at) + '·' + clsName(cls);
+        ctx.fillText(label, Math.min(p.x + radius + 4, w - 110), p.y + 4);
+      }
+    });
+
+    clusterPoints = pts;
+  }
+
+  function clusterHtml(data) {
+    if (data.total < 3) {
+      return '<h2>── 语义聚类图（简化嵌入投影）──</h2><div class="card"><p class="empty">数据不足，至少需要 3 条记录</p></div>';
+    }
+    return '<h2>── 语义聚类图（简化嵌入投影）──</h2><div class="card">' +
+      '<canvas id="cluster"></canvas>' +
+      '<div class="legend">' +
+        '<span><i style="background:#52c41a"></i>正常</span>' +
+        '<span><i style="background:#faad14"></i>前兆</span>' +
+        '<span><i style="background:#ff4d4f"></i>发病</span>' +
+        '<span>★=最新 ●=最远 · 大小=置信度 · 点=一次分析（点击看详情）</span>' +
+      '</div></div>';
+  }
+
+  function render(data) {
+    main.innerHTML =
+      '<h2>── ' + esc(data.pool) + ' 池概览 ──</h2>' +
+      '<div class="card"><span style="color:var(--text-secondary);font-size:13px">近 ' + esc(data.days) + ' 天共 <b style="color:var(--text-primary)">' + esc(data.total) + '</b> 条分析记录</span></div>' +
+      renderDist(data) +
+      clusterHtml(data) +
+      renderSymptoms(data) +
+      renderRecent(data);
+
+    if (data.total >= 3) {
+      var canvas = document.getElementById('cluster');
+      if (canvas) {
+        renderCluster(data, canvas);
+        canvas.addEventListener('click', function (ev) {
+          var rect = canvas.getBoundingClientRect();
+          var x = ev.clientX - rect.left, y = ev.clientY - rect.top;
+          for (var i = 0; i < clusterPoints.length; i++) {
+            var p = clusterPoints[i];
+            var radius = 4 + (typeof p.r.confidence === 'number' ? p.r.confidence : 0) * 5 + 6;
+            var dx = p.x - x, dy = p.y - y;
+            if (dx * dx + dy * dy <= radius * radius) {
+              location.href = '/aquasense-reports/report?id=' + encodeURIComponent(p.r.id);
+              return;
+            }
+          }
+        });
+        window.addEventListener('resize', function () { renderCluster(data, canvas); });
+      }
+    }
+  }
+
+  function load() {
+    main.innerHTML = '<p class="empty">加载中…</p>';
+    fetch('/aquasense-reports/api/trend/' + encodeURIComponent(pool) + '?days=' + encodeURIComponent(days))
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        if (!body || !body.ok) throw new Error((body && body.error && body.error.message) || '请求失败');
+        render(body.value);
+      })
+      .catch(function (err) {
+        main.innerHTML = '<p class="err">加载失败：' + esc(err.message) + '</p>';
+      });
+  }
+
+  function sync() {
+    var url = '/aquasense-reports/trend?pool=' + encodeURIComponent(pool) + '&days=' + encodeURIComponent(days);
+    history.replaceState(null, '', url);
+    load();
+  }
+
+  poolSel.addEventListener('change', function () { pool = poolSel.value; sync(); });
+  daysSel.addEventListener('change', function () { days = daysSel.value; sync(); });
+  load();
+})();
+</script>
+</body>
+</html>

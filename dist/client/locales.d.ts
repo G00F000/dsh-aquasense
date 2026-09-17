@@ -18,6 +18,7 @@ export declare const zh: {
     readonly 'card.unsavedHint': "有未保存的修改,发送测试提醒前请先保存";
     readonly 'entry.label': "AquaSense 配置";
     readonly 'page.title': "每日任务提醒";
+    readonly 'page.tab.reports': "分析记录";
     readonly 'page.close': "关闭";
     readonly 'field.enabled.label': "启用每日任务提醒";
     readonly 'field.enabled.hint': "关闭后不再推送任务提醒与异常预警";

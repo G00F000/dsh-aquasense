@@ -1,0 +1,292 @@
+<!doctype html>
+<!--
+  R8 分析详情页（原型 B，Trace 视图，见 docs/r8-traceability-requirements.md §4.2）
+  瀑布图（Trace Timeline）+ 步骤 Accordion（原生 details/summary）。
+  数据源：GET /aquasense-reports/api/records/:id（URL ?id=RPT-xxx）。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>分析详情 · AquaSense</title>
+<style>
+:root{
+  --bg-primary:#ffffff;--bg-secondary:#f5f7fa;--bg-card:#ffffff;
+  --text-primary:#1a1a1a;--text-secondary:#666666;--border:#e0e0e0;
+  --accent:#1677ff;--success:#52c41a;--warning:#faad14;--danger:#ff4d4f;
+  --c-upload:#8c8c8c;--c-analyze:#1677ff;--c-retrieve:#fa8c16;--c-advice:#52c41a;--c-ledger:#722ed1;
+  --chip:#eef2f7;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg-primary:#1a1a1a;--bg-secondary:#242424;--bg-card:#232323;
+    --text-primary:#e0e0e0;--text-secondary:#999999;--border:#3a3a3a;
+    --accent:#4096ff;--success:#49aa19;--warning:#d89614;--danger:#dc4446;
+    --c-upload:#6b6b6b;--c-analyze:#4096ff;--c-retrieve:#d87a16;--c-advice:#49aa19;--c-ledger:#9254de;
+    --chip:#2f2f2f;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-secondary);color:var(--text-primary);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;
+  padding:12px 16px;background:var(--bg-primary);border-bottom:1px solid var(--border)}
+.back{flex:none;color:var(--accent);text-decoration:none;font-size:14px}
+.top .title{flex:1;min-width:0;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{flex:none;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;color:#fff}
+.badge.normal{background:var(--success)}.badge.early{background:var(--warning)}
+.badge.disease{background:var(--danger)}.badge.unknown{background:var(--text-secondary)}
+main{max-width:760px;margin:0 auto;padding:14px 16px 60px}
+h2{margin:20px 2px 8px;font-size:13px;font-weight:600;color:var(--text-secondary)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:6px 16px;font-size:13px}
+.meta b{font-weight:600}
+.meta .k{color:var(--text-secondary);margin-right:4px}
+
+/* ---- 瀑布图 ---- */
+.wf-row{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px}
+.wf-icon{flex:none;width:20px;text-align:center}
+.wf-name{flex:none;width:96px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wf-track{flex:1;height:18px;background:var(--chip);border-radius:4px;overflow:hidden}
+.wf-bar{height:100%;border-radius:4px;transition:width .3s ease;min-width:3px}
+.wf-bar.upload{background:var(--c-upload)}.wf-bar.analyze{background:var(--c-analyze)}
+.wf-bar.retrieve{background:var(--c-retrieve)}.wf-bar.advice{background:var(--c-advice)}
+.wf-bar.ledger{background:var(--c-ledger)}
+.wf-bar.skipped{background:transparent;min-width:0}
+.wf-dur{flex:none;width:52px;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text-secondary)}
+.wf-st{flex:none;width:18px;text-align:center}
+
+/* ---- 步骤 Accordion ---- */
+details.step{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;margin:8px 0;overflow:hidden}
+details.step summary{display:flex;align-items:center;gap:8px;padding:11px 14px;cursor:pointer;list-style:none;font-size:13px;font-weight:600}
+details.step summary::-webkit-details-marker{display:none}
+details.step summary .st-name{flex:1}
+details.step summary .st-dur{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text-secondary);font-weight:400}
+details.step[open] summary{border-bottom:1px solid var(--border)}
+.step-detail{padding:10px 14px 14px;font-size:13px}
+.kv{display:flex;gap:8px;padding:2px 0}
+.kv .k{flex:none;width:74px;color:var(--text-secondary)}
+.kv .v{flex:1;min-width:0;word-break:break-word}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+.pre{margin:6px 0 0;padding:8px 10px;background:var(--chip);border-radius:8px;white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:220px;overflow:auto}
+.file{display:flex;gap:8px;padding:2px 0;color:var(--text-secondary)}
+.file .sz{margin-left:auto;flex:none}
+.hit{padding:8px 0;border-top:1px dashed var(--border)}
+.hit:first-of-type{border-top:0}
+.hit .t{font-weight:600}
+.hit .m{color:var(--text-secondary);font-size:12px;margin:2px 0}
+.hit .q{color:var(--text-primary);font-size:12px;background:var(--chip);border-radius:6px;padding:6px 8px;word-break:break-word}
+.chip{display:inline-block;padding:0 8px;border-radius:999px;background:var(--chip);font-size:12px;color:var(--text-secondary)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 4px}
+.sym{display:inline-block;margin:2px 6px 2px 0;padding:1px 8px;border-radius:999px;background:var(--chip);font-size:12px}
+.err{margin:12px 0;padding:10px 12px;border-radius:10px;border:1px solid var(--danger);color:var(--danger);font-size:13px;background:var(--bg-card)}
+.footer-link{display:block;margin:22px 2px 0;color:var(--accent);text-decoration:none}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="back" href="/aquasense-reports">← 返回</a>
+  <span class="title" id="title">加载中…</span>
+  <span class="badge unknown" id="badge" style="display:none"></span>
+</header>
+<main id="main"><p style="color:var(--text-secondary)">加载中…</p></main>
+<script>
+(function () {
+  'use strict';
+  var main = document.getElementById('main');
+  var titleEl = document.getElementById('title');
+  var badgeEl = document.getElementById('badge');
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function clsName(c) { return { normal: '正常', early: '前兆', disease: '发病', unknown: '未知' }[c] || c || '未知'; }
+  function sourceName(s) { return { h5_upload: 'H5上传', group_chat: '群聊发图', api: 'API' }[s] || s || '—'; }
+  function dur(ms) { return typeof ms === 'number' && ms > 0 ? (ms / 1000).toFixed(1) + 's' : '—'; }
+  function fmtBytes(n) {
+    if (typeof n !== 'number' || n <= 0) return '—';
+    return n >= 1048576 ? (n / 1048576).toFixed(2) + ' MB' : (n / 1024).toFixed(0) + ' KB';
+  }
+  function fmtNum(n) { return typeof n === 'number' && n > 0 ? n.toLocaleString('en-US') : '—'; }
+  function fmtTime(iso) {
+    var d = new Date(iso);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+  function kv(k, v) { return '<div class="kv"><span class="k">' + esc(k) + '</span><span class="v">' + v + '</span></div>'; }
+  function fromName(f) { return { wiki: '知识库索引', note: '笔记', pdf_content: 'PDF原文' }[f] || f || '—'; }
+
+  var STEPS = [
+    { key: 'upload',   icon: '📷', name: '图片上传' },
+    { key: 'analyze',  icon: '🧠', name: 'AI 视觉分析' },
+    { key: 'retrieve', icon: '📚', name: '知识库检索' },
+    { key: 'advice',   icon: '💡', name: '处置建议生成' },
+    { key: 'ledger',   icon: '📝', name: '台账写入' }
+  ];
+
+  function spanOf(record, key) { return record['span_' + key] || null; }
+
+  function waterfall(record) {
+    var total = record.total_duration_ms > 0 ? record.total_duration_ms : 1;
+    var html = '';
+    STEPS.forEach(function (s) {
+      var span = spanOf(record, s.key);
+      var ms = span && typeof span.duration_ms === 'number' ? span.duration_ms : null;
+      var pct = ms ? Math.max(3, Math.round(ms / total * 100)) : 0;
+      var st = span ? (span.error ? '❌' : '✅') : '·';
+      var barCls = ms ? s.key : s.key + ' skipped';
+      html += '<div class="wf-row">' +
+        '<span class="wf-icon">' + s.icon + '</span>' +
+        '<span class="wf-name">' + esc(s.name) + '</span>' +
+        '<span class="wf-track"><span class="wf-bar ' + barCls + '" style="width:' + pct + '%"></span></span>' +
+        '<span class="wf-dur">' + esc(span ? dur(ms) : '未执行') + '</span>' +
+        '<span class="wf-st">' + st + '</span>' +
+      '</div>';
+    });
+    return html;
+  }
+
+  function stepUpload(span) {
+    if (!span) return '<p style="color:var(--text-secondary)">该步骤未执行（正常结果无需上传图片分析时可能跳过）。</p>';
+    var names = span.image_names || [];
+    var sizes = span.image_sizes || [];
+    var files = '';
+    for (var i = 0; i < sizes.length; i++) {
+      files += '<div class="file"><span>🖼 ' + esc(names[i] || ('image_' + (i + 1))) + '</span><span class="sz">' + esc(fmtBytes(sizes[i])) + '</span></div>';
+    }
+    return kv('输入', esc(span.image_count) + ' 张图片') +
+      (files || '') +
+      kv('处理', '客户端已压缩（≤1024px JPEG 0.8）并转 base64') +
+      kv('耗时', esc(dur(span.duration_ms))) + errLine(span);
+  }
+
+  function stepAnalyze(span) {
+    if (!span) return '<p style="color:var(--text-secondary)">该步骤未执行。</p>';
+    var syms = (span.symptoms || []).map(function (s) { return '<span class="sym">' + esc(s) + '</span>'; }).join('');
+    var organs = (span.organs || []).length ? kv('器官', esc(span.organs.join('、'))) : '';
+    return kv('模型', '<span class="mono">' + esc(span.scene_hint || '') + '</span>') +
+      kv('输入', 'system prompt (' + esc(span.prompt_length) + ' 字符) + 图片') +
+      kv('状态', '<b>' + esc(clsName(span.cls)) + '</b>（' + esc(span.cls) + '）') +
+      kv('置信度', esc(span.confidence != null ? Number(span.confidence).toFixed(2) : '—')) +
+      kv('严重度', esc(span.severity || '—')) +
+      kv('症状', syms || '—') + organs +
+      kv('Token', 'input=' + esc(fmtNum(span.input_tokens)) + ' output=' + esc(fmtNum(span.output_tokens))) +
+      kv('耗时', esc(dur(span.duration_ms))) +
+      (span.output_raw ? '<div class="kv"><span class="k">原始输出</span><span class="v"></span></div><pre class="pre">' + esc(span.output_raw) + '</pre>' : '') +
+      errLine(span);
+  }
+
+  function stepRetrieve(span) {
+    if (!span) return '<p style="color:var(--text-secondary)">该步骤未执行（状态为正常时无需检索知识库）。</p>';
+    var hits = (span.excerpts || []).map(function (e) {
+      return '<div class="hit">' +
+        '<div class="t">📄 ' + esc(e.title) + ' <span class="chip">' + esc(fromName(e.from)) + '</span>' +
+        (e.locator ? ' <span class="chip">' + esc(e.locator) + '</span>' : '') + '</div>' +
+        (e.excerpt_preview ? '<div class="q">「' + esc(e.excerpt_preview) + '」</div>' : '') +
+      '</div>';
+    }).join('');
+    return kv('查询', '<span class="mono">' + esc(span.query || '—') + '</span>') +
+      kv('通道A', 'wiki 命中 ' + esc(span.channel_a_wiki || 0) + ' 条') +
+      kv('通道B', 'note 命中 ' + esc(span.channel_b_note || 0) + ' 条') +
+      kv('通道C', 'PDF 命中 ' + esc(span.channel_c_pdf || 0) + ' 条') +
+      kv('合并去重', esc(span.merged_count || 0) + ' 条') +
+      hits +
+      kv('耗时', esc(dur(span.duration_ms))) + errLine(span);
+  }
+
+  function stepAdvice(span) {
+    if (!span) return '<p style="color:var(--text-secondary)">该步骤未执行（状态为正常时无需生成处置建议）。</p>';
+    return kv('输入分类', esc(clsName(span.input_cls)) + '（' + esc(span.input_cls || '—') + '）') +
+      kv('诊断', esc(span.diagnosis_summary || '—')) +
+      kv('预警', '<b>' + esc(span.alert_level || '—') + '</b>') +
+      kv('知识来源', esc(span.knowledge_refs_count || 0) + ' 条') +
+      (span.reasoning_preview ? kv('推理', esc(span.reasoning_preview)) : '') +
+      kv('耗时', esc(dur(span.duration_ms))) + errLine(span);
+  }
+
+  function stepLedger(span) {
+    if (!span) return '<p style="color:var(--text-secondary)">该步骤未执行。</p>';
+    return kv('目标表', esc(span.target_table || '—')) +
+      kv('操作', span.operation === 'update' ? '更新（30 分钟窗口内已有记录）' : '新增') +
+      (span.record_id ? kv('记录ID', '<span class="mono">' + esc(span.record_id) + '</span>') : '') +
+      (span.message ? kv('结果', esc(span.message)) : '') +
+      kv('耗时', esc(dur(span.duration_ms))) + errLine(span);
+  }
+
+  function errLine(span) {
+    return span && span.error ? '<div class="err">' + esc(span.error) + '</div>' : '';
+  }
+
+  function stepsHtml(record) {
+    var renderers = { upload: stepUpload, analyze: stepAnalyze, retrieve: stepRetrieve, advice: stepAdvice, ledger: stepLedger };
+    return STEPS.map(function (s) {
+      var span = spanOf(record, s.key);
+      var st = span ? (span.error ? '❌' : '✅') : '·';
+      return '<details class="step"' + (span && !span.error && s.key === 'analyze' ? ' open' : '') + '>' +
+        '<summary><span>' + s.icon + '</span><span class="st-name">' + esc(s.name) + '</span>' +
+        '<span class="st-dur">' + esc(span ? dur(span.duration_ms) : '未执行') + '</span><span>' + st + '</span></summary>' +
+        '<div class="step-detail">' + renderers[s.key](span) + '</div>' +
+      '</details>';
+    }).join('');
+  }
+
+  function render(record) {
+    document.title = record.id + ' · AquaSense';
+    titleEl.textContent = record.id + ' · ' + record.pool;
+    badgeEl.textContent = clsName(record.span_analyze && record.span_analyze.cls);
+    badgeEl.className = 'badge ' + ((record.span_analyze && record.span_analyze.cls) || 'unknown');
+    badgeEl.style.display = '';
+
+    var model = record.model ? esc(record.model) : '—';
+    if (record.source === 'group_chat') model += '（简化模式：无 Token/分段耗时）';
+
+    main.innerHTML =
+      '<h2>── 元信息 ──</h2>' +
+      '<div class="card"><div class="meta">' +
+        '<div><span class="k">池号</span><b>' + esc(record.pool) + '</b></div>' +
+        '<div><span class="k">上报人</span><b>' + esc(record.reporter || '—') + '</b></div>' +
+        '<div><span class="k">来源</span><b>' + esc(sourceName(record.source)) + '</b></div>' +
+        '<div><span class="k">时间</span><b>' + esc(fmtTime(record.created_at)) + '</b></div>' +
+        '<div><span class="k">总耗时</span><b>' + esc(dur(record.total_duration_ms)) + '</b></div>' +
+        '<div><span class="k">Token</span><b>' + esc(fmtNum(record.total_tokens)) + '</b></div>' +
+        '<div><span class="k">模型</span><b>' + model + '</b></div>' +
+        (record.task ? '<div><span class="k">任务</span><b>' + esc(record.task) + '</b></div>' : '') +
+        (record.status === 'error' ? '<div style="grid-column:1/-1"><span class="k">状态</span><b style="color:var(--danger)">中断：' + esc(record.error || '') + '</b></div>' : '') +
+      '</div></div>' +
+      '<h2>── 瀑布图（Trace Timeline）──</h2>' +
+      '<div class="card">' + waterfall(record) + '</div>' +
+      '<h2>── 步骤详情 ──</h2>' +
+      stepsHtml(record) +
+      '<a class="footer-link" id="trend" href="#">📈 查看 ' + esc(record.pool) + ' 趋势 →</a>';
+
+    document.getElementById('trend').addEventListener('click', function (ev) {
+      ev.preventDefault();
+      location.href = '/aquasense-reports/trend?pool=' + encodeURIComponent(record.pool);
+    });
+  }
+
+  function fail(msg) {
+    titleEl.textContent = '分析详情';
+    main.innerHTML = '<p class="err">' + esc(msg) + '</p><p><a href="/aquasense-reports" style="color:var(--accent)">← 返回列表</a></p>';
+  }
+
+  var id = new URLSearchParams(location.search).get('id') || '';
+  if (!id) {
+    fail('缺少记录 ID（URL 参数 ?id=RPT-...）');
+  } else {
+    fetch('/aquasense-reports/api/records/' + encodeURIComponent(id))
+      .then(function (resp) { return resp.json(); })
+      .then(function (body) {
+        if (!body || !body.ok) throw new Error((body && body.error && body.error.message) || '记录不存在');
+        render(body.value);
+      })
+      .catch(function (err) { fail('加载失败：' + err.message); });
+  }
+})();
+</script>
+</body>
+</html>

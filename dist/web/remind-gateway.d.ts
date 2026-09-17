@@ -65,6 +65,8 @@ export declare function fetchFeishuGroups(): Promise<FeishuGroup[]>;
 /**
  * 处理一次 HTTP 请求:协议层校验 + 方法分发 + 信封写回。
  * 协议:POST only、同源(Origin 与 Host 一致)、Content-Type application/json。
+ * R8:H5 拍照汇报的提交/进度子路径(`/report/*`)分流给 report-handler
+ * (multipart 提交与 GET 轮询,协议由其自行校验)。
  */
 export declare function handleRemindHttp(dispatch: (method: string, body: unknown) => Promise<ApiResult>, req: IncomingMessage, res: ServerResponse): Promise<void>;
 /**

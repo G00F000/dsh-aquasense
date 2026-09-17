@@ -13,8 +13,22 @@ export declare function getFeishuToken(): Promise<string>;
 export declare function getFeishuUserName(openId: string): Promise<string>;
 /**
  * 上传图片 URL 到飞书云文档,返回 Bitable 附件格式
- * 图片先下载为 buffer,再通过 drive/v1/medias/upload_all 上传
+ * 支持两种输入:
+ *  - data URL(H5 上传页场景,R8):直接解析 base64,不经网络;
+ *  - HTTP(S) URL:下载为 buffer 后再上传。
  */
 export declare function uploadImageToFeishu(imageUrl: string): Promise<{
     file_token: string;
 } | null>;
+/**
+ * 上传图片 buffer 到飞书云文档,返回 Bitable 附件格式(失败返回 null,不抛异常)。
+ * 导出供 R8 H5 上传页复用(H5 图片为内存 buffer,无 URL 可下载)。
+ */
+export declare function uploadBufferToFeishu(buffer: ArrayBuffer | Uint8Array, fileName: string, mimeType?: string): Promise<{
+    file_token: string;
+} | null>;
+/** 解析 base64 data URL 为 buffer + MIME(非 base64 或空内容返回 null) */
+export declare function parseDataUrl(dataUrl: string): {
+    buffer: Buffer;
+    mimeType: string;
+} | null;

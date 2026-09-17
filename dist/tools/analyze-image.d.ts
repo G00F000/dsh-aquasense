@@ -26,3 +26,38 @@ export interface AnalysisResult {
     data_completeness?: 'complete' | 'partial' | 'empty';
 }
 export declare const analyzeImage: import("@deepseek-ai/dsh-tools").ToolDefinition;
+/**
+ * 下载图片为 base64(仅用于 HTTP URL 场景)
+ * 导出供 R8 H5 管线复用(构造视觉模型输入)
+ */
+export interface ImageDownloadResult {
+    data: string;
+    mimeType: string;
+}
+/** 视觉模型 Token 用量(OpenAI 兼容 usage 字段) */
+export interface VisionModelUsage {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+}
+/** 视觉模型返回(文本 + Token 用量,R8 trace 埋点用) */
+export interface VisionModelResult {
+    content: string;
+    usage: VisionModelUsage;
+}
+/**
+ * 构建视觉分析提示词
+ * 关键安全原则:工人描述(description)绝不进入此 prompt,只用于意图路由。
+ * 视觉模型的 cls/severity/symptoms 必须完全基于图片像素判断,防止描述注入。
+ */
+export declare function buildPrompt(poolId?: string): string;
+/**
+ * 调用 DeepSeek 视觉模型,返回文本与 Token 用量(R8 H5 管线埋点需要 usage;
+ * callVisionModel 为其薄包装,行为不变)。
+ */
+export declare function callVisionModelWithUsage(images: ImageDownloadResult[], prompt: string): Promise<VisionModelResult>;
+/**
+ * 解析模型输出 JSON(容错:提取首个 JSON 对象并按白名单归一,失败降级 unknown)
+ * 归一化保证输出始终满足 output.schema(enum/类型/多余键),避免注册表校验失败
+ */
+export declare function parseAnalysisResponse(response: string): AnalysisResult;

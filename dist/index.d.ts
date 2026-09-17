@@ -10,6 +10,11 @@
  * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。
  * S9 配置页(原型 3)由 web/remind-gateway 提供:/aquasense-remind/api 路由
  * (浏览器侧「🐟 AquaSense 配置」入口读写;web 面缺失时静默跳过,不影响定时推送)。
+ * R8 分析记录可追溯(见 docs/r8-traceability-architecture.md):
+ *  - 分析记录列表/详情/趋势页由 web/trace-gateway 提供(/aquasense-reports 路由);
+ *  - H5 拍照汇报页由 web/report-handler 提供(/aquasense-remind/report 页面 +
+ *    /aquasense-remind/api/report/{submit,progress} 提交与进度接口);
+ *  - 群聊场景经 recordLedger 包装器后置收集简化记录(方案 A)。
  */
 import type { Context } from '@deepseek-ai/cordis';
 export declare const name = "aquasense-plugin";

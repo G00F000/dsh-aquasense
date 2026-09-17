@@ -19,7 +19,7 @@ import {
 } from '../ima/ima-api.js'
 import { normalizeOcrText } from '../ima/pdf-content-search.js'
 
-interface AnalysisInput {
+export interface AnalysisInput {
   abnormal?: boolean
   cls?: string
   symptoms?: string[]
@@ -27,11 +27,30 @@ interface AnalysisInput {
 }
 
 /** 引用摘录:正文片段 + 定位信息(如 "第56页";PDF 命中且缓存含分页符时才有,无则不臆造) */
-interface Excerpt {
+export interface Excerpt {
   title: string
   text: string
   from?: string
   locator?: string
+}
+
+/** 处置建议产出(与工具 output.schema 一致) */
+export interface AdviceResult {
+  diagnosis_summary: string
+  immediate_actions: string[]
+  follow_up_actions: string[]
+  medication: string
+  alert_level: 'P0' | 'P1' | 'P2'
+  knowledge_refs: string[]
+  knowledge_excerpt: string[]
+  reasoning: string
+}
+
+/** 知识检索结果(retrieve 步骤产出:查询词 + 三通道命中 + 原文摘录) */
+export interface KnowledgeRetrieval {
+  query: string
+  knowledge: SearchResult | null
+  excerpts: Excerpt[]
 }
 
 export const generateAdvice = defineTool({
@@ -59,119 +78,142 @@ export const generateAdvice = defineTool({
   },
   async execute(args) {
     const analysis = args.analysis as AnalysisInput
-
-    // ========== 步骤 1:自动查询 IMA 知识库(三通道合并) ==========
-    let knowledge: SearchResult | null = null
-    let knowledgeRefs: string[] = []
-
-    try {
-      // 根据症状构建搜索关键词(IMA 是关键词匹配非语义检索,多词拼接会 0 命中)
-      const query = buildKnowledgeQuery(analysis)
-      console.log(`[aquasense] 查询知识库:${query}`)
-
-      // 逐关键词查询再合并去重(解决多词空格拼接 0 命中的问题)
-      knowledge = await searchKnowledgeMerged(query)
-
-      if (knowledge.items.length > 0) {
-        knowledgeRefs = knowledge.items.map((item) => `《${item.title}》${item.source ? `- ${item.source}` : ''}`)
-        console.log(`[aquasense] 找到 ${knowledge.items.length} 条相关知识`)
-      }
-    } catch (error) {
-      // 查询失败不影响主流程,继续生成建议
-      console.error('[aquasense] 知识库查询失败:', error)
-    }
-
-    // ========== 步骤 2:读取命中条目正文,摘取原文片段(三段式之"原文引用") ==========
-    // 正文由 ima-api 正文层提供:PDF 走下载+unpdf 解析缓存,笔记走 notes 接口缓存,冷启动自动建缓存
-    let excerpts: Excerpt[] = []
-    if (knowledge && needsExcerpts(analysis)) {
-      excerpts = await extractExcerpts(knowledge.items, buildExcerptKeywords(analysis))
-      if (excerpts.length > 0) {
-        console.log(`[aquasense] 摘取知识库原文 ${excerpts.length} 条`)
-      }
-    }
-
-    // ========== 步骤 3:根据严重程度生成建议 ==========
-    const immediateActions: string[] = []
-    const followUpActions: string[] = []
-    const severity = analysis.severity || 'low'
-    const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状'
-
-    // ========== AI 分析失败(unknown)时的早期返回:不给出具体诊断和用药建议 ==========
-    if (analysis.cls === 'unknown') {
-      return {
-        diagnosis_summary: `AI 分析失败(状态未知),症状:${symptoms}`,
-        immediate_actions: ['AI 分析结果不确定,请人工现场复核后决定处置措施'],
-        follow_up_actions: ['人工确认鱼群状态后补录台账'],
-        medication: 'AI 分析失败,请根据现场情况咨询兽医后决定',
-        alert_level: 'P1' as const,
-        knowledge_refs: knowledgeRefs,
-        knowledge_excerpt: excerpts.map(formatExcerpt),
-        reasoning: `AI 视觉分析未能给出明确分类(unknown),无法自动判断病情与用药。请人工确认后按实际情况处置。`
-      }
-    }
-
-    switch (severity) {
-      case 'critical':
-        immediateActions.push('🚨 立即通知负责人')
-        immediateActions.push('隔离病鱼')
-        immediateActions.push('紧急检测水质指标')
-        break
-      case 'high':
-        immediateActions.push('加强巡塘至每日 3 次')
-        immediateActions.push('检测溶氧、氨氮')
-        immediateActions.push('减料 50%')
-        break
-      case 'medium':
-        immediateActions.push('减料 50%')
-        immediateActions.push('密切观察 24 小时')
-        break
-      default:
-        immediateActions.push('保持观察')
-    }
-
-    followUpActions.push('持续观察 48 小时')
-    followUpActions.push('记录水质变化')
-
-    // ========== 步骤 4:用药建议(知识库仅作参考,具体处方须兽医确认) ==========
-    let medication = '暂不需要用药'
-
-    if (analysis.cls === 'disease') {
-      // 优先引用正文中治疗/用药相关片段(正文层);无可用正文时退化为标题+摘要参考
-      const treatment = excerpts.find((e) => /用药|药浴|泼洒|拌料|消毒|治疗/.test(e.text))
-      const hits = knowledge?.items ?? []
-      if (treatment) {
-        medication = `建议咨询专业兽医获取针对性用药方案(知识库${formatExcerpt(treatment)})`
-      } else if (hits.length > 0) {
-        const first = hits[0]
-        const summary = first.summary ? `;摘要:${first.summary.slice(0, 120)}` : ''
-        medication = `建议咨询专业兽医,获取针对性用药方案(知识库参考:《${first.title}》${summary})`
-      } else {
-        medication = '建议咨询专业兽医,获取针对性用药方案'
-      }
-    }
-
-    // ========== 步骤 5:确定预警级别(P0/P1/P2,与飞书告警方案一致) ==========
-    // 规则:critical + disease → P0; critical 或 (disease + high) → P1; disease 或 high → P1; 其余 → P2
-    // severity 为 critical 时无论 cls 如何都至少 P1(与 immediate_actions 中的紧急措施一致)
-    let alertLevel: 'P0' | 'P1' | 'P2' = 'P2'
-    if (analysis.cls === 'disease' && severity === 'critical') alertLevel = 'P0'
-    else if (severity === 'critical') alertLevel = 'P1'
-    else if (analysis.cls === 'disease') alertLevel = 'P1'
-    else if (severity === 'high') alertLevel = 'P1'
-
-    return {
-      diagnosis_summary: `状态:${analysis.cls || 'unknown'},症状:${symptoms}`,
-      immediate_actions: immediateActions,
-      follow_up_actions: followUpActions,
-      medication,
-      alert_level: alertLevel,
-      knowledge_refs: knowledgeRefs,
-      knowledge_excerpt: excerpts.map(formatExcerpt),
-      reasoning: buildReasoning(analysis, excerpts, knowledgeRefs.length)
-    }
+    const retrieval = await retrieveKnowledge(analysis)
+    return generateAdviceInternal(analysis, retrieval.knowledge, retrieval.excerpts)
   }
 })
+
+/**
+ * 步骤 1-2:查询 IMA 知识库(三通道合并)并读取命中条目正文摘取原文片段。
+ * 导出供 R8 H5 管线分段埋点(retrieve span)复用;任何失败降级不抛异常。
+ */
+export async function retrieveKnowledge(analysis: AnalysisInput): Promise<KnowledgeRetrieval> {
+  // ========== 步骤 1:自动查询 IMA 知识库(三通道合并) ==========
+  let knowledge: SearchResult | null = null
+  let query = ''
+
+  try {
+    // 根据症状构建搜索关键词(IMA 是关键词匹配非语义检索,多词拼接会 0 命中)
+    query = buildKnowledgeQuery(analysis)
+    console.log(`[aquasense] 查询知识库:${query}`)
+
+    // 逐关键词查询再合并去重(解决多词空格拼接 0 命中的问题)
+    knowledge = await searchKnowledgeMerged(query)
+
+    if (knowledge.items.length > 0) {
+      console.log(`[aquasense] 找到 ${knowledge.items.length} 条相关知识`)
+    }
+  } catch (error) {
+    // 查询失败不影响主流程,继续生成建议
+    console.error('[aquasense] 知识库查询失败:', error)
+  }
+
+  // ========== 步骤 2:读取命中条目正文,摘取原文片段(三段式之"原文引用") ==========
+  // 正文由 ima-api 正文层提供:PDF 走下载+unpdf 解析缓存,笔记走 notes 接口缓存,冷启动自动建缓存
+  let excerpts: Excerpt[] = []
+  if (knowledge && needsExcerpts(analysis)) {
+    excerpts = await extractExcerpts(knowledge.items, buildExcerptKeywords(analysis))
+    if (excerpts.length > 0) {
+      console.log(`[aquasense] 摘取知识库原文 ${excerpts.length} 条`)
+    }
+  }
+
+  return { query, knowledge, excerpts }
+}
+
+/**
+ * 步骤 3-5:根据严重程度生成分级处置建议(用药建议 + 预警级别)。
+ * 导出供 R8 H5 管线分段埋点(advice span)复用;knowledge/excerpts 来自 retrieveKnowledge。
+ */
+export async function generateAdviceInternal(
+  analysis: AnalysisInput,
+  knowledge: SearchResult | null,
+  excerpts: Excerpt[]
+): Promise<AdviceResult> {
+  const knowledgeRefs: string[] = knowledge && knowledge.items.length > 0
+    ? knowledge.items.map((item) => `《${item.title}》${item.source ? `- ${item.source}` : ''}`)
+    : []
+
+  // ========== 步骤 3:根据严重程度生成建议 ==========
+  const immediateActions: string[] = []
+  const followUpActions: string[] = []
+  const severity = analysis.severity || 'low'
+  const symptoms = analysis.symptoms?.length ? analysis.symptoms.join('、') : '无明显症状'
+
+  // ========== AI 分析失败(unknown)时的早期返回:不给出具体诊断和用药建议 ==========
+  if (analysis.cls === 'unknown') {
+    return {
+      diagnosis_summary: `AI 分析失败(状态未知),症状:${symptoms}`,
+      immediate_actions: ['AI 分析结果不确定,请人工现场复核后决定处置措施'],
+      follow_up_actions: ['人工确认鱼群状态后补录台账'],
+      medication: 'AI 分析失败,请根据现场情况咨询兽医后决定',
+      alert_level: 'P1',
+      knowledge_refs: knowledgeRefs,
+      knowledge_excerpt: excerpts.map(formatExcerpt),
+      reasoning: `AI 视觉分析未能给出明确分类(unknown),无法自动判断病情与用药。请人工确认后按实际情况处置。`
+    }
+  }
+
+  switch (severity) {
+    case 'critical':
+      immediateActions.push('🚨 立即通知负责人')
+      immediateActions.push('隔离病鱼')
+      immediateActions.push('紧急检测水质指标')
+      break
+    case 'high':
+      immediateActions.push('加强巡塘至每日 3 次')
+      immediateActions.push('检测溶氧、氨氮')
+      immediateActions.push('减料 50%')
+      break
+    case 'medium':
+      immediateActions.push('减料 50%')
+      immediateActions.push('密切观察 24 小时')
+      break
+    default:
+      immediateActions.push('保持观察')
+  }
+
+  followUpActions.push('持续观察 48 小时')
+  followUpActions.push('记录水质变化')
+
+  // ========== 步骤 4:用药建议(知识库仅作参考,具体处方须兽医确认) ==========
+  let medication = '暂不需要用药'
+
+  if (analysis.cls === 'disease') {
+    // 优先引用正文中治疗/用药相关片段(正文层);无可用正文时退化为标题+摘要参考
+    const treatment = excerpts.find((e) => /用药|药浴|泼洒|拌料|消毒|治疗/.test(e.text))
+    const hits = knowledge?.items ?? []
+    if (treatment) {
+      medication = `建议咨询专业兽医获取针对性用药方案(知识库${formatExcerpt(treatment)})`
+    } else if (hits.length > 0) {
+      const first = hits[0]
+      const summary = first.summary ? `;摘要:${first.summary.slice(0, 120)}` : ''
+      medication = `建议咨询专业兽医,获取针对性用药方案(知识库参考:《${first.title}》${summary})`
+    } else {
+      medication = '建议咨询专业兽医,获取针对性用药方案'
+    }
+  }
+
+  // ========== 步骤 5:确定预警级别(P0/P1/P2,与飞书告警方案一致) ==========
+  // 规则:critical + disease → P0; critical 或 (disease + high) → P1; disease 或 high → P1; 其余 → P2
+  // severity 为 critical 时无论 cls 如何都至少 P1(与 immediate_actions 中的紧急措施一致)
+  let alertLevel: 'P0' | 'P1' | 'P2' = 'P2'
+  if (analysis.cls === 'disease' && severity === 'critical') alertLevel = 'P0'
+  else if (severity === 'critical') alertLevel = 'P1'
+  else if (analysis.cls === 'disease') alertLevel = 'P1'
+  else if (severity === 'high') alertLevel = 'P1'
+
+  return {
+    diagnosis_summary: `状态:${analysis.cls || 'unknown'},症状:${symptoms}`,
+    immediate_actions: immediateActions,
+    follow_up_actions: followUpActions,
+    medication,
+    alert_level: alertLevel,
+    knowledge_refs: knowledgeRefs,
+    knowledge_excerpt: excerpts.map(formatExcerpt),
+    reasoning: buildReasoning(analysis, excerpts, knowledgeRefs.length)
+  }
+}
 
 /**
  * 根据分析结果构建知识库查询关键词

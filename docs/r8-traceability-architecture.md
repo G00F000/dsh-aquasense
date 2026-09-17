@@ -2,7 +2,7 @@
 
 > - 总文档：[architecture.md](./architecture.md)（本文为其 R8 专题**分文档**，展开模块级/接口级设计）
 > - 需求依据：[r8-traceability-requirements.md](./r8-traceability-requirements.md)（R8 专题需求分文档）
-> - 状态：🔲 待实现
+> - 状态：✅ 已实现（M1-M9 全部完成，含单元测试与构建验证）
 > - 设计参考：Langfuse Trace/Span 模型、Arize Phoenix 嵌入可视化、MedgeClaw Dashboard 分步骤展开
 
 ---
@@ -188,26 +188,30 @@ export class AnalysisTracer {
 **与现有管线的集成方式**：
 
 ```
-方案 A（推荐）: 包装器模式（不修改现有 Tool 代码）
+实际实现: 增量导出 + 管线直调（对外行为不变）
 ─────────────────────────────────────────────
 
-src/tools/analyze-image.ts       ← 不修改
-src/tools/generate-advice.ts     ← 不修改
-src/tools/record-ledger.ts       ← 不修改
+src/tools/analyze-image.ts       ← 增量导出（新增 callVisionModelWithUsage 采集 Token,
+                                     导出 buildPrompt/parseAnalysisResponse;对外行为不变）
+src/tools/generate-advice.ts     ← 增量导出（抽取 retrieveKnowledge + generateAdviceInternal,
+                                     execute 改为两步调用,行为等价）
+src/tools/record-ledger.ts       ← 零修改（群聊场景经包装器后置收集）
+src/feishu/token.ts              ← 增量导出（uploadImageToFeishu 支持 data URL,H5 内存图片
+                                     可直接上传;导出 uploadBufferToFeishu/parseDataUrl）
 
-src/web/trace-recorder.ts        ← 新增
-  └─ export async function traceAnalysis(pipeline: PipelineParams): Promise<AnalysisRecord>
+src/web/trace-recorder.ts        ← 新增（AnalysisRecord + AnalysisTracer）
+src/web/trace-store.ts           ← 新增（index.json 读写 + reports/ 管理）
+src/web/trace-gateway.ts         ← 新增（/aquasense-reports 页面 + API）
+src/web/report-handler.ts        ← 新增（H5 提交/进度接口 + 5 Span 管线埋点）
+src/web/trace-ledger-wrap.ts     ← 新增（群聊场景 recordLedger 注册包装器）
 
-src/web/trace-handler.ts         ← 新增（H5 上传 + trace 集成）
-  └─ 接收 H5 提交 → 调用现有 3 个 Tool → 自动埋点 → flush
-
-src/index.ts                     ← 修改（注册 trace-gateway 路由）
+src/index.ts                     ← 修改（注册 trace/report 路由 + 包装台账工具）
 ```
 
 **包装器伪代码**（H5 上传场景）：
 
 ```typescript
-// src/web/trace-handler.ts
+// src/web/report-handler.ts（示意,实际为 5 Span 管线,见 §3.5）
 export async function handleH5Report(params: H5ReportParams): Promise<{ record_id: string; analysis: AnalysisResult }> {
   const tracer = new AnalysisTracer({
     pool: params.pool_id,
@@ -485,7 +489,7 @@ report-handler.ts:
 
 **H5 页面增强**：
 
-提交后展示实时进度条（借鉴 MedgeClaw），进度百分比由服务端 SSE 推送或前端轮询：
+提交后展示实时进度条（借鉴 MedgeClaw）。**实现选择**：前端轮询（1.5s 间隔）——`POST submit` 立即返回 `202 {job_id, record_id}`，`GET progress?job_id=` 返回 job 快照（飞书内置浏览器 + 反向代理场景比 SSE 更稳）；job 终态在 `tracer.flush()` 之后置位（防跳详情页 404 竞态）：
 
 ```
 提交中... 20%  上传图片
@@ -543,7 +547,7 @@ Agent 调用 aquasense_ledger:
 
 **推荐方案 A**（后置收集）：群聊场景优先保证稳定性，不侵入现有 Tool。通过飞书 Bitable API 读取刚写入的记录，组装简化的 AnalysisRecord（缺少 Token/耗时，但包含核心分析结果）。
 
-**H5 上传场景用方案 B**（包装器）：H5 场景由 `trace-handler.ts` 完全控制，可以精确收集每个 Span 的数据。
+**实际实现**：群聊场景用「注册期包装（后置收集）」的 `trace-ledger-wrap.ts`——透传台账工具定义、仅在 execute 后追加简化记录（零修改 record-ledger.ts；耗时取包装器实测、无 Token 数据）；H5 场景由 `report-handler.ts` 直调底层导出函数（`callVisionModelWithUsage`/`retrieveKnowledge`/`generateAdviceInternal`/`recordLedger.execute`），精确收集每个 Span 的耗时与 Token。
 
 ### 4.2 索引查询流程
 
@@ -705,38 +709,46 @@ function renderCluster(records, canvas) {
 
 ## 6. 文件变更矩阵
 
-### 6.1 新增文件
+### 6.1 新增文件（已实现）
 
-| 文件路径 | 行数估计 | 说明 |
+| 文件路径 | 实际行数 | 说明 |
 |----------|---------|------|
-| `src/web/trace-recorder.ts` | ~200 行 | Trace 记录器：Span 收集 + AnalysisRecord 组装 |
-| `src/web/trace-store.ts` | ~150 行 | 存储层：index.json 读写 + reports/ 目录管理 |
-| `src/web/trace-gateway.ts` | ~200 行 | HTTP 路由注册 + API 处理 |
-| `src/web/trace-handler.ts` | ~150 行 | H5 上传 + trace 集成（包装器） |
-| `src/web/trace-list.html` | ~300 行 | 分析记录列表页（纯 HTML + CSS + JS） |
-| `src/web/trace-detail.html` | ~400 行 | 分析详情页 Trace 视图 |
-| `src/web/trace-trend.html` | ~350 行 | 池号趋势页 |
-| `src/web/trace-gateway.test.ts` | ~150 行 | 网关单元测试 |
+| `src/web/trace-recorder.ts` | ~314 行 | Trace 记录器：Span 收集 + AnalysisRecord 组装 + RPT ID 生成 |
+| `src/web/trace-store.ts` | ~278 行 | 存储层：index.json 读写 + reports/ 重建/清理/查询 |
+| `src/web/trace-gateway.ts` | ~334 行 | `/aquasense-reports` 页面路由 + 查询 API |
+| `src/web/report-handler.ts` | ~745 行 | H5 提交/进度接口 + 5 Span 管线 + job 表（内存 30min TTL） |
+| `src/web/trace-ledger-wrap.ts` | ~202 行 | 群聊场景 recordLedger 注册包装器（后置收集简化记录） |
+| `src/web/trace-list.html` | 列表页 | 分析记录列表页（纯 HTML + CSS + JS，跟随系统主题） |
+| `src/web/trace-detail.html` | 详情页 | 分析详情页 Trace 视图（瀑布图 + 步骤 Accordion） |
+| `src/web/trace-trend.html` | 趋势页 | 池号趋势页（状态分布 + 症状频次 + 语义聚类图） |
+| `src/web/report-upload.html` | ~479 行 | H5 拍照汇报页（客户端压缩/提交/进度轮询/跳详情） |
+| `src/web/trace-recorder.test.ts` | ~138 行 | 记录器单元测试 |
+| `src/web/trace-store.test.ts` | ~217 行 | 存储层单元测试（含损坏重建/清理/趋势） |
+| `src/web/trace-gateway.test.ts` | ~297 行 | 网关单元测试（路由/参数/协议层） |
+| `src/web/report-handler.test.ts` | ~549 行 | H5 管线与协议层单元测试 |
 
-### 6.2 修改文件
+### 6.2 修改文件（已实现）
 
 | 文件路径 | 变更类型 | 变更说明 |
 |----------|---------|----------|
-| `src/index.ts` | 接入 | `apply()` 中调用 `installTraceWeb(ctx)` |
-| `src/web/remind-gateway.ts` | 扩展 | H5 提交处理增加 trace 埋点调用 |
-| `src/web/report-handler.ts` | 扩展 | 集成 `AnalysisTracer`，在管线各步骤埋点 |
-| `docs/architecture.md` | 引用 | R8 概述改为摘要 + 指向本文（分-总关系） |
+| `src/index.ts` | 接入 | 调用 `installTraceWeb`/`installReportWeb`；台账工具经 `wrapLedgerWithTrace` 注册 |
+| `src/web/remind-gateway.ts` | 分流 | `/aquasense-remind/api/report/{submit,progress}` 在 POST-only 检查前分流到 `handleReportHttp` |
+| `src/tools/analyze-image.ts` | 增量导出 | 新增 `callVisionModelWithUsage`（ Token 采集）、导出 `buildPrompt`/`parseAnalysisResponse`/`ImageDownloadResult`；`callVisionModel` 变为薄包装，对外行为不变 |
+| `src/tools/generate-advice.ts` | 增量导出 | 抽取导出 `retrieveKnowledge`/`generateAdviceInternal`（含 `AdviceResult`/`KnowledgeRetrieval` 类型），execute 改为两步调用（行为等价） |
+| `src/feishu/token.ts` | 增量导出 | `uploadImageToFeishu` 新增 data URL 分支（H5 内存图片）；导出 `uploadBufferToFeishu`/`parseDataUrl` |
+| `package.json` | 构建 | build 脚本追加 `mkdir -p dist/web && cp src/web/*.html dist/web/`（页面随包发布） |
+| `docs/architecture.md` | 引用 | R8 概述为摘要 + 指向本文（分-总关系） |
 | `docs/requirements.md` | 引用 | R8 需求指向专题需求分文档 |
 
-### 6.3 不变更文件
+### 6.3 行为不变约束（原「不变更文件」的实际落地）
 
-| 文件 | 理由 |
-|------|------|
-| `src/tools/analyze-image.ts` | 不修改，通过包装器收集 Span 数据 |
-| `src/tools/generate-advice.ts` | 同上 |
-| `src/tools/record-ledger.ts` | 同上 |
-| `src/router/intent-router.ts` | R8 不经意图路由 |
-| `src/scheduler/s9-reminder.ts` | R8 不涉及提醒逻辑 |
+| 文件 | 落地方式 |
+|------|----------|
+| `src/tools/analyze-image.ts` | 对外行为不变：仅新增导出与薄包装，`analyzeImage.execute` 输出/副作用一致 |
+| `src/tools/generate-advice.ts` | 对外行为不变：`retrieveKnowledge` + `generateAdviceInternal` 两步调用等价原五步流程 |
+| `src/tools/record-ledger.ts` | 零修改：群聊场景经 `trace-ledger-wrap.ts` 包装注册，H5 场景直接调用 `recordLedger.execute` |
+| `src/router/intent-router.ts` | R8 不经意图路由，不涉及 |
+| `src/scheduler/s9-reminder.ts` | 不修改（复用其 `pushAbnormalAlert` 推送异常预警） |
 
 ---
 
@@ -828,29 +840,29 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 
 | 阶段 | 内容 | 前置 | 状态 |
 |------|------|------|------|
-| M1 | AnalysisRecord 数据模型 + trace-recorder.ts | 无 | 🔲 待实现 |
-| M2 | trace-store.ts（index.json 读写 + 重建） | M1 | 🔲 待实现 |
-| M3 | trace-gateway.ts（HTTP 路由 + API） | M2 | 🔲 待实现 |
-| M4 | trace-list.html（分析记录列表页） | M3 | 🔲 待实现 |
-| M5 | trace-detail.html（分析详情页 Trace 视图） | M3 | 🔲 待实现 |
-| M6 | trace-trend.html（池号趋势页） | M3 | 🔲 待实现 |
-| M7 | H5 上传 trace 集成 + 实时进度反馈 | M1, M3 | 🔲 待实现 |
-| M8 | 群聊场景 trace 集成（后置收集） | M1 | 🔲 待实现 |
-| M9 | 集成测试 + 部署验证 | M4-M8 | 🔲 待实现 |
+| M1 | AnalysisRecord 数据模型 + trace-recorder.ts | 无 | ✅ 已完成 |
+| M2 | trace-store.ts（index.json 读写 + 重建） | M1 | ✅ 已完成 |
+| M3 | trace-gateway.ts（HTTP 路由 + API） | M2 | ✅ 已完成 |
+| M4 | trace-list.html（分析记录列表页） | M3 | ✅ 已完成 |
+| M5 | trace-detail.html（分析详情页 Trace 视图） | M3 | ✅ 已完成 |
+| M6 | trace-trend.html（池号趋势页） | M3 | ✅ 已完成 |
+| M7 | H5 上传 trace 集成 + 实时进度反馈 | M1, M3 | ✅ 已完成（轮询方案，report-handler.ts） |
+| M8 | 群聊场景 trace 集成（后置收集） | M1 | ✅ 已完成（trace-ledger-wrap.ts） |
+| M9 | 集成测试 + 构建验证 | M4-M8 | ✅ 已完成（新增 59 用例，全套 111 用例通过；typecheck + build 验证） |
 
 **验收要点**（对应需求 R8.10）：
 
-- [ ] 每次 AI 分析自动写入 AnalysisRecord
-- [ ] index.json 与 reports/ 目录保持一致
-- [ ] 列表页按日期倒序展示，支持池号/状态筛选
-- [ ] 详情页展示完整 5 步 Trace 瀑布图 + 步骤 Accordion
-- [ ] 知识库检索步骤展示命中条目详情（标题/通道/页码/摘录）
-- [ ] 池号趋势页展示状态分布 + 症状频次 + 语义聚类
-- [ ] H5 提交后展示实时进度（5 步骤百分比）
-- [ ] 移动端适配（飞书内置浏览器正常显示）
-- [ ] 暗色/亮色主题跟随系统设置
-- [ ] index.json 损坏时自动重建
-- [ ] 90 天以上的旧记录可清理
+- [x] 每次 AI 分析自动写入 AnalysisRecord
+- [x] index.json 与 reports/ 目录保持一致
+- [x] 列表页按日期倒序展示，支持池号/状态筛选
+- [x] 详情页展示完整 5 步 Trace 瀑布图 + 步骤 Accordion
+- [x] 知识库检索步骤展示命中条目详情（标题/通道/页码/摘录）
+- [x] 池号趋势页展示状态分布 + 症状频次 + 语义聚类
+- [x] H5 提交后展示实时进度（5 步骤百分比）
+- [x] 移动端适配（飞书内置浏览器正常显示）
+- [x] 暗色/亮色主题跟随系统设置
+- [x] index.json 损坏时自动重建
+- [x] 90 天以上的旧记录可清理
 
 ---
 
@@ -866,4 +878,4 @@ R8 和 S9（每日任务提醒）共享 `$AQUASENSE_CACHE_DIR` 缓存目录，�
 | 来源 | 定时触发 | AI 分析管线触发 |
 | 写入时机 | 推送成功时 | 分析完成时 |
 
-**交集**：H5 拍照汇报页（S9 M7）提交后，同时触发 R8 的 trace 埋点。`trace-handler.ts` 在处理 H5 提交时，既完成分析管线，又写入 AnalysisRecord。
+**交集**：H5 拍照汇报页（S9 M7）提交后，同时触发 R8 的 trace 埋点。`report-handler.ts` 在处理 H5 提交时，既完成分析管线（复用三个工具导出的底层函数），又写入 AnalysisRecord。

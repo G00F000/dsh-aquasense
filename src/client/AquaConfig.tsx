@@ -80,8 +80,15 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-wrap.rail .aqs-ico{width:18px;height:18px;font-size:16px}
 .aqs-txt{white-space:nowrap;overflow:hidden}
 .aqs-page{position:fixed;z-index:40;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#17191c)}
-.aqs-top{display:flex;align-items:center;gap:16px;flex:none;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
-.aqs-title{margin:0;font-size:15px;font-weight:600;line-height:22px}
+.aqs-top{display:flex;align-items:center;gap:12px;flex:none;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
+/* 顶栏二级标题区（页签组）：「每日任务提醒」为当前页签，右侧并列「📊 分析记录」
+   （入口 C，R8 需求 v1.1；样式对齐 SkillHub 插件广场的「插件 / 技能」页签） */
+.aqs-tabs{display:flex;align-items:center;gap:2px;min-width:0}
+.aqs-tab{position:relative;display:flex;align-items:center;gap:4px;padding:6px 10px;border-radius:8px;font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-secondary,#4b5563);text-decoration:none;cursor:pointer}
+.aqs-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#17191c)}
+.aqs-tab.on{color:var(--dsw-alias-label-primary,#17191c)}
+.aqs-tab.on::after{content:'';position:absolute;left:10px;right:10px;bottom:1px;height:2px;border-radius:2px;background:var(--dsw-alias-button-primary-fill,#4d6bfe)}
+.aqs-title{margin:0}
 .aqs-close{margin-left:auto;width:32px;height:32px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-3,#fff);cursor:pointer;font-size:18px;line-height:1;color:var(--dsw-alias-label-secondary,#4b5563)}
 .aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
 .aqs-body{flex:1;min-height:0;overflow:auto;padding:18px 20px 32px}
@@ -179,7 +186,14 @@ function AquaConfigPage({
       style={{ top: box.top, left: box.left, width: box.width, height: box.height } satisfies CSSProperties}
     >
       <div className="aqs-top">
-        <h2 className="aqs-title">{t('page.title')}</h2>
+        <nav className="aqs-tabs" aria-label={t('page.title')}>
+          <h2 className="aqs-title aqs-tab on" aria-current="page">
+            {t('page.title')}
+          </h2>
+          <a className="aqs-tab" href="/aquasense-reports" target="_blank" rel="noreferrer">
+            📊 {t('page.tab.reports')}
+          </a>
+        </nav>
         <button
           type="button"
           className="aqs-close"

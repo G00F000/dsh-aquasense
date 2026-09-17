@@ -10,12 +10,20 @@
  * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。
  * S9 配置页(原型 3)由 web/remind-gateway 提供:/aquasense-remind/api 路由
  * (浏览器侧「🐟 AquaSense 配置」入口读写;web 面缺失时静默跳过,不影响定时推送)。
+ * R8 分析记录可追溯(见 docs/r8-traceability-architecture.md):
+ *  - 分析记录列表/详情/趋势页由 web/trace-gateway 提供(/aquasense-reports 路由);
+ *  - H5 拍照汇报页由 web/report-handler 提供(/aquasense-remind/report 页面 +
+ *    /aquasense-remind/api/report/{submit,progress} 提交与进度接口);
+ *  - 群聊场景经 recordLedger 包装器后置收集简化记录(方案 A)。
  */
 import { analyzeImage } from './tools/analyze-image.js';
 import { generateAdvice } from './tools/generate-advice.js';
 import { recordLedger } from './tools/record-ledger.js';
 import { setupS9Reminder } from './scheduler/s9-reminder.js';
 import { installRemindWeb } from './web/remind-gateway.js';
+import { installTraceWeb } from './web/trace-gateway.js';
+import { installReportWeb } from './web/report-handler.js';
+import { wrapLedgerWithTrace } from './web/trace-ledger-wrap.js';
 export const name = 'aquasense-plugin';
 export const inject = ['tools'];
 export function apply(ctx) {
@@ -23,11 +31,16 @@ export function apply(ctx) {
     // 注册 3 个业务工具
     ctx.tools.register(analyzeImage);
     ctx.tools.register(generateAdvice);
-    ctx.tools.register(recordLedger);
+    // 台账工具经 R8 trace 包装:写入成功后自动后置收集简化分析记录(群聊场景)
+    ctx.tools.register(wrapLedgerWithTrace(recordLedger));
     // S9 每日任务提醒(插件内调度,enabled=false 时内部直接跳过)
     setupS9Reminder(ctx);
-    // S9 配置页(原型 3):HTTP API 路由(侧栏入口经 /aquasense-remind/api 读写)
+    // S9 配置页(原型 3):HTTP 路由
     installRemindWeb(ctx);
+    // R8 H5 拍照汇报页:页面路由(提交/进度接口由 remind-gateway 分流)
+    installReportWeb(ctx);
+    // R8 分析记录 Web 面:列表/详情/趋势页 + 查询 API(/aquasense-reports)
+    installTraceWeb(ctx);
     console.log('[aquasense] 工具加载完成');
     console.log('[aquasense] 知识库查询:generate-advice 内置 IMA API 自动查询');
 }

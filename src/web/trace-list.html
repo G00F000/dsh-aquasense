@@ -1,0 +1,228 @@
+<!doctype html>
+<!--
+  R8 分析记录列表页（原型 A，见 docs/r8-traceability-requirements.md §4.1）
+  Vanilla JS + CSS Variables，跟随系统暗色/亮色；移动端优先（飞书内置浏览器）。
+  数据源：GET /aquasense-reports/api/records?pool=&cls=&limit=&offset=
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>AI 分析记录 · AquaSense</title>
+<style>
+:root{
+  --bg-primary:#ffffff;--bg-secondary:#f5f7fa;--bg-card:#ffffff;
+  --text-primary:#1a1a1a;--text-secondary:#666666;--border:#e0e0e0;
+  --accent:#1677ff;--success:#52c41a;--warning:#faad14;--danger:#ff4d4f;
+  --chip:#eef2f7;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg-primary:#1a1a1a;--bg-secondary:#242424;--bg-card:#232323;
+    --text-primary:#e0e0e0;--text-secondary:#999999;--border:#3a3a3a;
+    --accent:#4096ff;--success:#49aa19;--warning:#d89614;--danger:#dc4446;
+    --chip:#2f2f2f;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg-secondary);color:var(--text-primary);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.top{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+  padding:12px 16px;background:var(--bg-primary);border-bottom:1px solid var(--border)}
+.top h1{margin:0;font-size:16px;font-weight:600;flex:1;white-space:nowrap}
+.filters{display:flex;gap:8px}
+select{appearance:none;padding:6px 26px 6px 10px;border:1px solid var(--border);border-radius:8px;
+  background:var(--bg-card);color:var(--text-primary);font-size:13px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--text-secondary) 50%),linear-gradient(135deg,var(--text-secondary) 50%,transparent 50%);
+  background-position:calc(100% - 13px) 52%,calc(100% - 9px) 52%;background-size:4px 4px;background-repeat:no-repeat}
+main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
+.group-title{margin:18px 2px 8px;font-size:13px;color:var(--text-secondary)}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.row{display:block;padding:12px 14px;color:inherit;text-decoration:none;border-bottom:1px solid var(--border);cursor:pointer}
+.row:last-child{border-bottom:0}
+.row:hover{background:var(--bg-secondary)}
+.row-line1{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.dot{flex:none;width:8px;height:8px;border-radius:50%}
+.dot.normal{background:var(--success)}.dot.early{background:var(--warning)}
+.dot.disease{background:var(--danger)}.dot.unknown{background:var(--text-secondary)}
+.rid{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--text-secondary)}
+.pool{font-weight:600}
+.cls{font-weight:600}
+.cls.normal{color:var(--success)}.cls.early{color:var(--warning)}.cls.disease{color:var(--danger)}
+.conf{color:var(--text-secondary)}
+.sym{flex:1 1 100%;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sym.warn{color:var(--danger)}
+.row-line2{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;font-size:12px;color:var(--text-secondary)}
+.chip{padding:1px 8px;border-radius:999px;background:var(--chip)}
+.empty{padding:60px 0;text-align:center;color:var(--text-secondary)}
+.more{display:block;width:100%;margin:16px 0 0;padding:10px;border:1px solid var(--border);border-radius:10px;
+  background:var(--bg-card);color:var(--accent);font-size:14px;cursor:pointer}
+.more:disabled{color:var(--text-secondary);cursor:default}
+.trend{display:block;margin:20px 2px 0;color:var(--accent);text-decoration:none;font-size:14px}
+.err{margin:12px 2px;padding:10px 12px;border-radius:10px;background:var(--bg-card);
+  border:1px solid var(--danger);color:var(--danger);font-size:13px}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>📊 AI 分析记录</h1>
+  <div class="filters">
+    <select id="f-pool" aria-label="按池号筛选">
+      <option value="">全部池号</option>
+      <option>池1</option><option>池2</option><option>池3</option><option>池4</option>
+    </select>
+    <select id="f-cls" aria-label="按状态筛选">
+      <option value="">全部状态</option>
+      <option value="normal">正常</option>
+      <option value="early">前兆</option>
+      <option value="disease">发病</option>
+      <option value="unknown">未知</option>
+    </select>
+  </div>
+</header>
+<main id="main"><p class="empty">加载中…</p></main>
+<a class="trend" id="trend-link" href="/aquasense-reports/trend">📈 池号趋势分析 →</a>
+<script>
+(function () {
+  'use strict';
+  var LIMIT = 50;
+  var state = { pool: '', cls: '', offset: 0, total: 0, loading: false };
+  var main = document.getElementById('main');
+  var poolSel = document.getElementById('f-pool');
+  var clsSel = document.getElementById('f-cls');
+  var trendLink = document.getElementById('trend-link');
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function clsName(c) { return { normal: '正常', early: '前兆', disease: '发病', unknown: '未知' }[c] || c || '未知'; }
+  function sourceName(s) { return { h5_upload: 'H5上传', group_chat: '群聊发图', api: 'API' }[s] || s || '—'; }
+  function durationText(ms) { return ms > 0 ? (ms / 1000).toFixed(1) + 's' : '—'; }
+  function tokenText(n) { return n > 0 ? n.toLocaleString('en-US') : '—'; }
+  function dayKey(iso) {
+    var d = new Date(iso);
+    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+  }
+  function dayLabel(iso) {
+    var d = new Date(iso), now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    var diff = Math.round((today - target) / 86400000);
+    if (diff === 0) return '今天 (' + (d.getMonth() + 1) + '月' + d.getDate() + '日)';
+    if (diff === 1) return '昨天 (' + (d.getMonth() + 1) + '月' + d.getDate() + '日)';
+    return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  }
+  function timeText(iso) {
+    var d = new Date(iso);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function fileUrl(id) {
+    return '/aquasense-reports/report?id=' + encodeURIComponent(id);
+  }
+
+  function rowHtml(r) {
+    var cls = r.cls || 'unknown';
+    var sym = (r.symptoms && r.symptoms.length) ? r.symptoms.join('、') : '无异常';
+    return '<a class="row" href="' + esc(fileUrl(r.id)) + '">' +
+      '<div class="row-line1">' +
+        '<span class="dot ' + esc(cls) + '"></span>' +
+        '<span class="rid">' + esc(r.id) + '</span>' +
+        '<span class="pool">' + esc(r.pool) + '</span>' +
+        '<span class="cls ' + esc(cls) + '">' + esc(clsName(cls)) + '</span>' +
+        '<span class="conf">' + esc((r.confidence || 0).toFixed(2)) + '</span>' +
+        '<span class="sym' + (cls === 'disease' ? ' warn' : '') + '">' + esc(sym) + '</span>' +
+      '</div>' +
+      '<div class="row-line2">' +
+        '<span>' + esc(timeText(r.created_at)) + '</span><span>·</span>' +
+        '<span>' + esc(sourceName(r.source)) + '</span><span>·</span>' +
+        '<span>' + (r.alert_level ? 'AI视觉+知识库' : 'AI视觉') + '</span><span>·</span>' +
+        '<span>' + esc(durationText(r.total_duration_ms)) + '</span><span>·</span>' +
+        '<span>' + esc(tokenText(r.total_tokens)) + ' tokens</span>' +
+      '</div>' +
+    '</a>';
+  }
+
+  function render(records) {
+    // 按本地日期分组输出
+    var html = '';
+    var lastKey = '';
+    records.forEach(function (r) {
+      var key = dayKey(r.created_at);
+      if (key !== lastKey) {
+        if (lastKey) html += '</div>';
+        html += '<div class="group-title">' + esc(dayLabel(r.created_at)) + '</div><div class="card">';
+        lastKey = key;
+      }
+      html += rowHtml(r);
+    });
+    if (lastKey) html += '</div>';
+    return html;
+  }
+
+  function setMoreButton(hasMore) {
+    var btn = document.getElementById('more');
+    if (!hasMore) { if (btn) btn.remove(); return; }
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.id = 'more';
+      btn.className = 'more';
+      btn.textContent = '加载更多';
+      btn.addEventListener('click', function () { load(false); });
+      main.appendChild(btn);
+    }
+  }
+
+  function load(reset) {
+    if (state.loading) return;
+    state.loading = true;
+    if (reset) { state.offset = 0; main.innerHTML = '<p class="empty">加载中…</p>'; }
+    var url = '/aquasense-reports/api/records?limit=' + LIMIT + '&offset=' + state.offset;
+    if (state.pool) url += '&pool=' + encodeURIComponent(state.pool);
+    if (state.cls) url += '&cls=' + encodeURIComponent(state.cls);
+
+    fetch(url).then(function (resp) { return resp.json(); }).then(function (body) {
+      state.loading = false;
+      if (!body || !body.ok) throw new Error((body && body.error && body.error.message) || '请求失败');
+      var value = body.value;
+      var records = value.records || [];
+      if (reset) main.innerHTML = '';
+      if (reset && records.length === 0) {
+        main.innerHTML = '<p class="empty">暂无分析记录</p>';
+        return;
+      }
+      var existingMore = document.getElementById('more');
+      if (existingMore) existingMore.remove();
+      main.insertAdjacentHTML('beforeend', render(records));
+      setMoreButton(Boolean(value.has_more));
+      state.offset += records.length;
+      state.total = value.total;
+    }).catch(function (err) {
+      state.loading = false;
+      var tip = document.createElement('p');
+      tip.className = 'err';
+      tip.textContent = '加载失败：' + err.message;
+      if (reset) main.innerHTML = '';
+      main.appendChild(tip);
+    });
+  }
+
+  poolSel.addEventListener('change', function () { state.pool = poolSel.value; load(true); });
+  clsSel.addEventListener('change', function () { state.cls = clsSel.value; load(true); });
+
+  // 趋势入口携带当前筛选池号
+  trendLink.addEventListener('click', function (ev) {
+    ev.preventDefault();
+    var pool = state.pool || '池1';
+    location.href = '/aquasense-reports/trend?pool=' + encodeURIComponent(pool);
+  });
+
+  load(true);
+})();
+</script>
+</body>
+</html>
