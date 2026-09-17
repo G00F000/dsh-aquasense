@@ -9,7 +9,7 @@
  * 意图路由(intent-router)为纯函数模块,由消息宿主/Agent 技能调用,不注册为 Tool;
  * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。
  * S9 配置页(原型 3)由 web/remind-gateway 提供:/aquasense-remind/api 路由
- * (浏览器侧「🐟 AquaSense 配置」入口读写;web 面缺失时静默跳过,不影响定时推送)。
+ * (浏览器侧「智慧渔业」入口读写;web 面缺失时静默跳过,不影响定时推送)。
  * R8 分析记录可追溯(见 docs/r8-traceability-architecture.md):
  *  - 分析记录列表/详情/趋势页由 web/trace-gateway 提供(/aquasense-reports 路由);
  *  - H5 拍照汇报页由 web/report-handler 提供(/aquasense-remind/report 页面 +

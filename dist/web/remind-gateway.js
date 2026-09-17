@@ -2,7 +2,7 @@
  * S9 提醒配置页 Web 面(Host 侧,原型 3)
  *
  * HTTP 路由:在宿主 webServer 上注册 /aquasense-remind/api 前缀,供浏览器侧
- * 「🐟 AquaSense 配置」入口 fetch 调用 get/save/test/groups 四个方法
+ * 「智慧渔业」入口 fetch 调用 get/save/test/groups 四个方法
  * (配置读写以 remind/config.json 为唯一事实源,见 s9-reminder 第 7 节)。
  *
  * v1.8 起移除 settings 配对命名空间(设置页卡片入口已删除,配置页为唯一入口)。

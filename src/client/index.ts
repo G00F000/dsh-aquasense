@@ -4,7 +4,7 @@
  * 注册两项(v1.8 起单入口:设置页卡片已移除):
  *  - locale 字典(zh/en):配置页文案;
  *  - sidebar.footer.action 列表槽入口(与设置按钮同级):侧栏页脚渲染
- *    「🐟 AquaSense 配置」,点击在会话列上打开独立配置页(见 AquaConfig.tsx)。
+ *    「智慧渔业」,点击在会话列上打开独立配置页(见 AquaConfig.tsx)。
  *
  * 构建产物由 tsdown 打成 DSH module-loader 包裹的 dist/client.js
  * (package.json dsh.client.platform = 'web')。

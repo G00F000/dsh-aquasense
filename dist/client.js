@@ -622,8 +622,8 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-wrap.rail .aqs-trigger{width:36px;height:36px;margin:8px 0 10px;padding:0;justify-content:center;border-radius:50%;gap:0}
 .aqs-trigger:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
 .aqs-trigger.on,.aqs-trigger[aria-expanded=true]{background:var(--dsw-specific-sidebar-nav-item-active,#ebeef2)}
-.aqs-ico{flex:none;width:16px;height:16px;display:grid;place-items:center;font-size:14px;line-height:1}
-.aqs-wrap.rail .aqs-ico{width:18px;height:18px;font-size:16px}
+.aqs-ico{flex:none;display:block;width:16px;height:16px}
+.aqs-wrap.rail .aqs-ico{width:18px;height:18px}
 .aqs-txt{white-space:nowrap;overflow:hidden}
 .aqs-page{position:fixed;z-index:40;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#17191c)}
 .aqs-top{display:flex;align-items:center;gap:12px;flex:none;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
@@ -762,6 +762,43 @@ function AquaConfigPage({ box, t, api, onClose }) {
 	});
 }
 /**
+* 入口图标:三道水波线性 SVG,规格与插件广场入口图标(PlazaIcon)同风格——
+* 16×16 视窗、无填充、描边取 currentColor、strokeWidth 1.4,
+* 随按钮文字色与悬停/展开态自动着色(尺寸档由 .aqs-ico 控制)。
+* @returns 图标元素。
+*/
+function WavesIcon() {
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
+		className: "aqs-ico",
+		viewBox: "0 0 16 16",
+		fill: "none",
+		"aria-hidden": "true",
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
+				d: "M1.7 4c1.05-1 2.1-1 3.15 0s2.1 1 3.15 0 2.1-1 3.15 0 2.1 1 3.15 0",
+				stroke: "currentColor",
+				strokeWidth: "1.4",
+				strokeLinecap: "round",
+				strokeLinejoin: "round"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
+				d: "M1.7 8c1.05-1 2.1-1 3.15 0s2.1 1 3.15 0 2.1-1 3.15 0 2.1 1 3.15 0",
+				stroke: "currentColor",
+				strokeWidth: "1.4",
+				strokeLinecap: "round",
+				strokeLinejoin: "round"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
+				d: "M1.7 12c1.05-1 2.1-1 3.15 0s2.1 1 3.15 0 2.1-1 3.15 0 2.1 1 3.15 0",
+				stroke: "currentColor",
+				strokeWidth: "1.4",
+				strokeLinecap: "round",
+				strokeLinejoin: "round"
+			})
+		]
+	});
+}
+/**
 * 渲染侧栏页脚入口:触发器 + (展开时)配置页 portal。
 * @param props - owner 共享位(wide)+ locale 座位(t)+ 注入面(api)。
 * @returns 入口元素。
@@ -803,11 +840,7 @@ function AquaConfigEntry({ wide, t, api }) {
 			onClick: () => {
 				setOpen((value) => !value);
 			},
-			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-				className: "aqs-ico",
-				"aria-hidden": "true",
-				children: "🐟"
-			}), wide ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(WavesIcon, {}), wide ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 				className: "aqs-txt",
 				children: t("entry.label")
 			}) : null]
@@ -835,7 +868,7 @@ const zh = {
 	"card.testing": "发送中…",
 	"card.testSent": "测试提醒已发送,请到飞书群查收",
 	"card.unsavedHint": "有未保存的修改,发送测试提醒前请先保存",
-	"entry.label": "AquaSense 配置",
+	"entry.label": "智慧渔业",
 	"page.title": "每日任务提醒",
 	"page.tab.reports": "分析记录",
 	"page.close": "关闭",
@@ -870,7 +903,7 @@ const en = {
 	"card.testing": "Sending…",
 	"card.testSent": "Test reminder sent — check the Feishu group",
 	"card.unsavedHint": "Unsaved changes — save before sending a test reminder",
-	"entry.label": "AquaSense settings",
+	"entry.label": "Smart Fishery",
 	"page.title": "Daily task reminders",
 	"page.tab.reports": "Analysis records",
 	"page.close": "Close",

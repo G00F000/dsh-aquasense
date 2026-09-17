@@ -1,7 +1,7 @@
 /**
  * RemindForm —— S9 每日任务提醒的配置表单(需求 R6.5 原型 3)
  *
- * 由侧栏「🐟 AquaSense 配置」一级入口打开的独立配置页(AquaConfigPage)使用
+ * 由侧栏「智慧渔业」一级入口打开的独立配置页(AquaConfigPage)使用
  * (v1.8 起设置页卡片已移除,本组件为唯一表单实现)。
  *
  * 配置状态与动作由 useRemindConfig 提供(拉取/草稿/dirty/保存/发送测试/放弃修改),

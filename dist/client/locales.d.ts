@@ -16,7 +16,7 @@ export declare const zh: {
     readonly 'card.testing': "发送中…";
     readonly 'card.testSent': "测试提醒已发送,请到飞书群查收";
     readonly 'card.unsavedHint': "有未保存的修改,发送测试提醒前请先保存";
-    readonly 'entry.label': "AquaSense 配置";
+    readonly 'entry.label': "智慧渔业";
     readonly 'page.title': "每日任务提醒";
     readonly 'page.tab.reports': "分析记录";
     readonly 'page.close': "关闭";

@@ -2,7 +2,7 @@
 
 > - 总文档：[architecture.md](./architecture.md)（本文为其 S9 专题**分文档**，展开模块级/接口级设计；总文档仅保留概述与引用）
 > - 需求依据：[requirements.md §R6](./requirements.md)
-> - 状态：✅ 已实现（V2 插件内调度 + 原型 3 单入口；v1.7 起侧栏一级入口「🐟 AquaSense 配置」+ 会话列独立配置页，v1.8 移除设置卡片入口；见 §3.6 与 §8.5）
+> - 状态：✅ 已实现（V2 插件内调度 + 原型 3 单入口；v1.7 起侧栏一级入口（v1.9 更名「智慧渔业」，图标为插件广场同风格线性 SVG）+ 会话列独立配置页，v1.8 移除设置卡片入口；见 §3.6 与 §8.5）
 
 ---
 
@@ -234,12 +234,12 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 |------|------|
 | 需求原文 | DSH 界面中 AquaSense 插件一级按钮位于**设置图标上方**，点击跳转设置网页 |
 | 平台核实 | 设置座位旁的一级动作注册面为 `sidebar.footer.action` 列表槽（`@deepseek-ai/dsh-client-ui-sidebar` 声明，owner `{ wide }`，渲染于设置座位旁的 footerActions 容器）；v1.5「无此注册面」结论已由 v1.7 修正 |
-| 唯一入口（v1.7 起） | 侧栏页脚「🐟 AquaSense 配置」一级按钮（与设置按钮同级）：点击在会话列上打开**独立配置页**（`src/client/AquaConfig.tsx`，portal + fixed 定位，顶栏二级标题 + 右上角关闭） |
+| 唯一入口（v1.7 起） | 侧栏页脚「智慧渔业」一级按钮（v1.7 交付，v1.9 由「🐟 AquaSense 配置」更名并改用线性 SVG 图标；与设置按钮同级）：点击在会话列上打开**独立配置页**（`src/client/AquaConfig.tsx`，portal + fixed 定位，顶栏二级标题 + 右上角关闭） |
 
 **v1.8 变更注（单入口制 + 页脚换行）**：
 
-- 设置卡片入口（`settings.plugin.item` 键位槽，v1.5 交付）与 Host 侧 settings 配对命名空间（`registerRemindSettingsNamespace`）随 v1.8 整体移除；「🐟 AquaSense 配置」为唯一入口
-- 宿主页脚动作容器（footerActions）为单行 flex（nowrap），多个整宽条目并排会互相挤压（插件广场被压窄、本入口贴边）；v1.8 在样式注入中以 `div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}` 允许换行，使「插件广场 / AquaSense 配置 / 设置」各占一整行（56px 收起轨道下圆钮亦垂直堆叠）
+- 设置卡片入口（`settings.plugin.item` 键位槽，v1.5 交付）与 Host 侧 settings 配对命名空间（`registerRemindSettingsNamespace`）随 v1.8 整体移除；「智慧渔业」（v1.9 更名前为「🐟 AquaSense 配置」）为唯一入口
+- 宿主页脚动作容器（footerActions）为单行 flex（nowrap），多个整宽条目并排会互相挤压（插件广场被压窄、本入口贴边）；v1.8 在样式注入中以 `div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}` 允许换行，使「插件广场 / 智慧渔业 / 设置」各占一整行（56px 收起轨道下圆钮亦垂直堆叠）
 - 配置读写仍不走宿主 settings 服务，唯一事实源是 `config.json`（§9），经 `/aquasense-remind/api` 直连读写
 
 **组件架构**：
@@ -287,7 +287,7 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 
 **配置页 UI（v1.7，对齐 SkillHub 插件广场）**：
 
-- 侧栏入口（`sidebar.footer.action`）：宽态为 42px 行内「🐟 + AquaSense 配置」；56px 收起轨道为 36×36 圆形图标按钮；悬停/展开态复用侧栏导航项令牌
+- 侧栏入口（`sidebar.footer.action`）：宽态为 42px 行内「水波线性图标 + 智慧渔业」（v1.9 更名/换图标；图标对齐插件广场 `PlazaIcon` 风格——16×16 视窗、`stroke=currentColor`、`strokeWidth=1.4`，收起轨道 18px）；56px 收起轨道为 36×36 圆形图标按钮；悬停/展开态复用侧栏导航项令牌
 - 配置页：`createPortal` 至 body，`fixed` 覆盖会话列（`[data-phase]` 矩形，经 ResizeObserver 跟踪尺寸变化与滚动；无会话列回退整窗）；顶栏为二级标题「每日任务提醒」（h2）+ 右上角 32×32 关闭按钮；内容区最大宽度 760px
 - 交互：Esc / 点击面板外关闭（忽略面板与入口内的 pointerdown）
 - 表单：配置页使用 `RemindForm.tsx`（`useRemindConfig` 数据层 + `RemindForm` 视图；v1.8 起为唯一使用方）
@@ -338,7 +338,7 @@ setupS9Reminder(ctx)
 返回: 已加载 N 项推送(其中 M 项已推送)
 ```
 
-- 配置页入口：侧栏页脚「🐟 AquaSense 配置」一级按钮（`sidebar.footer.action` 槽，v1.7 交付；原型还原与 v1.8 调整见 §3.6）
+- 配置页入口：侧栏页脚「智慧渔业」一级按钮（`sidebar.footer.action` 槽，v1.7 交付、v1.9 更名/换图标；原型还原与 v1.8 调整见 §3.6）
 - 配置页「保存配置」→ 写 `config.json` → 重新调用 `setupS9Reminder`（重建计划）
 - 配置页「发送测试提醒」→ 直接调用推送器发送一次总览卡片（不注册、不落计划）
 
