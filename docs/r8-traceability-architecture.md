@@ -1,0 +1,869 @@
+# R8：AI 分析结果可追溯 — 功能架构设计文档
+
+> - 总文档：[architecture.md](./architecture.md)（本文为其 R8 专题**分文档**，展开模块级/接口级设计）
+> - 需求依据：[r8-traceability-requirements.md](./r8-traceability-requirements.md)（R8 专题需求分文档）
+> - 状态：🔲 待实现
+> - 设计参考：Langfuse Trace/Span 模型、Arize Phoenix 嵌入可视化、MedgeClaw Dashboard 分步骤展开
+
+---
+
+## 1. 背景与目标
+
+### 1.1 问题回顾
+
+AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知识库检索 → 处置建议 → 台账写入），但：
+
+- 分析结果仅在飞书群聊中回显，无持久化记录
+- 每步耗时、Token 消耗无记录
+- 知识库命中来源不透明
+- 无趋势分析能力
+- H5 拍照汇报提交后无过程反馈
+
+### 1.2 设计目标
+
+借鉴 **Langfuse 的 Trace/Span 层级模型** + **Phoenix 的嵌入可视化思路** + **MedgeClaw 的分步骤展开交互**，自建轻量版 AI 分析可追溯系统。
+
+核心原则：**固定管线 + 硬编码 Span + JSON 存储 + 纯 HTML 前端**。
+
+### 1.3 设计约束
+
+| 约束 | 说明 |
+|------|------|
+| 服务器 | 4 核 4G，零额外依赖（不引入 MySQL/Redis/ClickHouse） |
+| 存储 | JSON 文件（`$AQUASENSE_CACHE_DIR/reports/`） |
+| 前端 | 纯 HTML + Vanilla JS + CSS Variables，无构建步骤 |
+| 规模 | 4 池 × ~20 次/天 ≈ 200 条/月，JSON 完全可承载 |
+| 复用 | 复用现有 `remind-gateway.ts` 的 HTTP 服务和路由注册机制 |
+
+---
+
+## 2. 整体架构
+
+### 2.1 组件架构
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                    插件进程 (DSH 宿主内)                            │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  现有 AI 管线 (3 Tools)                                      │  │
+│  │                                                             │  │
+│  │  analyze-image.ts ──→ generate-advice.ts ──→ record-ledger.ts│  │
+│  │       │                    │                       │        │  │
+│  │       ▼                    ▼                       ▼        │  │
+│  │  ┌──────────────────────────────────────────────────────┐   │  │
+│  │  │  trace-recorder.ts (新增)                             │   │  │
+│  │  │                                                      │   │  │
+│  │  │  在每个 Tool 执行前后埋点，收集 Span 数据              │   │  │
+│  │  │  → 组装 AnalysisRecord                                │   │  │
+│  │  │  → 写入 reports/RPT-*.json + 更新 index.json          │   │  │
+│  │  └──────────────────────────────────────────────────────┘   │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  trace-gateway.ts (新增)                                    │  │
+│  │                                                             │  │
+│  │  HTTP 路由注册（复用 webServer）:                             │  │
+│  │  GET  /aquasense-reports                     → 列表页 HTML  │  │
+│  │  GET  /aquasense-reports/report               → 详情页 HTML  │  │
+│  │  GET  /aquasense-reports/trend                → 趋势页 HTML  │  │
+│  │  GET  /aquasense-reports/api/records          → 列表 JSON    │  │
+│  │  GET  /aquasense-reports/api/records/:id      → 详情 JSON    │  │
+│  │  GET  /aquasense-reports/api/trend/:pool      → 趋势 JSON    │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  静态文件 (新增)                                            │  │
+│  │                                                             │  │
+│  │  src/web/trace-list.html       → 分析记录列表页              │  │
+│  │  src/web/trace-detail.html     → 分析详情页 (Trace 视图)     │  │
+│  │  src/web/trace-trend.html      → 池号趋势页                 │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+                  $AQUASENSE_CACHE_DIR/reports/
+                    index.json                 ← 轻量索引
+                    RPT-*.json                 ← 完整记录
+```
+
+### 2.2 在总架构中的位置
+
+| 方向 | 说明 |
+|------|------|
+| 上游 | AI 管线（analyze → advice → ledger）执行完成后自动埋点 |
+| 下游 | HTTP 静态页面（列表/详情/趋势），供管理者和工人查看 |
+| 与现有模块关系 | **只读**：不修改 analyze/advice/ledger 的输出接口，仅在执行前后收集数据 |
+| 共享设施 | 飞书 token 缓存（`src/feishu/token.ts`）、缓存目录（`AQUASENSE_CACHE_DIR`） |
+
+---
+
+## 3. 核心模块设计
+
+### 3.1 模块划分
+
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| Trace 记录器 | `src/web/trace-recorder.ts` | Span 数据收集 + AnalysisRecord 组装 + JSON 写入 |
+| Trace 网关 | `src/web/trace-gateway.ts` | HTTP 路由注册 + API 处理 + 静态文件托管 |
+| Trace 存储 | `src/web/trace-store.ts` | index.json 读写 + reports/ 目录管理 |
+| 列表页 | `src/web/trace-list.html` | 分析记录列表（纯 HTML） |
+| 详情页 | `src/web/trace-detail.html` | 分析详情 Trace 视图（纯 HTML） |
+| 趋势页 | `src/web/trace-trend.html` | 池号趋势分析（纯 HTML） |
+
+### 3.2 Trace 记录器（trace-recorder.ts）
+
+**核心设计**：借鉴 Langfuse 的 `@observe()` 装饰器模式，在 AquaSense 的固定管线中硬编码 5 个 Span 埋点。
+
+```typescript
+// src/web/trace-recorder.ts
+
+/**
+ * 单条分析的 Span 数据收集器
+ * 借鉴 Langfuse Trace/Span 层级模型：
+ * - Trace = 一次完整分析（RPT-YYYYMMDD-HHmmss）
+ * - Span = 管线中的每个步骤（upload/analyze/retrieve/advice/ledger）
+ */
+export class AnalysisTracer {
+  private record: AnalysisRecord
+  private spans: Map<string, SpanState>
+
+  constructor(params: {
+    pool: string
+    reporter: string
+    reporter_open_id: string
+    source: 'h5_upload' | 'group_chat' | 'api'
+    task?: string
+    chat_id?: string
+  }) {
+    this.record = {
+      id: generateReportId(),  // RPT-YYYYMMDD-HHmmss
+      ...params,
+      created_at: new Date().toISOString(),
+      model: process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash',
+      total_duration_ms: 0,
+      total_tokens: 0,
+    }
+    this.spans = new Map()
+  }
+
+  /** 开始一个 Span（记录起始时间） */
+  startSpan(name: string): void {
+    this.spans.set(name, { start: performance.now() })
+  }
+
+  /** 结束一个 Span（记录耗时和数据） */
+  endSpan(name: string, data: Partial<SpanData>): void {
+    const span = this.spans.get(name)
+    if (!span) return
+    span.duration_ms = Math.round(performance.now() - span.start)
+    span.data = { ...span.data, ...data }
+  }
+
+  /** 设置 Trace 级别元信息 */
+  setTraceMeta(meta: Partial<AnalysisRecord>): void {
+    Object.assign(this.record, meta)
+  }
+
+  /** 写入磁盘（管线执行完成后调用） */
+  async flush(): Promise<string> {
+    // 汇总各 Span 数据到 record
+    this.record.total_duration_ms = this.sumSpanDurations()
+    this.record.total_tokens = this.sumTokens()
+    this.record.span_upload = this.spans.get('upload')?.data
+    this.record.span_analyze = this.spans.get('analyze')?.data
+    this.record.span_retrieve = this.spans.get('retrieve')?.data
+    this.record.span_advice = this.spans.get('advice')?.data
+    this.record.span_ledger = this.spans.get('ledger')?.data
+
+    // 写入 JSON 文件
+    await writeReport(this.record)
+    await updateIndex(this.record)
+
+    return this.record.id
+  }
+}
+```
+
+**与现有管线的集成方式**：
+
+```
+方案 A（推荐）: 包装器模式（不修改现有 Tool 代码）
+─────────────────────────────────────────────
+
+src/tools/analyze-image.ts       ← 不修改
+src/tools/generate-advice.ts     ← 不修改
+src/tools/record-ledger.ts       ← 不修改
+
+src/web/trace-recorder.ts        ← 新增
+  └─ export async function traceAnalysis(pipeline: PipelineParams): Promise<AnalysisRecord>
+
+src/web/trace-handler.ts         ← 新增（H5 上传 + trace 集成）
+  └─ 接收 H5 提交 → 调用现有 3 个 Tool → 自动埋点 → flush
+
+src/index.ts                     ← 修改（注册 trace-gateway 路由）
+```
+
+**包装器伪代码**（H5 上传场景）：
+
+```typescript
+// src/web/trace-handler.ts
+export async function handleH5Report(params: H5ReportParams): Promise<{ record_id: string; analysis: AnalysisResult }> {
+  const tracer = new AnalysisTracer({
+    pool: params.pool_id,
+    reporter: params.reporter_name,
+    reporter_open_id: params.open_id,
+    source: 'h5_upload',
+    task: params.task,
+    chat_id: params.chat_id,
+  })
+
+  // Span 1: 图片上传
+  tracer.startSpan('upload')
+  const images = await processUploadedImages(params.files)
+  tracer.endSpan('upload', {
+    image_count: images.length,
+    image_sizes: images.map(i => i.original_size),
+    compressed_sizes: images.map(i => i.compressed_size),
+  })
+
+  // Span 2: AI 视觉分析
+  tracer.startSpan('analyze')
+  const analysis = await callVisionModel(images, buildPrompt(params.pool_id))
+  const parsed = parseAnalysisResponse(analysis)
+  tracer.endSpan('analyze', {
+    prompt_length: buildPrompt(params.pool_id).length,
+    input_tokens: 1200,  // 从 API 响应中提取
+    output_tokens: 300,
+    output_raw: analysis.slice(0, 500),
+    cls: parsed.cls,
+    symptoms: parsed.symptoms,
+    severity: parsed.severity,
+    confidence: parsed.confidence,
+    scene_hint: parsed.scene_hint,
+  })
+  tracer.setTraceMeta({ model: process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash' })
+
+  // Span 3: 知识库检索（仅 early/disease）
+  let knowledge: SearchResult | null = null
+  if (parsed.cls !== 'normal') {
+    tracer.startSpan('retrieve')
+    knowledge = await searchKnowledgeMerged(buildKnowledgeQuery(parsed))
+    tracer.endSpan('retrieve', {
+      query: buildKnowledgeQuery(parsed),
+      channel_a_wiki: knowledge.items.filter(i => i.from === 'wiki').length,
+      channel_b_note: knowledge.items.filter(i => i.from === 'note').length,
+      channel_c_pdf: knowledge.items.filter(i => i.from === 'pdf_content').length,
+      merged_count: knowledge.items.length,
+      excerpts: knowledge.items.slice(0, 5).map(i => ({
+        title: i.title,
+        from: i.from,
+        locator: i.locator,
+        excerpt_preview: (i.highlight || '').slice(0, 100),
+      })),
+    })
+  }
+
+  // Span 4: 处置建议生成（仅 early/disease）
+  let advice: AdviceResult | null = null
+  if (parsed.cls !== 'normal') {
+    tracer.startSpan('advice')
+    advice = await generateAdviceInternal(parsed, knowledge)
+    tracer.endSpan('advice', {
+      input_cls: parsed.cls,
+      alert_level: advice.alert_level,
+      knowledge_refs_count: advice.knowledge_refs.length,
+      diagnosis_summary: advice.diagnosis_summary,
+      reasoning_preview: advice.reasoning.slice(0, 200),
+    })
+  }
+
+  // Span 5: 台账写入
+  tracer.startSpan('ledger')
+  const ledgerResult = await recordLedgerInternal({
+    scene: 'inspection',
+    pool_id: params.pool_id,
+    open_id: params.open_id,
+    analysis: parsed,
+    advice,
+  })
+  tracer.endSpan('ledger', {
+    target_table: '巡检记录表',
+    operation: ledgerResult.is_update ? 'update' : 'create',
+    record_id: ledgerResult.record_id,
+  })
+
+  // 写入磁盘
+  const record_id = await tracer.flush()
+
+  return { record_id, analysis: parsed }
+}
+```
+
+### 3.3 Trace 存储（trace-store.ts）
+
+```typescript
+// src/web/trace-store.ts
+
+const REPORTS_DIR = path.join(process.env.AQUASENSE_CACHE_DIR || '/data/aquasense/cache', 'reports')
+const INDEX_FILE = path.join(REPORTS_DIR, 'index.json')
+
+/**
+ * 写入单条分析记录
+ */
+export async function writeReport(record: AnalysisRecord): Promise<void> {
+  const filePath = path.join(REPORTS_DIR, `${record.id}.json`)
+  await fs.mkdir(REPORTS_DIR, { recursive: true })
+  await fs.writeFile(filePath, JSON.stringify(record, null, 2), 'utf-8')
+}
+
+/**
+ * 更新索引（在头部插入新记录，保持按时间倒序）
+ */
+export async function updateIndex(record: AnalysisRecord): Promise<void> {
+  const index = await readIndex()
+  index.records.unshift({
+    id: record.id,
+    pool: record.pool,
+    reporter: record.reporter,
+    source: record.source,
+    cls: record.span_analyze?.cls ?? 'unknown',
+    confidence: record.span_analyze?.confidence ?? 0,
+    symptoms: record.span_analyze?.symptoms ?? [],
+    alert_level: record.span_advice?.alert_level,
+    created_at: record.created_at,
+    total_duration_ms: record.total_duration_ms,
+  })
+  await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2), 'utf-8')
+}
+
+/**
+ * 读取索引（文件不存在时返回空结构）
+ */
+export async function readIndex(): Promise<AnalysisIndex> {
+  try {
+    const data = await fs.readFile(INDEX_FILE, 'utf-8')
+    return JSON.parse(data)
+  } catch {
+    return { version: 1, records: [] }
+  }
+}
+
+/**
+ * 读取单条完整记录
+ */
+export async function readReport(id: string): Promise<AnalysisRecord | null> {
+  try {
+    const filePath = path.join(REPORTS_DIR, `${id}.json`)
+    const data = await fs.readFile(filePath, 'utf-8')
+    return JSON.parse(data)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 索引损坏时从 reports/ 目录重建
+ */
+export async function rebuildIndex(): Promise<AnalysisIndex> {
+  const files = await fs.readdir(REPORTS_DIR)
+  const reports = files
+    .filter(f => f.startsWith('RPT-') && f.endsWith('.json'))
+    .map(async f => {
+      const data = await fs.readFile(path.join(REPORTS_DIR, f), 'utf-8')
+      return JSON.parse(data) as AnalysisRecord
+    })
+  const records = (await Promise.all(reports))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map(r => ({
+      id: r.id,
+      pool: r.pool,
+      reporter: r.reporter,
+      source: r.source,
+      cls: r.span_analyze?.cls ?? 'unknown',
+      confidence: r.span_analyze?.confidence ?? 0,
+      symptoms: r.span_analyze?.symptoms ?? [],
+      alert_level: r.span_advice?.alert_level,
+      created_at: r.created_at,
+      total_duration_ms: r.total_duration_ms,
+    }))
+  const index: AnalysisIndex = { version: 1, records }
+  await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2), 'utf-8')
+  return index
+}
+```
+
+**存储目录结构**：
+
+```
+$AQUASENSE_CACHE_DIR/
+  reports/                          # R8 分析记录
+    index.json                      # 轻量索引（~500KB/年）
+    RPT-20260917-100532.json        # 单条完整记录（~2KB）
+    RPT-20260917-093015.json
+    ...
+  remind/                           # S9 运行状态（已有）
+    config.json
+    plan-*.json
+    sent-*.json
+  pdf/                              # 知识库缓存（已有）
+  note/                             # 笔记缓存（已有）
+```
+
+**清理策略**：
+- 保留最近 90 天的记录（约 6000 条，~12MB）
+- 超过 90 天的记录归档或删除（可通过 cron 脚本）
+- index.json 自动裁剪旧记录
+
+### 3.4 Trace 网关（trace-gateway.ts）
+
+```typescript
+// src/web/trace-gateway.ts
+
+/**
+ * 注册 R8 分析记录相关 HTTP 路由
+ * 复用 DSH webServer 的路由注册机制（与 remind-gateway.ts 一致）
+ */
+export function installTraceWeb(ctx: Context): void {
+  const webServer = ctx.webServer
+  if (!webServer) {
+    console.warn('[aquasense-trace] webServer 不存在,跳过 R8 路由注册')
+    return
+  }
+
+  // 静态页面路由
+  webServer.router.get('/aquasense-reports', handleListPage)
+  webServer.router.get('/aquasense-reports/report', handleDetailPage)
+  webServer.router.get('/aquasense-reports/trend', handleTrendPage)
+
+  // API 路由
+  webServer.router.get('/aquasense-reports/api/records', handleRecordsList)
+  webServer.router.get('/aquasense-reports/api/records/:id', handleRecordDetail)
+  webServer.router.get('/aquasense-reports/api/trend/:pool', handleTrendData)
+
+  console.log('[aquasense-trace] R8 分析记录路由已注册')
+}
+```
+
+**API 协议**：
+
+| 方法 | 路由 | 参数 | 响应 | 说明 |
+|------|------|------|------|------|
+| GET | `/aquasense-reports/api/records` | `pool`, `cls`, `date`, `limit`, `offset` | `{ ok, value: { records, total, has_more } }` | 列表查询 |
+| GET | `/aquasense-reports/api/records/:id` | — | `{ ok, value: AnalysisRecord }` | 单条详情 |
+| GET | `/aquasense-reports/api/trend/:pool` | `days` | `{ ok, value: TrendData }` | 趋势统计 |
+
+**协议层防护**（与 `remind-gateway.ts` 一致）：
+- 仅 GET（405）
+- 同源校验（403）
+- 路径解析（404）
+- 兜底 500
+
+### 3.5 H5 上传页集成
+
+H5 拍照汇报页（`src/web/report-upload.html`）提交后，服务端处理链路增加 trace 埋点：
+
+```
+H5 提交 (POST /aquasense-remind/api/report/submit)
+    │
+    ▼
+report-handler.ts:
+  创建 AnalysisTracer
+    │
+    ├─ Span 1: 图片处理 → tracer.startSpan('upload') / endSpan
+    ├─ Span 2: 视觉分析 → tracer.startSpan('analyze') / endSpan
+    ├─ Span 3: 知识检索 → tracer.startSpan('retrieve') / endSpan (仅 early/disease)
+    ├─ Span 4: 建议生成 → tracer.startSpan('advice') / endSpan (仅 early/disease)
+    ├─ Span 5: 台账写入 → tracer.startSpan('ledger') / endSpan
+    │
+    ▼
+  tracer.flush() → 写入 reports/RPT-*.json + 更新 index.json
+    │
+    ▼
+  返回 { record_id, analysis } → H5 页面展示摘要 + 跳转详情页
+```
+
+**H5 页面增强**：
+
+提交后展示实时进度条（借鉴 MedgeClaw），进度百分比由服务端 SSE 推送或前端轮询：
+
+```
+提交中... 20%  上传图片
+分析中... 40%  AI 视觉分析
+检索中... 60%  知识库检索
+建议中... 80%  处置建议
+完成!     100% 跳转详情页 →
+```
+
+---
+
+## 4. 关键流程
+
+### 4.1 管线内 trace 埋点（群聊发图场景）
+
+```
+工人在飞书群发图 → dsh-lark → intent-router → Agent 编排 3 个 Tool
+    │
+    ▼
+Agent 调用 aquasense_analyze:
+  → trace-recorder: startSpan('analyze')
+  → callVisionModel()
+  → parseAnalysisResponse()
+  → trace-recorder: endSpan('analyze', { cls, symptoms, ... })
+    │
+    ▼
+Agent 调用 aquasense_advice (仅 early/disease):
+  → trace-recorder: startSpan('retrieve')
+  → searchKnowledgeMerged()
+  → trace-recorder: endSpan('retrieve', { query, merged_count, ... })
+  → trace-recorder: startSpan('advice')
+  → generateAdviceInternal()
+  → trace-recorder: endSpan('advice', { alert_level, ... })
+    │
+    ▼
+Agent 调用 aquasense_ledger:
+  → trace-recorder: startSpan('ledger')
+  → recordLedgerInternal()
+  → trace-recorder: endSpan('ledger', { record_id, ... })
+    │
+    ▼
+管线完成 → trace-recorder.flush()
+  → writeReport(record) → reports/RPT-*.json
+  → updateIndex(record) → index.json
+```
+
+**集成方式（群聊场景）**：
+
+群聊场景的 trace 埋点需要在 Agent 编排层（SKILL.md 定义的工具调用链）中收集数据。有两种方案：
+
+| 方案 | 说明 | 优缺点 |
+|------|------|--------|
+| **方案 A: 后置收集** | 分析完成后，从飞书 Bitable 读取刚写入的记录，组装 AnalysisRecord | 不侵入现有 Tool；但无法收集 Token/耗时 |
+| **方案 B: 中间件包装** | 在 `index.ts` 注册 Tool 时用包装器拦截输入/输出，自动埋点 | 可收集完整数据；但需要修改 Tool 注册方式 |
+
+**推荐方案 A**（后置收集）：群聊场景优先保证稳定性，不侵入现有 Tool。通过飞书 Bitable API 读取刚写入的记录，组装简化的 AnalysisRecord（缺少 Token/耗时，但包含核心分析结果）。
+
+**H5 上传场景用方案 B**（包装器）：H5 场景由 `trace-handler.ts` 完全控制，可以精确收集每个 Span 的数据。
+
+### 4.2 索引查询流程
+
+```
+GET /aquasense-reports/api/records?pool=池3&cls=early&limit=20
+    │
+    ▼
+trace-gateway:
+  1. 解析查询参数 (pool, cls, date, limit, offset)
+  2. readIndex() → 读取 index.json
+  3. 按参数过滤 (pool / cls / date)
+  4. 分页 (limit / offset)
+  5. 返回 { ok, value: { records, total, has_more } }
+```
+
+### 4.3 详情查询流程
+
+```
+GET /aquasense-reports/api/records/RPT-20260917-100532
+    │
+    ▼
+trace-gateway:
+  1. 提取 record ID
+  2. readReport(id) → 读取 reports/RPT-*.json
+  3. 文件不存在 → 404
+  4. 返回完整 AnalysisRecord
+```
+
+### 4.4 趋势统计流程
+
+```
+GET /aquasense-reports/api/trend/池3?days=7
+    │
+    ▼
+trace-gateway:
+  1. readIndex() → 读取 index.json
+  2. 过滤: pool === '池3' && created_at >= 7天前
+  3. 统计: distribution = { normal: N, early: M, disease: K }
+  4. 统计: top_symptoms = 症状频次排序
+  5. 返回最近 10 条记录摘要
+```
+
+### 4.5 索引损坏重建
+
+```
+readIndex() 解析失败 (JSON.parse error)
+    │
+    ▼
+console.warn('[aquasense-trace] index.json 损坏,正在重建...')
+    │
+    ▼
+rebuildIndex():
+  1. readdir(reports/) → 扫描所有 RPT-*.json
+  2. 逐条读取并解析
+  3. 按 created_at 倒序排列
+  4. 重建 index.json
+    │
+    ▼
+返回重建后的索引
+```
+
+---
+
+## 5. 前端设计
+
+### 5.1 技术选型
+
+| 维度 | 选型 | 理由 |
+|------|------|------|
+| 框架 | Vanilla JS | 零依赖，无构建步骤 |
+| 样式 | CSS Variables + `prefers-color-scheme` | 跟随系统主题 |
+| 图表 | CSS 柱状图 + Canvas 散点图 | 无需引入 Chart.js |
+| 布局 | CSS Grid + Flexbox | 移动端优先 |
+| 路由 | URL Search Params（`?id=RPT-xxx`） | 单页，无 hash 路由 |
+| 交互 | `<details>/<summary>` + CSS Transition | 原生 Accordion |
+
+### 5.2 暗色/亮色主题
+
+```css
+/* 跟随系统设置 */
+:root {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f7fa;
+  --text-primary: #1a1a1a;
+  --text-secondary: #666666;
+  --border: #e0e0e0;
+  --accent: #1677ff;
+  --success: #52c41a;
+  --warning: #faad14;
+  --danger: #ff4d4f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #1a1a1a;
+    --bg-secondary: #2a2a2a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #999999;
+    --border: #3a3a3a;
+    --accent: #4096ff;
+    --success: #49aa19;
+    --warning: #d89614;
+    --danger: #dc4446;
+  }
+}
+```
+
+### 5.3 瀑布图 CSS
+
+```css
+/* 借鉴 Langfuse 的时间轴瀑布图 */
+.span-bar {
+  height: 24px;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.span-upload  { background: var(--text-secondary); }
+.span-analyze { background: var(--accent); }
+.span-retrieve { background: #fa8c16; }
+.span-advice  { background: var(--success); }
+.span-ledger  { background: #722ed1; }
+```
+
+### 5.4 步骤 Accordion
+
+```html
+<!-- 借鉴 MedgeClaw 的分步骤展开 -->
+<details class="span-step">
+  <summary>
+    <span class="step-icon">🧠</span>
+    <span class="step-name">AI 视觉分析</span>
+    <span class="step-duration">1.2s</span>
+    <span class="step-status">✅</span>
+  </summary>
+  <div class="step-detail">
+    <!-- Input/Output/Model/Tokens -->
+  </div>
+</details>
+```
+
+### 5.5 语义聚类图（简化嵌入投影）
+
+借鉴 Arize Phoenix 的 UMAP 嵌入投影，但用简化方案：
+
+```javascript
+// 简化版：基于症状向量的 2D 投影
+// 不引入真正的 UMAP（太重），用简单的 TF-IDF + PCA 降维
+function renderCluster(records, canvas) {
+  // 1. 构建症状向量 (所有记录的症状词 → one-hot 编码)
+  // 2. 简单 PCA 降到 2D
+  // 3. Canvas 绘制散点图
+  //    颜色: normal=绿, early=黄, disease=红
+  //    大小: 置信度越高越大
+  //    标注: 最新记录 ★, 最远记录 ●
+}
+```
+
+---
+
+## 6. 文件变更矩阵
+
+### 6.1 新增文件
+
+| 文件路径 | 行数估计 | 说明 |
+|----------|---------|------|
+| `src/web/trace-recorder.ts` | ~200 行 | Trace 记录器：Span 收集 + AnalysisRecord 组装 |
+| `src/web/trace-store.ts` | ~150 行 | 存储层：index.json 读写 + reports/ 目录管理 |
+| `src/web/trace-gateway.ts` | ~200 行 | HTTP 路由注册 + API 处理 |
+| `src/web/trace-handler.ts` | ~150 行 | H5 上传 + trace 集成（包装器） |
+| `src/web/trace-list.html` | ~300 行 | 分析记录列表页（纯 HTML + CSS + JS） |
+| `src/web/trace-detail.html` | ~400 行 | 分析详情页 Trace 视图 |
+| `src/web/trace-trend.html` | ~350 行 | 池号趋势页 |
+| `src/web/trace-gateway.test.ts` | ~150 行 | 网关单元测试 |
+
+### 6.2 修改文件
+
+| 文件路径 | 变更类型 | 变更说明 |
+|----------|---------|----------|
+| `src/index.ts` | 接入 | `apply()` 中调用 `installTraceWeb(ctx)` |
+| `src/web/remind-gateway.ts` | 扩展 | H5 提交处理增加 trace 埋点调用 |
+| `src/web/report-handler.ts` | 扩展 | 集成 `AnalysisTracer`，在管线各步骤埋点 |
+| `docs/architecture.md` | 引用 | R8 概述改为摘要 + 指向本文（分-总关系） |
+| `docs/requirements.md` | 引用 | R8 需求指向专题需求分文档 |
+
+### 6.3 不变更文件
+
+| 文件 | 理由 |
+|------|------|
+| `src/tools/analyze-image.ts` | 不修改，通过包装器收集 Span 数据 |
+| `src/tools/generate-advice.ts` | 同上 |
+| `src/tools/record-ledger.ts` | 同上 |
+| `src/router/intent-router.ts` | R8 不经意图路由 |
+| `src/scheduler/s9-reminder.ts` | R8 不涉及提醒逻辑 |
+
+---
+
+## 7. 存储设计
+
+### 7.1 磁盘布局
+
+```
+$AQUASENSE_CACHE_DIR/
+  reports/                          # R8 分析记录（新增）
+    index.json                      # 轻量索引
+    RPT-20260917-100532.json        # 单条完整记录
+    RPT-20260917-093015.json
+    ...
+  remind/                           # S9 运行状态（已有，不变更）
+  pdf/                              # 知识库缓存（已有，不变更）
+  note/                             # 笔记缓存（已有，不变更）
+```
+
+### 7.2 容量估算
+
+| 指标 | 数值 |
+|------|------|
+| 每条记录 JSON 大小 | ~2KB（含 5 个 Span 详情） |
+| 每日记录数（4 池 × ~5 次） | ~20 条 |
+| 每月记录数 | ~600 条 |
+| 每月 JSON 总大小 | ~1.2MB |
+| 每年 JSON 总大小 | ~14.4MB |
+| index.json 大小（1 年） | ~500KB（仅摘要字段） |
+| index.json 大小（3 年） | ~1.5MB |
+
+**结论**：JSON 文件存储在 4G 服务器上完全可承载，无需引入数据库。
+
+### 7.3 清理策略
+
+```typescript
+// 定期清理旧记录（可选，通过 cron 或手动触发）
+async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
+  const cutoff = new Date(Date.now() - daysToKeep * 86400000).toISOString()
+  const index = await readIndex()
+  const toRemove = index.records.filter(r => r.created_at < cutoff)
+
+  for (const record of toRemove) {
+    await fs.unlink(path.join(REPORTS_DIR, `${record.id}.json`)).catch(() => {})
+  }
+
+  index.records = index.records.filter(r => r.created_at >= cutoff)
+  await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2), 'utf-8')
+
+  return toRemove.length
+}
+```
+
+---
+
+## 8. 容错与降级
+
+| 故障场景 | 检测方式 | 降级行为 |
+|----------|----------|----------|
+| reports/ 目录不存在 | 首次写入时 | 自动创建 |
+| 单条记录 JSON 损坏 | readReport 解析失败 | 列表页跳过该条 + warn 日志 |
+| index.json 损坏 | readIndex 解析失败 | 自动从 reports/ 目录重建 |
+| index.json 与 reports/ 不一致 | readIndex 后发现记录缺失 | 静默不处理（下次写入时自动修复） |
+| 查询参数非法 | 参数校验 | 返回 400 + 错误描述 |
+| 图片缩略图文件丢失 | 详情页加载时 | 显示占位图 |
+| 记录数超过 1000 条 | 不拦截 | index.json 仍可承载（~300KB） |
+| webServer 不存在 | 启动时检查 | 静默跳过路由注册 + warn |
+| H5 上传 trace 埋点失败 | try-catch | 主流程不受影响（分析结果照常返回） |
+
+---
+
+## 9. 可观测性
+
+```
+[aquasense-trace] R8 分析记录路由已注册
+[aquasense-trace] 分析记录已写入: RPT-20260917-100532 (池3, early, 2.8s)
+[aquasense-trace] 索引已更新: 当前 42 条记录
+[aquasense-trace] H5 汇报 trace: RPT-20260917-100532, 5 spans, 2.8s total
+[aquasense-trace] 群聊 trace: RPT-20260917-093015, 简化模式(无 Token)
+[aquasense-trace] 趋势查询: 池3, 近7天, 20 条记录
+[aquasense-trace] index.json 损坏,正在重建... 重建完成: 41 条
+```
+
+关键事件：记录写入、索引更新、查询请求、索引重建、清理执行。
+
+---
+
+## 10. 里程碑
+
+| 阶段 | 内容 | 前置 | 状态 |
+|------|------|------|------|
+| M1 | AnalysisRecord 数据模型 + trace-recorder.ts | 无 | 🔲 待实现 |
+| M2 | trace-store.ts（index.json 读写 + 重建） | M1 | 🔲 待实现 |
+| M3 | trace-gateway.ts（HTTP 路由 + API） | M2 | 🔲 待实现 |
+| M4 | trace-list.html（分析记录列表页） | M3 | 🔲 待实现 |
+| M5 | trace-detail.html（分析详情页 Trace 视图） | M3 | 🔲 待实现 |
+| M6 | trace-trend.html（池号趋势页） | M3 | 🔲 待实现 |
+| M7 | H5 上传 trace 集成 + 实时进度反馈 | M1, M3 | 🔲 待实现 |
+| M8 | 群聊场景 trace 集成（后置收集） | M1 | 🔲 待实现 |
+| M9 | 集成测试 + 部署验证 | M4-M8 | 🔲 待实现 |
+
+**验收要点**（对应需求 R8.10）：
+
+- [ ] 每次 AI 分析自动写入 AnalysisRecord
+- [ ] index.json 与 reports/ 目录保持一致
+- [ ] 列表页按日期倒序展示，支持池号/状态筛选
+- [ ] 详情页展示完整 5 步 Trace 瀑布图 + 步骤 Accordion
+- [ ] 知识库检索步骤展示命中条目详情（标题/通道/页码/摘录）
+- [ ] 池号趋势页展示状态分布 + 症状频次 + 语义聚类
+- [ ] H5 提交后展示实时进度（5 步骤百分比）
+- [ ] 移动端适配（飞书内置浏览器正常显示）
+- [ ] 暗色/亮色主题跟随系统设置
+- [ ] index.json 损坏时自动重建
+- [ ] 90 天以上的旧记录可清理
+
+---
+
+## 11. 与 S9 的关系
+
+R8 和 S9（每日任务提醒）共享 `$AQUASENSE_CACHE_DIR` 缓存目录，但数据完全隔离：
+
+| 维度 | S9 | R8 |
+|------|-----|-----|
+| 目录 | `remind/` | `reports/` |
+| 数据 | config.json, plan-*.json, sent-*.json | index.json, RPT-*.json |
+| 生命周期 | 按日滚动，保留 7 天 | 长期保留，90 天清理 |
+| 来源 | 定时触发 | AI 分析管线触发 |
+| 写入时机 | 推送成功时 | 分析完成时 |
+
+**交集**：H5 拍照汇报页（S9 M7）提交后，同时触发 R8 的 trace 埋点。`trace-handler.ts` 在处理 H5 提交时，既完成分析管线，又写入 AnalysisRecord。
