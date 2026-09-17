@@ -192,10 +192,17 @@ export function wrapLedgerWithTrace(tool: ToolDefinition): ToolDefinition {
     ...tool,
     async execute(args: unknown, exec: ToolRunContext): Promise<unknown> {
       const started = performance.now()
-      const result = await tool.execute(args, exec)
-      const durationMs = Math.round(performance.now() - started)
-      void recordChatTrace(args, result, durationMs)
-      return result
+      try {
+        const result = await tool.execute(args, exec)
+        const durationMs = Math.round(performance.now() - started)
+        void recordChatTrace(args, result, durationMs)
+        return result
+      } catch (error) {
+        // 异常路径:仍记录 trace(含 error 信息),不中断上层错误处理
+        const durationMs = Math.round(performance.now() - started)
+        void recordChatTrace(args, null, durationMs)
+        throw error
+      }
     }
   }
 }
