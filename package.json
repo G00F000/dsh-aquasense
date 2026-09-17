@@ -20,6 +20,7 @@
   },
   "files": [
     "dist",
+    "src",
     "cordis.patch.yml",
     "skills",
     "README.md"
@@ -40,7 +41,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsdown -c tsdown.config.ts && mkdir -p dist/web && cp src/web/*.html dist/web/",
+    "build": "tsc -p tsconfig.build.json && tsdown -c tsdown.config.ts && mkdir -p dist/web && cp -f src/web/*.html dist/web/",
     "build:client": "tsdown -c tsdown.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepare": "npm run build",

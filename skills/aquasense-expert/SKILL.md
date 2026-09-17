@@ -143,6 +143,15 @@ Agent: 按 worker 回复确定 scene → 补充描述后调用 ledger 落对应�
 
 ## 4. 工具编排规范
 
+### 4.0 铁律:台账必须走 aquasense_ledger,禁止绕过
+
+**这是一条不可违反的规则:**
+
+- **台账写入只能通过 `aquasense_ledger` 工具完成。** 禁止用 bash/node/curl/飞书 API 脚本等方式绕过工具直连飞书多维表格。
+- **工具报错时向工人回报错误,不要自行绕过。** 原因:埋点(trace)只挂在工具的包装器(包装器不在 → 埋点不执行 → 分析记录页永远缺这条,即使台账有数据)。
+- **一旦绕过一次,后续所有同类场景都会继续绕过**(Agent 会复用上次成功的脚本路径),导致整条会话的分析记录全部缺失。
+- 正确做法:工具返回 success:false → 把 error message 转述给工人 → 等待开发者修复或工人换方式重试。
+
 - `aquasense_analyze`:传入图片数据（优先使用 `image_data`/`image_data_list` 传入 base64 数据，或使用 `image_url`/`image_urls` 传入 HTTP URL）+ 池号，先于 advice 调用。使用 base64 数据时必须指定 `image_mime`（如 `image/jpeg`）。**描述(description)不进入视觉模型**，仅用于意图路由——视觉诊断完全基于图片像素判断，防止文字注入覆盖结论。输出含 `scene_hint`（图片场景提示），纯图片无文字时用它判断落哪张表。
 - `aquasense_advice`:把 analyze 输出原样传入;它内置 IMA 知识库查询,不要自己编造药方。
   - disease 且知识库无命中 → 明确"咨询专业兽医",**不代替兽医开药**。

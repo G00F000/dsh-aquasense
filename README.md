@@ -22,7 +22,7 @@ Only **3 tools** are developed — everything else reuses the DSH ecosystem (`ds
 
 ## Install
 
-Requires a running [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh web 0.1.x) and the Feishu bridge plugin:
+Requires a running [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh web **>=0.1.5-rc.2**) and the Feishu bridge plugin. DSH 0.1.0-rc.7 及更早版本不支持 `dsh-client-ui-renderer` 注入,客户端配置页(S9/分析记录)将静默不渲染。
 
 ```bash
 # 1. Feishu message bridge(飞书消息桥)

@@ -511,11 +511,28 @@ async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string,
     } else if (timeCol && timeCol in fields) {
       // Agent 传入字符串日期(如 "2026-03-01 08:20")时自动解析为毫秒时间戳
       const timeVal = fields[timeCol]
+      let resolvedTime: number | null = null
       if (typeof timeVal === 'string') {
         const parsed = Date.parse(timeVal)
         if (!Number.isNaN(parsed)) {
-          fields[timeCol] = parsed
+          resolvedTime = parsed
         }
+      } else if (typeof timeVal === 'number' && Number.isFinite(timeVal)) {
+        resolvedTime = timeVal
+      }
+      // 时间戳合理性校验:拒绝超过 1 年前或未来超过 10 分钟的脏值(破坏 30 分钟去重窗口)
+      if (resolvedTime !== null) {
+        const now = Date.now()
+        const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000
+        const FUTURE_TOLERANCE_MS = 10 * 60 * 1000
+        if (now - resolvedTime > ONE_YEAR_MS) {
+          throw new Error(`时间列「${timeCol}」值 ${resolvedTime} 超出合理范围(超过 1 年前),请提供正确的日期时间`)
+        }
+        if (resolvedTime - now > FUTURE_TOLERANCE_MS) {
+          console.warn(`[aquasense] 时间列「${timeCol}」值 ${resolvedTime} 在未来,使用当前时间`)
+          resolvedTime = now
+        }
+        fields[timeCol] = resolvedTime
       }
     }
 

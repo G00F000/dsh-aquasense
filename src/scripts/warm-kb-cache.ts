@@ -28,6 +28,9 @@ import {
 import { buildPdfIndex, getPdfIndexMeta, INDEX_MAX_AGE_MS } from '../ima/pdf-content-search.js'
 
 const SLEEP_MS = 300 // 条目间请求间隔,规避 IMA 频控(110021)
+const RATE_LIMIT_CODE = 110021 // IMA 频控错误码
+const MAX_RETRY = 3 // 频控最大重试次数
+const INITIAL_BACKOFF_MS = 500 // 首次退避基数
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -107,9 +110,10 @@ async function main(): Promise<void> {
     if (limited && processed >= limit) break
     const mediaId = file.mediaId
     if (!mediaId) continue
+    let mediaType: number | undefined
     try {
       const info = await getMediaInfo(mediaId)
-      const mediaType = info?.media_type
+      mediaType = info?.media_type
       if (mediaType !== 1 && mediaType !== 11) {
         skipped++
         continue
@@ -140,8 +144,47 @@ async function main(): Promise<void> {
         }
       }
     } catch (error) {
-      failures.push(`${file.title}: ${error instanceof Error ? error.message : String(error)}`)
-      console.error(`[kb:warm] 失败:${file.title}`, error)
+      // 频控(110021):指数退避重试,避免固定 300ms 间隔撞频控窗口
+      const isRateLimit = error instanceof Error && error.message.includes(String(RATE_LIMIT_CODE))
+      if (isRateLimit) {
+        for (let retry = 1; retry <= MAX_RETRY; retry++) {
+          const backoff = INITIAL_BACKOFF_MS * 2 ** (retry - 1)
+          console.warn(`[kb:warm] IMA 频控(110021),${backoff}ms 后重试(${retry}/${MAX_RETRY})...`)
+          await sleep(backoff)
+          try {
+            // getMediaInfo 本身也可能触发频控;若 mediaType 尚未获取,先补取
+            if (mediaType === undefined) {
+              const retryInfo = await getMediaInfo(mediaId)
+              mediaType = retryInfo?.media_type
+              if (mediaType !== 1 && mediaType !== 11) {
+                skipped++
+                break
+              }
+              processed++
+            }
+            const retryText = await getMediaContent(mediaId)
+            if (mediaType === 1) {
+              titles[mediaId] = file.title
+              if (retryText.startsWith('[扫描件')) scannedCount++
+              else if (retryText.startsWith('[PDF 超限')) oversizedCount++
+              else pdfOk++
+            } else {
+              if (retryText.startsWith('[笔记无法读取')) noteUnreadable++
+              else noteOk++
+            }
+            break // 重试成功,跳出退避循环
+          } catch (retryError) {
+            if (retry === MAX_RETRY || !(retryError instanceof Error && retryError.message.includes(String(RATE_LIMIT_CODE)))) {
+              failures.push(`${file.title}: ${retryError instanceof Error ? retryError.message : String(retryError)}`)
+              console.error(`[kb:warm] 失败(重试${retry}次后):${file.title}`, retryError)
+              break
+            }
+          }
+        }
+      } else {
+        failures.push(`${file.title}: ${error instanceof Error ? error.message : String(error)}`)
+        console.error(`[kb:warm] 失败:${file.title}`, error)
+      }
     }
     await sleep(SLEEP_MS)
   }
