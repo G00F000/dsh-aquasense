@@ -12,7 +12,7 @@
  * (浏览器侧「智慧渔业」入口读写;web 面缺失时静默跳过,不影响定时推送)。
  * R8 分析记录可追溯(见 docs/r8-traceability-architecture.md):
  *  - 分析记录列表/详情/趋势页由 web/trace-gateway 提供(/aquasense-reports 路由;
- *    列表页经配置页页签 iframe 内嵌,不新开标签页);
+ *    列表页经配置页页签 React 组件直调 API 展示(v1.3 去 iframe 化),不新开标签页);
  *  - H5 拍照汇报页由 web/report-handler 提供(/aquasense-remind/report 页面 +
  *    /aquasense-remind/api/report/{submit,progress} 提交与进度接口);
  *  - 群聊场景经 recordLedger 包装器后置收集简化记录(方案 A)。

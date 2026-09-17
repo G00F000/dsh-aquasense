@@ -1,6 +1,6 @@
 # R8：AI 分析结果可追溯 — 需求分析文档
 
-> **版本**: v1.2（入口 C 内嵌化：「📊 分析记录」页签点击不再新开标签页，改为配置页内容区同页切换展示列表页（iframe 内嵌 `/aquasense-reports`），列表内的记录详情 / 池号趋势导航同样收在面板内）
+> **版本**: v1.3（入口 C 去 iframe 化：「📊 分析记录」页签点击不再新开标签页，改为面板内 React 组件（`TraceRecordList`）直接调 `/aquasense-reports/api/records` API 渲染列表，规避 iframe 跨域/反向代理路径不通问题；详情亦在面板内展示）
 > **基线日期**: 2026-09-17
 > **总文档**: [requirements.md](./requirements.md)（本文为 R8 专题分文档）
 > **状态**: 🔲 待实现
@@ -107,11 +107,11 @@ AquaSense 的 AI 分析管线（图片 → 视觉分析 → 知识库检索 → 
 |------|------|----------|----------|
 | **入口 A** | H5 拍照汇报页提交后 | 分析详情页 | 提交成功后自动跳转 |
 | **入口 B** | 飞书卡片「查看详情」按钮 | 分析详情页 | URL 跳转（`/aquasense-reports/report?id=RPT-xxx`） |
-| **入口 C** | AquaSense 配置页顶栏页签区，「每日任务提醒」右侧页签「📊 分析记录」 | 分析记录列表页（面板内嵌） | 点击页签 → 面板内容区同页切换（iframe 内嵌，不新开页面） |
+| **入口 C** | AquaSense 配置页顶栏页签区，「每日任务提醒」右侧页签「📊 分析记录」 | 分析记录列表页（面板内嵌） | 点击页签 → 面板内容区同页切换（React 组件直调 API，不新开页面） |
 
 > **入口 C 设计注（v1.1）**：入口 C 由配置页内的独立按钮改为并入顶栏二级标题区、以页签形式呈现（样式对齐 SkillHub 插件广场二级标题的「插件 / 技能」页签）：「每日任务提醒」为当前页签，右侧并列「📊 分析记录」页签，点击在面板内同页切换展示列表页；右上角 × 关闭按钮保持不变。实现落点：`src/client/AquaConfig.tsx` 顶栏（`.aqs-top`）。
 
-> **入口 C 内嵌注（v1.2）**：点击「📊 分析记录」页签不再新开标签页——面板内容区同页切换为列表页 iframe（`<iframe src="/aquasense-reports">`，首次切换才挂载、切换用 display 保持表单草稿与列表状态），页签组以 `role="tablist"` + `aria-selected` 呈现（对齐 SkillHub「插件 / 技能」）；列表页被内嵌时隐藏自身标题避免与页签重复（`embedded` 判定）；列表内的记录详情 / 池号趋势导航同样收在面板内（详情/趋势页「← 返回」回列表）。实现落点：`src/client/AquaConfig.tsx`（`.aqs-frame` / `.aqs-body.flush`）+ `src/web/trace-list.html`。
+> **入口 C 内嵌注（v1.2→v1.3）**：点击「📊 分析记录」页签不再新开标签页——v1.2 曾用 iframe 内嵌 `/aquasense-reports` 页面，但部署环境存在跨域/反向代理路径不通问题（iframe 请求被拒绝连接），v1.3 改为面板内 React 组件（`TraceRecordList`）直接调 `/aquasense-reports/api/records` JSON API 渲染列表；页签组以 `role="tablist"` + `aria-selected` 呈现（对齐 SkillHub「插件 / 技能」）；首次切换才挂载、切换用 display 保持表单草稿与列表状态；列表内点击记录可在面板内查看详情。实现落点：`src/client/TraceRecordList.tsx` + `src/client/AquaConfig.tsx`（`.aqs-reports` / `.aqs-body.flush`）。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

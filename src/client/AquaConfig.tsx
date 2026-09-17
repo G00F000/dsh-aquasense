@@ -6,8 +6,8 @@
  *    见 WavesIcon;wide 显示文字,rail 仅图标,悬停/展开态对齐侧栏导航项);
  *  - 点击在会话列上打开独立配置页(createPortal 到 body,fixed 定位,随会话列尺寸变化);
  *  - 页顶页签组「每日任务提醒 | 📊 分析记录」+ 右上角 × 关闭;
- *  - 「📊 分析记录」页签在面板内切换展示列表页(iframe 内嵌 /aquasense-reports,
- *    v1.10;不再新开标签页,列表内的详情/趋势导航亦收在面板内);
+ *  - 「📊 分析记录」页签在面板内切换展示列表页(React 组件直接调 /aquasense-reports
+ *    API;v1.3 去 iframe 化;不再新开标签页,详情亦收在面板内);
  *  - Esc / 点击面板外关闭(交互与布局对齐 SkillHub 插件广场页面)。
  *
  * 布局适配(v1.8):宿主页脚动作容器(footerActions)为单行 flex(nowrap),
@@ -24,6 +24,7 @@ import { createPortal } from 'react-dom'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemindApi } from './api.js'
 import { RemindForm, useRemindConfig, type RemindTranslate } from './RemindForm.js'
+import { TraceRecordList } from './TraceRecordList.js'
 
 /**
  * 槽位契约:宿主侧由 @deepseek-ai/dsh-client-ui-sidebar 声明(侧栏页脚动作,
@@ -90,9 +91,9 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-txt{white-space:nowrap;overflow:hidden}
 .aqs-page{position:fixed;z-index:40;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#17191c)}
 .aqs-top{display:flex;align-items:center;gap:12px;flex:none;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
-/* 顶栏页签组：「每日任务提醒」与「📊 分析记录」（入口 C，R8 需求 v1.2）为同页
+/* 顶栏页签组：「每日任务提醒」与「📊 分析记录」（入口 C，R8 需求 v1.3）为同页
    切换的两个页签（role=tablist，样式对齐 SkillHub 插件广场「插件 / 技能」），
-   后者在面板内容区以 iframe 内嵌列表页，不新开标签页 */
+   后者在面板内容区以 React 组件直调 API 展示（去 iframe 化），不新开标签页 */
 .aqs-tabs{display:flex;align-items:center;gap:2px;min-width:0}
 .aqs-tab{position:relative;display:flex;align-items:center;gap:4px;padding:6px 10px;border:0;border-radius:8px;background:transparent;font:inherit;font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-secondary,#4b5563);cursor:pointer}
 .aqs-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#17191c)}
@@ -101,9 +102,9 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-close{margin-left:auto;width:32px;height:32px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-3,#fff);cursor:pointer;font-size:18px;line-height:1;color:var(--dsw-alias-label-secondary,#4b5563)}
 .aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
 .aqs-body{flex:1;min-height:0;overflow:auto;padding:18px 20px 32px}
-/* 分析记录页签:内容区去掉内边距,iframe 铺满(内嵌列表页自带宽高与滚动) */
+/* 分析记录页签:内容区去掉内边距,React 组件铺满(自带筛选条与滚动) */
 .aqs-body.flush{display:flex;padding:0;overflow:hidden}
-.aqs-frame{flex:1 1 auto;width:100%;min-width:0;border:0;background:var(--dsw-alias-bg-base,#fff)}
+.aqs-reports{display:flex;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
 .aqs-form{max-width:760px}
 `
 
@@ -177,7 +178,8 @@ function AquaConfigPage({
 }): ReactNode {
   const model = useRemindConfig(api, t)
   const [tab, setTab] = useState<PageTab>('remind')
-  // iframe 首次切到「分析记录」时才挂载;切换用 display 控制,保留表单草稿与列表页状态
+  // v1.3:改用 TraceRecordList React 组件直接调 API(不再 iframe,规避跨域/代理路径不通)
+  // 切换用 display 控制,保留表单草稿与列表页状态;首次切到 reports 时才挂载
   const [reportsOn, setReportsOn] = useState(false)
 
   useEffect(() => {
@@ -241,12 +243,9 @@ function AquaConfigPage({
           <RemindForm model={model} t={t} />
         </div>
         {reportsOn ? (
-          <iframe
-            className="aqs-frame"
-            title={t('page.tab.reports')}
-            src="/aquasense-reports"
-            style={tab === 'reports' ? undefined : HIDDEN}
-          />
+          <div className="aqs-reports" style={tab === 'reports' ? undefined : HIDDEN}>
+            <TraceRecordList />
+          </div>
         ) : null}
       </div>
     </div>

@@ -6,8 +6,8 @@
  *    见 WavesIcon;wide 显示文字,rail 仅图标,悬停/展开态对齐侧栏导航项);
  *  - 点击在会话列上打开独立配置页(createPortal 到 body,fixed 定位,随会话列尺寸变化);
  *  - 页顶页签组「每日任务提醒 | 📊 分析记录」+ 右上角 × 关闭;
- *  - 「📊 分析记录」页签在面板内切换展示列表页(iframe 内嵌 /aquasense-reports,
- *    v1.10;不再新开标签页,列表内的详情/趋势导航亦收在面板内);
+ *  - 「📊 分析记录」页签在面板内切换展示列表页(React 组件直接调 /aquasense-reports
+ *    API;v1.3 去 iframe 化;不再新开标签页,详情亦收在面板内);
  *  - Esc / 点击面板外关闭(交互与布局对齐 SkillHub 插件广场页面)。
  *
  * 布局适配(v1.8):宿主页脚动作容器(footerActions)为单行 flex(nowrap),
