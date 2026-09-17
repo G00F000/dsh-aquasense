@@ -107,7 +107,7 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 | Trace 记录器 | `src/web/trace-recorder.ts` | Span 数据收集 + AnalysisRecord 组装 + JSON 写入 |
 | Trace 网关 | `src/web/trace-gateway.ts` | HTTP 路由注册 + API 处理 + 静态文件托管 |
 | Trace 存储 | `src/web/trace-store.ts` | index.json 读写 + reports/ 目录管理 |
-| 列表页 | `src/web/trace-list.html` | 分析记录列表（纯 HTML） |
+| 列表页 | `src/web/trace-list.html` | 分析记录列表（纯 HTML；配置页页签 iframe 内嵌展示，v1.2） |
 | 详情页 | `src/web/trace-detail.html` | 分析详情 Trace 视图（纯 HTML） |
 | 趋势页 | `src/web/trace-trend.html` | 池号趋势分析（纯 HTML） |
 
@@ -718,7 +718,7 @@ function renderCluster(records, canvas) {
 | `src/web/trace-gateway.ts` | ~334 行 | `/aquasense-reports` 页面路由 + 查询 API |
 | `src/web/report-handler.ts` | ~745 行 | H5 提交/进度接口 + 5 Span 管线 + job 表（内存 30min TTL） |
 | `src/web/trace-ledger-wrap.ts` | ~202 行 | 群聊场景 recordLedger 注册包装器（后置收集简化记录） |
-| `src/web/trace-list.html` | 列表页 | 分析记录列表页（纯 HTML + CSS + JS，跟随系统主题） |
+| `src/web/trace-list.html` | 列表页 | 分析记录列表页（纯 HTML + CSS + JS，跟随系统主题；配置页页签 iframe 内嵌，不新开页面） |
 | `src/web/trace-detail.html` | 详情页 | 分析详情页 Trace 视图（瀑布图 + 步骤 Accordion） |
 | `src/web/trace-trend.html` | 趋势页 | 池号趋势页（状态分布 + 症状频次 + 语义聚类图） |
 | `src/web/report-upload.html` | ~479 行 | H5 拍照汇报页（客户端压缩/提交/进度轮询/跳详情） |

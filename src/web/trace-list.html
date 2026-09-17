@@ -32,6 +32,8 @@ body{margin:0;background:var(--bg-secondary);color:var(--text-primary);
 .top{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:10px;
   padding:12px 16px;background:var(--bg-primary);border-bottom:1px solid var(--border)}
 .top h1{margin:0;font-size:16px;font-weight:600;flex:1;white-space:nowrap}
+/* 被配置页面板 iframe 内嵌时:隐藏本页标题(面板页签已示名),筛选条左对齐 */
+html.embedded .top h1{display:none}
 .filters{display:flex;gap:8px}
 select{appearance:none;padding:6px 26px 6px 10px;border:1px solid var(--border);border-radius:8px;
   background:var(--bg-card);color:var(--text-primary);font-size:13px;
@@ -87,6 +89,8 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
 <script>
 (function () {
   'use strict';
+  // 被配置页面板 iframe 内嵌时(同源),隐藏本页标题避免与面板页签重复
+  if (window.self !== window.top) document.documentElement.classList.add('embedded');
   var LIMIT = 50;
   var state = { pool: '', cls: '', offset: 0, total: 0, loading: false };
   var main = document.getElementById('main');

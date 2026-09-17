@@ -5,7 +5,9 @@
  *  - 触发器:「智慧渔业」(v1.9 更名;图标为与插件广场同风格的内联线性 SVG,
  *    见 WavesIcon;wide 显示文字,rail 仅图标,悬停/展开态对齐侧栏导航项);
  *  - 点击在会话列上打开独立配置页(createPortal 到 body,fixed 定位,随会话列尺寸变化);
- *  - 页顶二级标题「每日任务提醒」+ 右上角 × 关闭;
+ *  - 页顶页签组「每日任务提醒 | 📊 分析记录」+ 右上角 × 关闭;
+ *  - 「📊 分析记录」页签在面板内切换展示列表页(iframe 内嵌 /aquasense-reports,
+ *    v1.10;不再新开标签页,列表内的详情/趋势导航亦收在面板内);
  *  - Esc / 点击面板外关闭(交互与布局对齐 SkillHub 插件广场页面)。
  *
  * 布局适配(v1.8):宿主页脚动作容器(footerActions)为单行 flex(nowrap),
@@ -61,6 +63,12 @@ interface OverlayBox {
   height: number
 }
 
+/** 配置页页签(remind=每日任务提醒表单,reports=分析记录列表) */
+type PageTab = 'remind' | 'reports'
+
+/** 非当前页签内容的隐藏样式(保留挂载:不丢表单草稿与列表页滚动/筛选状态) */
+const HIDDEN: CSSProperties = { display: 'none' }
+
 const STYLE_ID = 'aquasense-config-style'
 
 /**
@@ -82,17 +90,20 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-txt{white-space:nowrap;overflow:hidden}
 .aqs-page{position:fixed;z-index:40;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#17191c)}
 .aqs-top{display:flex;align-items:center;gap:12px;flex:none;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
-/* 顶栏二级标题区（页签组）：「每日任务提醒」为当前页签，右侧并列「📊 分析记录」
-   （入口 C，R8 需求 v1.1；样式对齐 SkillHub 插件广场的「插件 / 技能」页签） */
+/* 顶栏页签组：「每日任务提醒」与「📊 分析记录」（入口 C，R8 需求 v1.2）为同页
+   切换的两个页签（role=tablist，样式对齐 SkillHub 插件广场「插件 / 技能」），
+   后者在面板内容区以 iframe 内嵌列表页，不新开标签页 */
 .aqs-tabs{display:flex;align-items:center;gap:2px;min-width:0}
-.aqs-tab{position:relative;display:flex;align-items:center;gap:4px;padding:6px 10px;border-radius:8px;font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-secondary,#4b5563);text-decoration:none;cursor:pointer}
+.aqs-tab{position:relative;display:flex;align-items:center;gap:4px;padding:6px 10px;border:0;border-radius:8px;background:transparent;font:inherit;font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-secondary,#4b5563);cursor:pointer}
 .aqs-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#17191c)}
 .aqs-tab.on{color:var(--dsw-alias-label-primary,#17191c)}
 .aqs-tab.on::after{content:'';position:absolute;left:10px;right:10px;bottom:1px;height:2px;border-radius:2px;background:var(--dsw-alias-button-primary-fill,#4d6bfe)}
-.aqs-title{margin:0}
 .aqs-close{margin-left:auto;width:32px;height:32px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-3,#fff);cursor:pointer;font-size:18px;line-height:1;color:var(--dsw-alias-label-secondary,#4b5563)}
 .aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
 .aqs-body{flex:1;min-height:0;overflow:auto;padding:18px 20px 32px}
+/* 分析记录页签:内容区去掉内边距,iframe 铺满(内嵌列表页自带宽高与滚动) */
+.aqs-body.flush{display:flex;padding:0;overflow:hidden}
+.aqs-frame{flex:1 1 auto;width:100%;min-width:0;border:0;background:var(--dsw-alias-bg-base,#fff)}
 .aqs-form{max-width:760px}
 `
 
@@ -165,6 +176,9 @@ function AquaConfigPage({
   onClose: () => void
 }): ReactNode {
   const model = useRemindConfig(api, t)
+  const [tab, setTab] = useState<PageTab>('remind')
+  // iframe 首次切到「分析记录」时才挂载;切换用 display 控制,保留表单草稿与列表页状态
+  const [reportsOn, setReportsOn] = useState(false)
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -187,14 +201,31 @@ function AquaConfigPage({
       style={{ top: box.top, left: box.left, width: box.width, height: box.height } satisfies CSSProperties}
     >
       <div className="aqs-top">
-        <nav className="aqs-tabs" aria-label={t('page.title')}>
-          <h2 className="aqs-title aqs-tab on" aria-current="page">
+        <div className="aqs-tabs" role="tablist" aria-label={t('page.title')}>
+          <button
+            type="button"
+            role="tab"
+            className={'aqs-tab' + (tab === 'remind' ? ' on' : '')}
+            aria-selected={tab === 'remind'}
+            onClick={() => {
+              setTab('remind')
+            }}
+          >
             {t('page.title')}
-          </h2>
-          <a className="aqs-tab" href="/aquasense-reports" target="_blank" rel="noreferrer">
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={'aqs-tab' + (tab === 'reports' ? ' on' : '')}
+            aria-selected={tab === 'reports'}
+            onClick={() => {
+              setReportsOn(true)
+              setTab('reports')
+            }}
+          >
             📊 {t('page.tab.reports')}
-          </a>
-        </nav>
+          </button>
+        </div>
         <button
           type="button"
           className="aqs-close"
@@ -205,10 +236,18 @@ function AquaConfigPage({
           ×
         </button>
       </div>
-      <div className="aqs-body">
-        <div className="aqs-form">
+      <div className={'aqs-body' + (tab === 'reports' ? ' flush' : '')}>
+        <div className="aqs-form" style={tab === 'remind' ? undefined : HIDDEN}>
           <RemindForm model={model} t={t} />
         </div>
+        {reportsOn ? (
+          <iframe
+            className="aqs-frame"
+            title={t('page.tab.reports')}
+            src="/aquasense-reports"
+            style={tab === 'reports' ? undefined : HIDDEN}
+          />
+        ) : null}
       </div>
     </div>
   )
