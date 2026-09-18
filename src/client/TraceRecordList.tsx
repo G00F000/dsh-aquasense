@@ -1,15 +1,12 @@
 /**
- * TraceRecordList —— 配置页面板内「📊 分析记录」列表(v1.3,去 iframe 化)
+ * TraceRecordList v2.0 — 配置页面板内「📊 分析记录」(列表态 ⇄ 详情态)
  *
- * 直接调用 /aquasense-reports/api/records JSON 接口,
- * 在面板内容区渲染记录列表;不再依赖 iframe 加载独立 HTML 页面,
- * 从根本上规避跨域/反向代理路径不通等问题。
+ * 列表态：调用 /aquasense-reports/api/records(JSON index 摘要)；
+ * 详情态：调用 /aquasense-reports/api/records/:id(完整 AnalysisRecord)，
+ *   展示元信息 + 瀑布图(Trace Timeline) + 5 步骤 Accordion 展开。
  *
- * 设计:
- *  - 状态: 'list'(列表) / 'detail'(单条详情)
- *  - 筛选: 池号 / 状态,即时生效;分页用「加载更多」
- *  - 样式复用面板 CSS 变量体系,与 每日任务提醒 表单视觉一致
- *  - API 失败时显示友好提示(非 iframe 崩溃页面)
+ * 原型依据：docs/r8-traceability-requirements.md §4.1 原型 A
+ * 样式复用面板 CSS 变量体系，与每日任务提醒表单视觉一致。
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -17,30 +14,92 @@ import type { CSSProperties, ReactNode } from 'react'
 
 // ========== 数据模型 ==========
 
-/** 单条分析记录(与 trace-store.ts AnalysisRecord 字段对齐) */
-interface TraceRecord {
+/** 列表接口：index.json 摘要（扁平） */
+interface RecordSummary {
   id: string
   pool: string
+  reporter: string
+  source: string
   cls: string
   confidence: number
   symptoms: string[]
-  source: string
+  alert_level?: string
   created_at: string
   total_duration_ms: number
   total_tokens: number
-  alert_level: boolean
-  /** detail-only: 完整步骤(列表接口不含) */
-  steps?: unknown[]
+}
+
+/** 详情接口：完整 AnalysisRecord（嵌套 span_*） */
+interface AnalysisRecord {
+  id: string
+  pool: string
+  reporter: string
+  reporter_open_id: string
+  source: 'h5_upload' | 'group_chat' | 'api'
+  created_at: string
+  model: string
+  total_duration_ms: number
+  total_tokens: number
+  status: 'success' | 'error'
+  error?: string
+  span_upload?: {
+    image_count: number
+    image_names?: string[]
+    image_sizes: number[]
+    compressed_sizes?: number[]
+    duration_ms?: number
+    error?: string
+  }
+  span_analyze?: {
+    prompt_length: number
+    input_tokens: number
+    output_tokens: number
+    output_raw: string
+    cls: string
+    symptoms: string[]
+    severity: string
+    confidence: number
+    scene_hint: string
+    organs?: string[]
+    duration_ms?: number
+    error?: string
+  }
+  span_retrieve?: {
+    query: string
+    channel_a_wiki: number
+    channel_b_note: number
+    channel_c_pdf: number
+    merged_count: number
+    excerpts: Array<{ title: string; from?: string; locator?: string; excerpt_preview: string }>
+    duration_ms?: number
+    error?: string
+  }
+  span_advice?: {
+    input_cls: string
+    alert_level: string
+    knowledge_refs_count: number
+    diagnosis_summary: string
+    reasoning_preview: string
+    duration_ms?: number
+    error?: string
+  }
+  span_ledger?: {
+    target_table: string
+    operation: 'create' | 'update'
+    record_id?: string
+    success?: boolean
+    message?: string
+    duration_ms?: number
+    error?: string
+  }
 }
 
 /** 列表接口信封 */
 interface RecordsPage {
-  records: TraceRecord[]
+  records: RecordSummary[]
   total: number
   has_more: boolean
 }
-
-/** 详情接口信封 = 单条 TraceRecord */
 
 // ========== 常量 ==========
 
@@ -56,51 +115,104 @@ const CLS_OPTIONS: [string, string][] = [
 ]
 
 const CLS_LABEL: Record<string, string> = { normal: '正常', early: '前兆', disease: '发病', unknown: '未知' }
+const CLS_COLOR: Record<string, string> = { normal: '#52c41a', early: '#faad14', disease: '#ff4d4f', unknown: '#9ca3af' }
 const SOURCE_LABEL: Record<string, string> = { h5_upload: 'H5上传', group_chat: '群聊发图', api: 'API' }
 
-// ========== 内联样式(与面板 token 一致) ==========
+/** 步骤配置 */
+const SPAN_DEFS: Array<{
+  key: string
+  label: string
+  icon: string
+  color: string
+  field: 'span_upload' | 'span_analyze' | 'span_retrieve' | 'span_advice' | 'span_ledger'
+}> = [
+  { key: 'upload', label: '图片上传', icon: '📷', color: '#8c8c8c', field: 'span_upload' },
+  { key: 'analyze', label: 'AI 视觉分析', icon: '🧠', color: '#1677ff', field: 'span_analyze' },
+  { key: 'retrieve', label: '知识库检索', icon: '📚', color: '#fa8c16', field: 'span_retrieve' },
+  { key: 'advice', label: '处置建议生成', icon: '💡', color: '#52c41a', field: 'span_advice' },
+  { key: 'ledger', label: '台账写入', icon: '📝', color: '#722ed1', field: 'span_ledger' }
+]
+
+// ========== 内联样式(面板 token 体系) ==========
 
 const S = {
-  /** 筛选条 */
+  /* 筛选条 */
   filterBar: { display: 'flex', gap: 8, padding: '12px 20px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', flexShrink: 0 } satisfies CSSProperties,
   select: { appearance: 'none', padding: '6px 28px 6px 10px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)', fontSize: 13, lineHeight: '20px' } satisfies CSSProperties,
-  /** 列表区(可滚动) */
+  /* 列表区 */
   list: { flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '12px 20px 32px' } satisfies CSSProperties,
-  /** 空态/加载态 */
   empty: { padding: '60px 0', textAlign: 'center', color: 'var(--dsw-alias-label-secondary,#7b8088)' } satisfies CSSProperties,
-  /** 日期分组标题 */
+  /* 日期分组标题 */
   groupTitle: { margin: '18px 0 8px', fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)' } satisfies CSSProperties,
-  /** 记录行 */
+  /* 记录行 */
   row: { display: 'block', padding: '12px 14px', color: 'inherit', textDecoration: 'none', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', cursor: 'pointer', background: 'transparent' } satisfies CSSProperties,
-  /** 记录行第一行 */
+  /* 记录行第一行：圆点 + ID + 池号 + 状态 + 置信度 + 症状（同行） */
   line1: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 13 } satisfies CSSProperties,
-  /** 状态圆点 */
   dot: (cls: string): CSSProperties => ({
     flex: 'none', width: 8, height: 8, borderRadius: '50%',
-    background: { normal: '#52c41a', early: '#faad14', disease: '#ff4d4f', unknown: '#9ca3af' }[cls] || '#9ca3af'
+    background: CLS_COLOR[cls] || '#9ca3af'
   }),
-  /** 记录行第二行 */
+  /* 症状（同行，自动截断） */
+  symptom: { flex: '1 1 0', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 } satisfies CSSProperties,
+  /* 记录行第二行 */
   line2: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' } satisfies CSSProperties,
-  chip: { padding: '1px 8px', borderRadius: 999, background: 'var(--dsw-alias-bg-secondary,#eef2f7)', fontSize: 12 } satisfies CSSProperties,
-  /** 加载更多按钮 */
+  /* 趋势链接 */
+  trendLink: { display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 20, fontSize: 14, color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', cursor: 'pointer', border: 0, background: 'transparent', padding: 0 } satisfies CSSProperties,
+  /* 加载更多 */
   moreBtn: { display: 'block', width: '100%', margin: '16px 0 0', padding: 10, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 14, cursor: 'pointer' } satisfies CSSProperties,
-  /** 错误提示 */
+  /* 错误 */
   err: { margin: 12, padding: '10px 12px', borderRadius: 10, border: '1px solid #ff4d4f', background: 'var(--dsw-alias-bg-layer-3,#fff)', color: '#ff4d4f', fontSize: 13 } satisfies CSSProperties,
-  /** 详情容器 */
+
+  /* ===== 详情态 ===== */
   detailWrap: { padding: '16px 20px 32px' } satisfies CSSProperties,
   detailBack: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: 0, borderRadius: 8, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 14, cursor: 'pointer', marginBottom: 12 } satisfies CSSProperties,
-  detailGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 12px', fontSize: 14 } satisfies CSSProperties,
-  detailLabel: { color: 'var(--dsw-alias-label-secondary,#7b8088)', whiteSpace: 'nowrap' } satisfies CSSProperties,
-  detailValue: { color: 'var(--dsw-alias-label-primary,#17191c)', wordBreak: 'break-all' } satisfies CSSProperties,
+  /* 标题行：返回 + ID + 状态 */
+  detailTitle: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 15, fontWeight: 600, marginBottom: 16 } satisfies CSSProperties,
+  statusBadge: (cls: string): CSSProperties => ({
+    display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 10px', borderRadius: 999,
+    background: (CLS_COLOR[cls] || '#9ca3af') + '18',
+    color: CLS_COLOR[cls] || '#9ca3af', fontSize: 12, fontWeight: 600, flexShrink: 0
+  }),
+  /* 元信息区 */
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', fontSize: 13, padding: '12px 16px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary,#f4f5f7)', marginBottom: 20 } satisfies CSSProperties,
+  metaLabel: { color: 'var(--dsw-alias-label-secondary,#7b8088)', whiteSpace: 'nowrap' } satisfies CSSProperties,
+  metaValue: { color: 'var(--dsw-alias-label-primary,#17191c)' } satisfies CSSProperties,
+  /* 瀑布图 */
+  waterfallWrap: { marginBottom: 20 } satisfies CSSProperties,
+  sectionTitle: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' } satisfies CSSProperties,
+  waterfall: { display: 'flex', flexDirection: 'column', gap: 4 } satisfies CSSProperties,
+  wfRow: { display: 'flex', alignItems: 'center', gap: 8 } satisfies CSSProperties,
+  wfIcon: { width: 20, textAlign: 'center', fontSize: 14, flexShrink: 0 } satisfies CSSProperties,
+  wfLabel: { width: 110, fontSize: 12, color: 'var(--dsw-alias-label-primary,#17191c)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } satisfies CSSProperties,
+  wfTrack: { flex: '1 1 auto', height: 18, borderRadius: 4, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', position: 'relative', overflow: 'hidden' } satisfies CSSProperties,
+  wfBar: (color: string, pct: number): CSSProperties => ({
+    position: 'absolute', top: 0, left: 0, height: '100%', width: `${Math.max(pct, 2)}%`,
+    background: color, borderRadius: 4, transition: 'width 0.3s'
+  }),
+  wfDur: { width: 44, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', textAlign: 'right', flexShrink: 0 } satisfies CSSProperties,
+  wfStatus: { width: 20, fontSize: 12, textAlign: 'center', flexShrink: 0 } satisfies CSSProperties,
+
+  /* 步骤 Accordion */
+  stepsWrap: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 } satisfies CSSProperties,
+  stepItem: { border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, overflow: 'hidden' } satisfies CSSProperties,
+  stepHeader: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', background: 'var(--dsw-alias-bg-layer-3,#fff)', border: 0, width: '100%', textAlign: 'left', fontSize: 13, color: 'var(--dsw-alias-label-primary,#17191c)' } satisfies CSSProperties,
+  stepArrow: (open: boolean): CSSProperties => ({
+    transition: 'transform 0.2s', fontSize: 10, color: 'var(--dsw-alias-label-secondary,#7b8088)',
+    transform: open ? 'rotate(90deg)' : 'rotate(0deg)', flexShrink: 0
+  }),
+  stepHeaderRight: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' } satisfies CSSProperties,
+  stepBody: { padding: '10px 14px', borderTop: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', fontSize: 13, background: 'var(--dsw-alias-bg-secondary,#f9fafb)' } satisfies CSSProperties,
+  stepField: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', fontSize: 13 } satisfies CSSProperties,
+  stepLabel: { color: 'var(--dsw-alias-label-secondary,#7b8088)', whiteSpace: 'nowrap' } satisfies CSSProperties,
+  stepValue: { color: 'var(--dsw-alias-label-primary,#17191c)', wordBreak: 'break-all', whiteSpace: 'pre-wrap' } satisfies CSSProperties,
+  /* 知识库命中条目 */
+  excerptItem: { padding: '6px 10px', marginBottom: 4, borderRadius: 6, background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e8eaed)' } satisfies CSSProperties,
+  excerptTitle: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-primary,#17191c)', marginBottom: 2 } satisfies CSSProperties,
+  excerptMeta: { fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 2 } satisfies CSSProperties,
+  excerptText: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#555)', fontStyle: 'italic' } satisfies CSSProperties,
 } as const
 
 // ========== 辅助 ==========
-
-function esc(v: unknown): string {
-  return String(v == null ? '' : v).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c] ?? c
-  )
-}
 
 function dayKey(iso: string): string {
   const d = new Date(iso)
@@ -131,16 +243,305 @@ function tokenText(n: number): string {
   return n > 0 ? n.toLocaleString('en-US') : '—'
 }
 
+function formatDateTime(iso: string): string {
+  const d = new Date(iso)
+  const p = (n: number): string => (n < 10 ? '0' : '') + n
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+// ========== 子组件 ==========
+
+/** 瀑布图：5 个 span 的时间轴可视化 */
+function WaterfallChart({ record }: { record: AnalysisRecord }): ReactNode {
+  const spans = SPAN_DEFS.map((def) => ({
+    ...def,
+    data: record[def.field],
+    duration: record[def.field]?.duration_ms ?? 0
+  }))
+  const total = record.total_duration_ms || 1
+  const hasAny = spans.some((s) => s.duration > 0)
+  if (!hasAny) return null
+
+  return (
+    <div style={S.waterfallWrap}>
+      <div style={S.sectionTitle}>── 瀑布图（Trace Timeline）──</div>
+      <div style={S.waterfall}>
+        {spans.map((s) => (
+          <div key={s.key} style={S.wfRow}>
+            <span style={S.wfIcon}>{s.icon}</span>
+            <span style={S.wfLabel}>{s.label}</span>
+            <div style={S.wfTrack}>
+              <div style={S.wfBar(s.color, (s.duration / total) * 100)} />
+            </div>
+            <span style={S.wfDur}>{durationText(s.duration)}</span>
+            <span style={S.wfStatus}>{s.data?.error ? '❌' : (s.duration > 0 ? '✅' : '—')}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** 单个步骤 Accordion */
+function StepAccordion({
+  def,
+  record,
+  isOpen,
+  onToggle
+}: {
+  def: typeof SPAN_DEFS[number]
+  record: AnalysisRecord
+  isOpen: boolean
+  onToggle: () => void
+}): ReactNode {
+  const data = record[def.field]
+  const dur = data?.duration_ms ?? 0
+
+  return (
+    <div style={S.stepItem}>
+      <button type="button" style={S.stepHeader} onClick={onToggle}>
+        <span style={S.stepArrow(isOpen)}>▶</span>
+        <span>{def.icon} {def.label}</span>
+        <span style={S.stepHeaderRight}>
+          <span>{durationText(dur)}</span>
+          <span>{data?.error ? '❌' : (dur > 0 ? '✅' : '—')}</span>
+        </span>
+      </button>
+      {isOpen && data && (
+        <div style={S.stepBody}>
+          {renderStepContent(def.key, data, record)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 根据步骤类型渲染不同内容 */
+function renderStepContent(key: string, data: Record<string, unknown>, record: AnalysisRecord): ReactNode {
+  switch (key) {
+    case 'upload': return renderUploadStep(data)
+    case 'analyze': return renderAnalyzeStep(data, record)
+    case 'retrieve': return renderRetrieveStep(data)
+    case 'advice': return renderAdviceStep(data)
+    case 'ledger': return renderLedgerStep(data)
+    default: return null
+  }
+}
+
+function renderUploadStep(data: Record<string, unknown>): ReactNode {
+  const imageCount = data.image_count as number ?? 0
+  const sizes = (data.image_sizes as number[]) ?? []
+  const compressed = (data.compressed_sizes as number[]) ?? []
+  const names = (data.image_names as string[]) ?? []
+  const err = data.error as string | undefined
+
+  return (
+    <div style={S.stepField}>
+      <span style={S.stepLabel}>输入</span>
+      <span style={S.stepValue}>{imageCount} 张图片</span>
+      {sizes.map((size, i) => (
+        <>
+          <span key={`k${i}`} style={S.stepLabel}> </span>
+          <span key={`v${i}`} style={S.stepValue}>
+            🐟 {names[i] || `image_${String(i + 1).padStart(3, '0')}`}
+            {' '}({formatBytes(size)}{compressed[i] ? ` → ${formatBytes(compressed[i])}` : ''})
+          </span>
+        </>
+      ))}
+      <span style={S.stepLabel}>输出</span>
+      <span style={S.stepValue}>{imageCount} 张图片已压缩并转为 base64</span>
+      {err && (
+        <>
+          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
+          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+function renderAnalyzeStep(data: Record<string, unknown>, record?: AnalysisRecord): ReactNode {
+  const cls = data.cls as string ?? 'unknown'
+  const confidence = data.confidence as number ?? 0
+  const symptoms = (data.symptoms as string[]) ?? []
+  const severity = data.severity as string ?? ''
+  const organs = (data.organs as string[]) ?? []
+  const promptLen = data.prompt_length as number ?? 0
+  const inputTok = data.input_tokens as number ?? 0
+  const outputTok = data.output_tokens as number ?? 0
+  const raw = data.output_raw as string ?? ''
+  const err = data.error as string | undefined
+
+  return (
+    <div style={S.stepField}>
+      <span style={S.stepLabel}>模型</span>
+      <span style={S.stepValue}>{record?.model || '—'} (temperature=0.1)</span>
+      <span style={S.stepLabel}>输入</span>
+      <span style={S.stepValue}>system prompt ({promptLen} chars) + 图片</span>
+      <span style={S.stepLabel}>输出</span>
+      <span style={S.stepValue}>
+        状态: {CLS_LABEL[cls] || cls}（{cls}）
+        {'\n'}置信度: {confidence.toFixed(2)}
+        {'\n'}症状: {symptoms.length > 0 ? symptoms.join('、') : '无异常'}
+        {severity ? `\n严重度: ${severity}` : ''}
+        {organs.length > 0 ? `\n器官: ${organs.join('、')}` : ''}
+      </span>
+      <span style={S.stepLabel}>Token</span>
+      <span style={S.stepValue}>input={tokenText(inputTok)} output={tokenText(outputTok)}</span>
+      {raw && (
+        <>
+          <span style={S.stepLabel}>原始输出</span>
+          <span style={S.stepValue}>{raw}</span>
+        </>
+      )}
+      {err && (
+        <>
+          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
+          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+function renderRetrieveStep(data: Record<string, unknown>): ReactNode {
+  const query = data.query as string ?? ''
+  const chA = data.channel_a_wiki as number ?? 0
+  const chB = data.channel_b_note as number ?? 0
+  const chC = data.channel_c_pdf as number ?? 0
+  const merged = data.merged_count as number ?? 0
+  const excerpts = (data.excerpts as Array<{ title: string; from?: string; locator?: string; excerpt_preview: string }>) ?? []
+  const err = data.error as string | undefined
+
+  return (
+    <div style={S.stepField}>
+      <span style={S.stepLabel}>查询</span>
+      <span style={S.stepValue}>"{query}"</span>
+      <span style={S.stepLabel}>通道A (wiki)</span>
+      <span style={S.stepValue}>命中 {chA} 条</span>
+      <span style={S.stepLabel}>通道B (note)</span>
+      <span style={S.stepValue}>命中 {chB} 条</span>
+      <span style={S.stepLabel}>通道C (PDF)</span>
+      <span style={S.stepValue}>命中 {chC} 条</span>
+      <span style={S.stepLabel}>合并去重</span>
+      <span style={S.stepValue}>{merged} 条</span>
+      {excerpts.length > 0 && (
+        <>
+          <span style={S.stepLabel}>命中条目</span>
+          <span style={S.stepValue}>
+            {excerpts.map((ex, i) => (
+              <div key={i} style={S.excerptItem}>
+                <div style={S.excerptTitle}>📄 《{ex.title}》{ex.from ? `[${fromLabel(ex.from)}]` : ''}</div>
+                {ex.locator && <div style={S.excerptMeta}>{ex.locator}</div>}
+                <div style={S.excerptText}>「{ex.excerpt_preview}」</div>
+              </div>
+            ))}
+          </span>
+        </>
+      )}
+      {err && (
+        <>
+          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
+          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+function renderAdviceStep(data: Record<string, unknown>): ReactNode {
+  const alertLevel = data.alert_level as string ?? ''
+  const refsCount = data.knowledge_refs_count as number ?? 0
+  const diagnosis = data.diagnosis_summary as string ?? ''
+  const reasoning = data.reasoning_preview as string ?? ''
+  const err = data.error as string | undefined
+
+  return (
+    <div style={S.stepField}>
+      <span style={S.stepLabel}>预警级别</span>
+      <span style={S.stepValue}>{alertLevel || '—'}</span>
+      <span style={S.stepLabel}>知识来源</span>
+      <span style={S.stepValue}>{refsCount} 条</span>
+      <span style={S.stepLabel}>诊断</span>
+      <span style={S.stepValue}>{diagnosis || '—'}</span>
+      <span style={S.stepLabel}>推理</span>
+      <span style={S.stepValue}>{reasoning || '—'}</span>
+      {err && (
+        <>
+          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
+          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+function renderLedgerStep(data: Record<string, unknown>): ReactNode {
+  const table = data.target_table as string ?? ''
+  const op = data.operation as string ?? ''
+  const recId = data.record_id as string ?? ''
+  const success = data.success as boolean | undefined
+  const message = data.message as string ?? ''
+  const err = data.error as string | undefined
+
+  return (
+    <div style={S.stepField}>
+      <span style={S.stepLabel}>目标表</span>
+      <span style={S.stepValue}>{table || '—'}</span>
+      <span style={S.stepLabel}>操作</span>
+      <span style={S.stepValue}>{op === 'create' ? '新增' : op === 'update' ? '更新' : op || '—'}</span>
+      {recId && (
+        <>
+          <span style={S.stepLabel}>记录ID</span>
+          <span style={S.stepValue}>{recId}</span>
+        </>
+      )}
+      {success !== undefined && (
+        <>
+          <span style={S.stepLabel}>结果</span>
+          <span style={S.stepValue}>{success ? '✅ 成功' : '❌ 失败'}</span>
+        </>
+      )}
+      {message && (
+        <>
+          <span style={S.stepLabel}>信息</span>
+          <span style={S.stepValue}>{message}</span>
+        </>
+      )}
+      {err && (
+        <>
+          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
+          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ========== 辅助 ==========
+
+/** 知识来源通道名翻译 */
+function fromLabel(from: string): string {
+  const map: Record<string, string> = { pdf_content: 'PDF', note: '笔记', wiki: 'wiki' }
+  return map[from] || from
+}
+
+/** 字节格式化 */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return bytes + 'B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + 'KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + 'MB'
+}
+
 // ========== 组件 ==========
 
 interface TraceRecordListProps {
-  /** API 前缀(默认 /aquasense-reports) */
   apiBase?: string
 }
 
 export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordListProps): ReactNode {
   // --- 列表状态 ---
-  const [records, setRecords] = useState<TraceRecord[]>([])
+  const [records, setRecords] = useState<RecordSummary[]>([])
   const [total, setTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [offset, setOffset] = useState(0)
@@ -151,13 +552,13 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
 
   // --- 详情状态 ---
   const [detailId, setDetailId] = useState<string | null>(null)
-  const [detailRecord, setDetailRecord] = useState<TraceRecord | null>(null)
+  const [detailRecord, setDetailRecord] = useState<AnalysisRecord | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [openSteps, setOpenSteps] = useState<Set<string>>(new Set())
 
-  // ---------- 列表数据加载 ----------
+  // ---------- 列表 ----------
 
-  /** 获取记录列表;错误信息区分网络/HTTP/信封三类 */
   const fetchPage = useCallback(async (reset: boolean): Promise<void> => {
     if (loading) return
     setLoading(true)
@@ -170,15 +571,11 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
       try {
         resp = await fetch(url)
       } catch (netErr) {
-        // 网络层错误:连接被拒/DNS 失败/CORS 等
-        throw new Error(`网络错误(${netErr instanceof Error ? netErr.message : String(netErr)})
-请求: ${url}`)
+        throw new Error(`网络错误(${netErr instanceof Error ? netErr.message : String(netErr)})\n请求: ${url}`)
       }
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}
-请求: ${url}`)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}\n请求: ${url}`)
       const body = await resp.json()
-      if (!body?.ok) throw new Error(body?.error?.message || `接口返回失败
-请求: ${url}`)
+      if (!body?.ok) throw new Error(body?.error?.message || `接口返回失败\n请求: ${url}`)
       const page: RecordsPage = body.value
       const newRecords = reset ? page.records : [...records, ...page.records]
       setRecords(newRecords)
@@ -193,7 +590,6 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
     }
   }, [loading, offset, pool, cls, records, apiBase])
 
-  /** 筛选变更 → 重置列表 */
   const applyFilter = useCallback((newPool: string, newCls: string): void => {
     setPool(newPool)
     setCls(newCls)
@@ -203,46 +599,39 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
     setError(null)
     setDetailId(null)
     setDetailRecord(null)
-    // 下一帧触发加载(useEffect 监听依赖变化)
   }, [])
 
-  /** pool/cls 变化后自动加载重置列表 */
   useEffect(() => {
-    // 避免首次重复加载(由下方 initial effect 触发)
     if (records.length === 0 && offset === 0 && !loading) {
       void fetchPage(true)
     }
   }, [pool, cls]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** 首次挂载加载 */
   useEffect(() => {
     void fetchPage(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---------- 详情数据 ----------
+  // ---------- 详情 ----------
 
-  /** 获取详情;错误信息区分网络/HTTP/信封三类 */
   const openDetail = useCallback(async (id: string): Promise<void> => {
     setDetailId(id)
     setDetailRecord(null)
     setDetailLoading(true)
     setDetailError(null)
+    setOpenSteps(new Set())
     try {
       const url = `${apiBase}/api/records/${encodeURIComponent(id)}`
       let resp: Response
       try {
         resp = await fetch(url)
       } catch (netErr) {
-        throw new Error(`网络错误(${netErr instanceof Error ? netErr.message : String(netErr)})
-请求: ${url}`)
+        throw new Error(`网络错误(${netErr instanceof Error ? netErr.message : String(netErr)})\n请求: ${url}`)
       }
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}
-请求: ${url}`)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}\n请求: ${url}`)
       const body = await resp.json()
-      if (!body?.ok) throw new Error(body?.error?.message || `接口返回失败
-请求: ${url}`)
-      setDetailRecord(body.value as TraceRecord)
+      if (!body?.ok) throw new Error(body?.error?.message || `接口返回失败\n请求: ${url}`)
+      setDetailRecord(body.value as AnalysisRecord)
     } catch (err) {
       setDetailError(`加载失败: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -256,7 +645,16 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
     setDetailError(null)
   }, [])
 
-  // ---------- 渲染:详情 ----------
+  const toggleStep = useCallback((key: string): void => {
+    setOpenSteps((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  // ---------- 渲染：详情 ----------
 
   if (detailId) {
     return (
@@ -264,26 +662,66 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
         <button type="button" style={S.detailBack} onClick={backToList}>← 返回列表</button>
         {detailLoading && <div style={S.empty}>加载中…</div>}
         {detailError && (
-                  <div style={S.err}>
-                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{detailError}</div>
-                    <button type="button" style={{ ...S.moreBtn, marginTop: 8, width: 'auto', display: 'inline-block' }} onClick={backToList}>
-                      返回列表
-                    </button>
-                  </div>
-                )}
+          <div style={S.err}>
+            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{detailError}</div>
+            <button type="button" style={{ ...S.moreBtn, marginTop: 8, width: 'auto', display: 'inline-block' }} onClick={backToList}>
+              返回列表
+            </button>
+          </div>
+        )}
         {detailRecord && (
           <div>
-            <div style={S.detailGrid}>
-              <span style={S.detailLabel}>记录 ID</span><span style={S.detailValue}>{detailRecord.id}</span>
-              <span style={S.detailLabel}>池号</span><span style={S.detailValue}>{detailRecord.pool}</span>
-              <span style={S.detailLabel}>状态</span><span style={S.detailValue}>{CLS_LABEL[detailRecord.cls] || detailRecord.cls}</span>
-              <span style={S.detailLabel}>置信度</span><span style={S.detailValue}>{(detailRecord.confidence || 0).toFixed(2)}</span>
-              <span style={S.detailLabel}>症状</span><span style={S.detailValue}>{detailRecord.symptoms?.join('、') || '无异常'}</span>
-              <span style={S.detailLabel}>来源</span><span style={S.detailValue}>{SOURCE_LABEL[detailRecord.source || ''] || detailRecord.source}</span>
-              <span style={S.detailLabel}>知识库增强</span><span style={S.detailValue}>{detailRecord.alert_level ? '是' : '否'}</span>
-              <span style={S.detailLabel}>耗时</span><span style={S.detailValue}>{durationText(detailRecord.total_duration_ms)}</span>
-              <span style={S.detailLabel}>Token</span><span style={S.detailValue}>{tokenText(detailRecord.total_tokens)}</span>
-              <span style={S.detailLabel}>创建时间</span><span style={S.detailValue}>{new Date(detailRecord.created_at).toLocaleString('zh-CN')}</span>
+            {/* 标题行：ID + 池号 + 状态 */}
+            <div style={S.detailTitle}>
+              <span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>
+                {detailRecord.id}
+              </span>
+              <span style={{ fontWeight: 600 }}>{detailRecord.pool}</span>
+              <span style={{ fontWeight: 600 }}>巡检分析</span>
+              {(() => {
+                const cls = detailRecord.span_analyze?.cls ?? 'unknown'
+                return (
+                  <span style={S.statusBadge(cls)}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: CLS_COLOR[cls] || '#9ca3af' }} />
+                    {CLS_LABEL[cls] || cls}
+                  </span>
+                )
+              })()}
+            </div>
+
+            {/* 元信息区 */}
+            <div style={S.metaGrid}>
+              <span style={S.metaLabel}>池号</span>
+              <span style={S.metaValue}>{detailRecord.pool}</span>
+              <span style={S.metaLabel}>上报人</span>
+              <span style={S.metaValue}>{detailRecord.reporter || '—'}</span>
+              <span style={S.metaLabel}>来源</span>
+              <span style={S.metaValue}>{SOURCE_LABEL[detailRecord.source] || detailRecord.source}</span>
+              <span style={S.metaLabel}>时间</span>
+              <span style={S.metaValue}>{formatDateTime(detailRecord.created_at)}</span>
+              <span style={S.metaLabel}>总耗时</span>
+              <span style={S.metaValue}>{durationText(detailRecord.total_duration_ms)}</span>
+              <span style={S.metaLabel}>模型</span>
+              <span style={S.metaValue}>{detailRecord.model || '—'}</span>
+              <span style={S.metaLabel}>Token</span>
+              <span style={S.metaValue}>input={tokenText(detailRecord.span_analyze?.input_tokens ?? 0)} output={tokenText(detailRecord.span_analyze?.output_tokens ?? 0)}</span>
+            </div>
+
+            {/* 瀑布图 */}
+            <WaterfallChart record={detailRecord} />
+
+            {/* 步骤 Accordion */}
+            <div style={S.sectionTitle}>── 步骤详情（Accordion 展开）──</div>
+            <div style={S.stepsWrap}>
+              {SPAN_DEFS.map((def) => (
+                <StepAccordion
+                  key={def.key}
+                  def={def}
+                  record={detailRecord}
+                  isOpen={openSteps.has(def.key)}
+                  onToggle={() => { toggleStep(def.key) }}
+                />
+              ))}
             </div>
           </div>
         )}
@@ -291,10 +729,9 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
     )
   }
 
-  // ---------- 渲染:列表 ----------
+  // ---------- 渲染：列表 ----------
 
-  // 按日期分组
-  const groups: { title: string; items: TraceRecord[] }[] = []
+  const groups: { title: string; items: RecordSummary[] }[] = []
   let lastKey = ''
   for (const r of records) {
     const key = dayKey(r.created_at)
@@ -331,13 +768,13 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
       {/* 列表区 */}
       <div style={S.list}>
         {error && (
-                  <div style={S.err}>
-                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{error}</div>
-                    <button type="button" style={{ ...S.moreBtn, marginTop: 8, width: 'auto', display: 'inline-block' }} onClick={() => { void fetchPage(true) }}>
-                      重试
-                    </button>
-                  </div>
-                )}
+          <div style={S.err}>
+            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{error}</div>
+            <button type="button" style={{ ...S.moreBtn, marginTop: 8, width: 'auto', display: 'inline-block' }} onClick={() => { void fetchPage(true) }}>
+              重试
+            </button>
+          </div>
+        )}
         {!error && records.length === 0 && !loading && <div style={S.empty}>暂无分析记录</div>}
         {loading && records.length === 0 && <div style={S.empty}>加载中…</div>}
 
@@ -358,9 +795,9 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
                     <span style={S.dot(r.cls)} />
                     <span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>{r.id}</span>
                     <span style={{ fontWeight: 600 }}>{r.pool}</span>
-                    <span style={{ fontWeight: 600, color: { normal: '#52c41a', early: '#faad14', disease: '#ff4d4f', unknown: '#9ca3af' }[r.cls] || '#9ca3af' }}>{clsName}</span>
+                    <span style={{ fontWeight: 600, color: CLS_COLOR[r.cls] || '#9ca3af' }}>{clsName}</span>
                     <span style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>{(r.confidence || 0).toFixed(2)}</span>
-                    <span style={{ flex: '1 1 100%', color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sym}</span>
+                    <span style={{ ...S.symptom, color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)' }}>{sym}</span>
                   </div>
                   <div style={S.line2}>
                     <span>{timeText(r.created_at)}</span><span>·</span>
@@ -383,6 +820,20 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
         )}
         {loading && records.length > 0 && (
           <div style={{ ...S.empty, padding: '20px 0' }}>加载中…</div>
+        )}
+
+        {/* 底部趋势链接 */}
+        {!loading && records.length > 0 && (
+          <button
+            type="button"
+            style={S.trendLink}
+            onClick={() => {
+              const targetPool = pool || '池1'
+              window.open(`${apiBase}/trend?pool=${encodeURIComponent(targetPool)}`, '_blank')
+            }}
+          >
+            📈 池号趋势分析 →
+          </button>
         )}
       </div>
     </>
