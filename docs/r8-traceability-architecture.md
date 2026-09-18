@@ -1,9 +1,10 @@
 # R8：AI 分析结果可追溯 — 功能架构设计文档
 
 > - 总文档：[architecture.md](./architecture.md)（本文为其 R8 专题**分文档**，展开模块级/接口级设计）
-> - 需求依据：[r8-traceability-requirements.md](./r8-traceability-requirements.md)（R8 专题需求分文档）
-> - 状态：✅ 已实现（M1-M9 全部完成，含单元测试与构建验证）
+> - 需求依据：[r8-traceability-requirements.md](./r8-traceability-requirements.md)（R8 专题需求分文档，现行 v1.6）
+> - 状态：✅ 已实现（M1-M9 全部完成，含单元测试与构建验证）；**v1.6 展示归并调整待代码对齐**（见 M10）
 > - 设计参考：Langfuse Trace/Span 模型、Arize Phoenix 嵌入可视化、MedgeClaw Dashboard 分步骤展开
+> - **v1.6 展示归并（同步自需求）**：入口 A（H5）提交后仅「提交成功」反馈——不跳转、不展示进度与结果明细；分析记录查看统一到入口 C（PC 端面板，列表态 ⇄ 详情态同页切换）；独立列表/详情页路由停用（仅保留趋势页 + API），移动端不再承载查看界面
 
 ---
 
@@ -17,13 +18,12 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 - 每步耗时、Token 消耗无记录
 - 知识库命中来源不透明
 - 无趋势分析能力
-- H5 拍照汇报提交后无过程反馈
 
 ### 1.2 设计目标
 
 借鉴 **Langfuse 的 Trace/Span 层级模型** + **Phoenix 的嵌入可视化思路** + **MedgeClaw 的分步骤展开交互**，自建轻量版 AI 分析可追溯系统。
 
-核心原则：**固定管线 + 硬编码 Span + JSON 存储 + 纯 HTML 前端**。
+核心原则：**固定管线 + 硬编码 Span + JSON 存储 + 轻量前端（入口 C 面板内 React 组件 + 纯 HTML 趋势页）**。
 
 ### 1.3 设计约束
 
@@ -31,7 +31,7 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 |------|------|
 | 服务器 | 4 核 4G，零额外依赖（不引入 MySQL/Redis/ClickHouse） |
 | 存储 | JSON 文件（`$AQUASENSE_CACHE_DIR/reports/`） |
-| 前端 | 纯 HTML + Vanilla JS + CSS Variables，无构建步骤 |
+| 前端 | 入口 C 为面板内 React 组件（复用 DSH 客户端运行时）；趋势页为纯 HTML + Vanilla JS + CSS Variables，无构建步骤 |
 | 规模 | 4 池 × ~20 次/天 ≈ 200 条/月，JSON 完全可承载 |
 | 复用 | 复用现有 `remind-gateway.ts` 的 HTTP 服务和路由注册机制 |
 
@@ -64,8 +64,6 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 │  │  trace-gateway.ts (新增)                                    │  │
 │  │                                                             │  │
 │  │  HTTP 路由注册（复用 webServer）:                             │  │
-│  │  GET  /aquasense-reports                     → 列表页 HTML  │  │
-│  │  GET  /aquasense-reports/report               → 详情页 HTML  │  │
 │  │  GET  /aquasense-reports/trend                → 趋势页 HTML  │  │
 │  │  GET  /aquasense-reports/api/records          → 列表 JSON    │  │
 │  │  GET  /aquasense-reports/api/records/:id      → 详情 JSON    │  │
@@ -73,11 +71,17 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 │  └─────────────────────────────────────────────────────────────┘  │
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  入口 C 面板 (React 客户端组件)                              │  │
+│  │                                                             │  │
+│  │  src/client/TraceRecordList.tsx → 列表态 ⇄ 详情态同页切换     │  │
+│  │  src/client/AquaConfig.tsx      → 顶栏「📊 分析记录」页签     │  │
+│  │  （直调 /aquasense-reports/api/*，PC 端唯一查看入口）         │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐  │
 │  │  静态文件 (新增)                                            │  │
 │  │                                                             │  │
-│  │  src/web/trace-list.html       → 分析记录列表页              │  │
-│  │  src/web/trace-detail.html     → 分析详情页 (Trace 视图)     │  │
-│  │  src/web/trace-trend.html      → 池号趋势页                 │  │
+│  │  src/web/trace-trend.html      → 池号趋势页（唯一静态页面）   │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────┘
                                │
@@ -92,7 +96,7 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 | 方向 | 说明 |
 |------|------|
 | 上游 | AI 管线（analyze → advice → ledger）执行完成后自动埋点 |
-| 下游 | HTTP 静态页面（列表/详情/趋势），供管理者和工人查看 |
+| 下游 | 入口 C（PC 端配置页面板，React 组件）：列表态 ⇄ 详情态同页切换（v1.6 唯一查看入口）；池号趋势页（静态 HTML）；H5 提交后仅「提交成功」反馈 |
 | 与现有模块关系 | **只读**：不修改 analyze/advice/ledger 的输出接口，仅在执行前后收集数据 |
 | 共享设施 | 飞书 token 缓存（`src/feishu/token.ts`）、缓存目录（`AQUASENSE_CACHE_DIR`） |
 
@@ -105,11 +109,12 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 | 模块 | 文件 | 职责 |
 |------|------|------|
 | Trace 记录器 | `src/web/trace-recorder.ts` | Span 数据收集 + AnalysisRecord 组装 + JSON 写入 |
-| Trace 网关 | `src/web/trace-gateway.ts` | HTTP 路由注册 + API 处理 + 静态文件托管 |
+| Trace 网关 | `src/web/trace-gateway.ts` | HTTP 路由注册 + API 处理 + 趋势页托管（v1.6：列表/详情页路由停用） |
 | Trace 存储 | `src/web/trace-store.ts` | index.json 读写 + reports/ 目录管理 |
-| 列表页 | `src/web/trace-list.html` | 分析记录列表（纯 HTML；配置页页签 iframe 内嵌展示，v1.2） |
-| 详情页 | `src/web/trace-detail.html` | 分析详情 Trace 视图（纯 HTML） |
+| 分析记录视图（入口 C） | `src/client/TraceRecordList.tsx` + `src/client/AquaConfig.tsx` | 面板内列表态 ⇄ 详情态同页切换（React 组件直调 JSON API）；PC 端唯一查看入口 |
 | 趋势页 | `src/web/trace-trend.html` | 池号趋势分析（纯 HTML） |
+
+> **v1.6 展示归并注**：分析记录不再有独立「列表页 / 详情页」——v1.5 已将两态合并为同一页面的列表态 ⇄ 详情态（同页切换），v1.6 进一步收口到入口 C 面板（`TraceRecordList.tsx`）；原页面路由（`/aquasense-reports`、`/aquasense-reports/report`）停用，`trace-list.html` / `trace-detail.html` 待清理。
 
 ### 3.2 Trace 记录器（trace-recorder.ts）
 
@@ -435,9 +440,7 @@ export function installTraceWeb(ctx: Context): void {
     return
   }
 
-  // 静态页面路由
-  webServer.router.get('/aquasense-reports', handleListPage)
-  webServer.router.get('/aquasense-reports/report', handleDetailPage)
+  // 静态页面路由（v1.6：仅趋势页；原 /aquasense-reports 与 /report 列表/详情页路由停用）
   webServer.router.get('/aquasense-reports/trend', handleTrendPage)
 
   // API 路由
@@ -484,19 +487,18 @@ report-handler.ts:
   tracer.flush() → 写入 reports/RPT-*.json + 更新 index.json
     │
     ▼
-  返回 { record_id, analysis } → H5 页面展示摘要 + 跳转详情页
+  返回 202 { job_id, record_id } → H5 仅展示「提交成功」反馈（不跳转、不展示明细；v1.6）
 ```
 
-**H5 页面增强**：
+**H5 页面反馈（v1.6 精简）**：
 
-提交后展示实时进度条（借鉴 MedgeClaw）。**实现选择**：前端轮询（1.5s 间隔）——`POST submit` 立即返回 `202 {job_id, record_id}`，`GET progress?job_id=` 返回 job 快照（飞书内置浏览器 + 反向代理场景比 SSE 更稳）；job 终态在 `tracer.flush()` 之后置位（防跳详情页 404 竞态）：
+提交后仅展示「提交成功」反馈（成功图标 + 一句话，可提示结果在 PC 端查看）——不跳转、不展示 5 步进度与结果明细；上传失败/提交异常时仍展示失败提示与「重新汇报」。
+
+服务端 job 机制保留：`POST submit` 立即返回 `202 {job_id, record_id}`，分析管线后台异步执行（`GET progress?job_id=` 接口保留）；原「1.5s 轮询进度条展示 + 完成后跳转详情页」交互不再使用——展示统一入口 C：
 
 ```
-提交中... 20%  上传图片
-分析中... 40%  AI 视觉分析
-检索中... 60%  知识库检索
-建议中... 80%  处置建议
-完成!     100% 跳转详情页 →
+原交互（v1.6 前）：进度条 20% → 40% → 60% → 80% → 100% 「跳转详情页 →」
+新交互（v1.6 起）：仅「提交成功」反馈（不跳转、不展示进度/明细）
 ```
 
 ---
@@ -617,11 +619,11 @@ rebuildIndex():
 
 | 维度 | 选型 | 理由 |
 |------|------|------|
-| 框架 | Vanilla JS | 零依赖，无构建步骤 |
+| 框架 | 入口 C：面板内 React 组件（分析记录查看）；趋势页：无框架 Vanilla JS | 分析记录复用 DSH 客户端运行时与面板组件体系；趋势页零依赖、无构建步骤 |
 | 样式 | CSS Variables + `prefers-color-scheme` | 跟随系统主题 |
 | 图表 | CSS 柱状图 + Canvas 散点图 | 无需引入 Chart.js |
-| 布局 | CSS Grid + Flexbox | 移动端优先 |
-| 路由 | URL Search Params（`?id=RPT-xxx`） | 单页，无 hash 路由 |
+| 布局 | CSS Grid + Flexbox | 响应式（查看端以 PC 为主，宽窄屏自适应） |
+| 路由 | 面板内状态切换（列表态 ⇄ 详情态） | 展示统一入口 C 面板内，无独立页面路由依赖 |
 | 交互 | `<details>/<summary>` + CSS Transition | 原生 Accordion |
 
 ### 5.2 暗色/亮色主题
@@ -715,13 +717,14 @@ function renderCluster(records, canvas) {
 |----------|---------|------|
 | `src/web/trace-recorder.ts` | ~314 行 | Trace 记录器：Span 收集 + AnalysisRecord 组装 + RPT ID 生成 |
 | `src/web/trace-store.ts` | ~278 行 | 存储层：index.json 读写 + reports/ 重建/清理/查询 |
-| `src/web/trace-gateway.ts` | ~334 行 | `/aquasense-reports` 页面路由 + 查询 API |
+| `src/web/trace-gateway.ts` | ~334 行 | 趋势页路由 + 查询 API（v1.6：列表/详情页路由停用） |
 | `src/web/report-handler.ts` | ~745 行 | H5 提交/进度接口 + 5 Span 管线 + job 表（内存 30min TTL） |
 | `src/web/trace-ledger-wrap.ts` | ~202 行 | 群聊场景 recordLedger 注册包装器（后置收集简化记录） |
-| `src/web/trace-list.html` | 列表页 | 分析记录列表页（纯 HTML + CSS + JS，跟随系统主题；配置页页签 iframe 内嵌，不新开页面） |
-| `src/web/trace-detail.html` | 详情页 | 分析详情页 Trace 视图（瀑布图 + 步骤 Accordion） |
+| `src/client/TraceRecordList.tsx` | ~390 行 | 入口 C 面板内分析记录视图：列表态 ⇄ 详情态同页切换（直调 JSON API；v1.3 起替代 iframe 内嵌） |
+| `src/web/trace-list.html` | 列表页 | 分析记录列表页（v1.6：展示归并入口 C 面板，页面路由停用 ⏳ 待清理） |
+| `src/web/trace-detail.html` | 详情页 | 分析详情页 Trace 视图（v1.6：同上停用 ⏳ 待清理） |
 | `src/web/trace-trend.html` | 趋势页 | 池号趋势页（状态分布 + 症状频次 + 语义聚类图） |
-| `src/web/report-upload.html` | ~479 行 | H5 拍照汇报页（客户端压缩/提交/进度轮询/跳详情） |
+| `src/web/report-upload.html` | ~479 行 | H5 拍照汇报页（客户端压缩/提交；v1.6：仅「提交成功」反馈，进度轮询/跳详情停用 ⏳ 待对齐） |
 | `src/web/trace-recorder.test.ts` | ~138 行 | 记录器单元测试 |
 | `src/web/trace-store.test.ts` | ~217 行 | 存储层单元测试（含损坏重建/清理/趋势） |
 | `src/web/trace-gateway.test.ts` | ~297 行 | 网关单元测试（路由/参数/协议层） |
@@ -733,6 +736,7 @@ function renderCluster(records, canvas) {
 |----------|---------|----------|
 | `src/index.ts` | 接入 | 调用 `installTraceWeb`/`installReportWeb`；台账工具经 `wrapLedgerWithTrace` 注册 |
 | `src/web/remind-gateway.ts` | 分流 | `/aquasense-remind/api/report/{submit,progress}` 在 POST-only 检查前分流到 `handleReportHttp` |
+| `src/client/AquaConfig.tsx` | 页签集成 | 顶栏「📊 分析记录」页签 + 面板内「列表 ⇄ 详情」React 视图（`.aqs-reports` / `.aqs-body.flush`；替代 v1.2 iframe 内嵌） |
 | `src/tools/analyze-image.ts` | 增量导出 | 新增 `callVisionModelWithUsage`（ Token 采集）、导出 `buildPrompt`/`parseAnalysisResponse`/`ImageDownloadResult`；`callVisionModel` 变为薄包装，对外行为不变 |
 | `src/tools/generate-advice.ts` | 增量导出 | 抽取导出 `retrieveKnowledge`/`generateAdviceInternal`（含 `AdviceResult`/`KnowledgeRetrieval` 类型），execute 改为两步调用（行为等价） |
 | `src/feishu/token.ts` | 增量导出 | `uploadImageToFeishu` 新增 data URL 分支（H5 内存图片）；导出 `uploadBufferToFeishu`/`parseDataUrl` |
@@ -809,11 +813,11 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 | 故障场景 | 检测方式 | 降级行为 |
 |----------|----------|----------|
 | reports/ 目录不存在 | 首次写入时 | 自动创建 |
-| 单条记录 JSON 损坏 | readReport 解析失败 | 列表页跳过该条 + warn 日志 |
+| 单条记录 JSON 损坏 | readReport 解析失败 | 列表态跳过该条 + warn 日志 |
 | index.json 损坏 | readIndex 解析失败 | 自动从 reports/ 目录重建 |
 | index.json 与 reports/ 不一致 | readIndex 后发现记录缺失 | 静默不处理（下次写入时自动修复） |
 | 查询参数非法 | 参数校验 | 返回 400 + 错误描述 |
-| 图片缩略图文件丢失 | 详情页加载时 | 显示占位图 |
+| 图片缩略图文件丢失 | 详情态加载时 | 显示占位图 |
 | 记录数超过 1000 条 | 不拦截 | index.json 仍可承载（~300KB） |
 | webServer 不存在 | 启动时检查 | 静默跳过路由注册 + warn |
 | H5 上传 trace 埋点失败 | try-catch | 主流程不受影响（分析结果照常返回） |
@@ -843,26 +847,28 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 | M1 | AnalysisRecord 数据模型 + trace-recorder.ts | 无 | ✅ 已完成 |
 | M2 | trace-store.ts（index.json 读写 + 重建） | M1 | ✅ 已完成 |
 | M3 | trace-gateway.ts（HTTP 路由 + API） | M2 | ✅ 已完成 |
-| M4 | trace-list.html（分析记录列表页） | M3 | ✅ 已完成 |
-| M5 | trace-detail.html（分析详情页 Trace 视图） | M3 | ✅ 已完成 |
+| M4 | trace-list.html（分析记录列表页） | M3 | ✅ 已完成（v1.6 展示归并入入口 C 面板） |
+| M5 | trace-detail.html（分析详情页 Trace 视图） | M3 | ✅ 已完成（v1.6 展示归并入入口 C 面板） |
 | M6 | trace-trend.html（池号趋势页） | M3 | ✅ 已完成 |
-| M7 | H5 上传 trace 集成 + 实时进度反馈 | M1, M3 | ✅ 已完成（轮询方案，report-handler.ts） |
+| M7 | H5 上传 trace 集成 + 实时进度反馈 | M1, M3 | ✅ 已完成（轮询方案，report-handler.ts；v1.6 精简为仅「提交成功」反馈，见 M10） |
 | M8 | 群聊场景 trace 集成（后置收集） | M1 | ✅ 已完成（trace-ledger-wrap.ts） |
 | M9 | 集成测试 + 构建验证 | M4-M8 | ✅ 已完成（新增 59 用例，全套 111 用例通过；typecheck + build 验证） |
+| M10 | v1.6 展示归并对齐：H5 仅「提交成功」反馈；列表/详情统一入口 C 面板承载；列表/详情页路由停用 | M5, M7 | ⏳ 待实施 |
 
 **验收要点**（对应需求 R8.10）：
 
 - [x] 每次 AI 分析自动写入 AnalysisRecord
 - [x] index.json 与 reports/ 目录保持一致
-- [x] 列表页按日期倒序展示，支持池号/状态筛选
-- [x] 详情页展示完整 5 步 Trace 瀑布图 + 步骤 Accordion
+- [x] 列表态按日期倒序展示，支持池号/状态筛选
+- [x] 详情态展示完整 5 步 Trace 瀑布图 + 步骤 Accordion（独立详情页已实现；v1.6 归并入口 C 面板，待对齐）
 - [x] 知识库检索步骤展示命中条目详情（标题/通道/页码/摘录）
 - [x] 池号趋势页展示状态分布 + 症状频次 + 语义聚类
-- [x] H5 提交后展示实时进度（5 步骤百分比）
-- [x] 移动端适配（飞书内置浏览器正常显示）
+- [x] H5 提交后展示实时进度（5 步骤百分比）（v1.6 起改为仅「提交成功」反馈，见末项）
+- [x] 移动端适配（飞书内置浏览器正常显示）（v1.6 收窄：H5 汇报页正常显示）
 - [x] 暗色/亮色主题跟随系统设置
 - [x] index.json 损坏时自动重建
 - [x] 90 天以上的旧记录可清理
+- [ ] ⏳ v1.6 展示归并对齐：H5 仅「提交成功」反馈（不跳转/不展示明细）；列表态 ⇄ 详情态统一入口 C 面板承载；列表/详情页路由停用
 
 ---
 
