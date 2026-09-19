@@ -64,8 +64,8 @@ interface OverlayBox {
   height: number
 }
 
-/** 配置页页签(remind=每日任务提醒表单,reports=分析记录列表) */
-type PageTab = 'remind' | 'reports'
+/** 配置页页签(remind=每日任务提醒表单,reports=分析记录列表,trend=趋势分析) */
+type PageTab = 'remind' | 'reports' | 'trend'
 
 /** 非当前页签内容的隐藏样式(保留挂载:不丢表单草稿与列表页滚动/筛选状态) */
 const HIDDEN: CSSProperties = { display: 'none' }
@@ -181,6 +181,8 @@ function AquaConfigPage({
   // v1.3:改用 TraceRecordList React 组件直接调 API(不再 iframe,规避跨域/代理路径不通)
   // 切换用 display 控制,保留表单草稿与列表页状态;首次切到 reports 时才挂载
   const [reportsOn, setReportsOn] = useState(false)
+  // 趋势分析状态：记录当前查看的池号
+  const [trendPool, setTrendPool] = useState<string>('')
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -238,13 +240,37 @@ function AquaConfigPage({
           ×
         </button>
       </div>
-      <div className={'aqs-body' + (tab === 'reports' ? ' flush' : '')}>
+      <div className={'aqs-body' + (tab === 'reports' || tab === 'trend' ? ' flush' : '')}>
         <div className="aqs-form" style={tab === 'remind' ? undefined : HIDDEN}>
           <RemindForm model={model} t={t} />
         </div>
         {reportsOn ? (
           <div className="aqs-reports" style={tab === 'reports' ? undefined : HIDDEN}>
-            <TraceRecordList />
+            <TraceRecordList
+              onOpenTrend={(pool) => {
+                setTrendPool(pool)
+                setTab('trend')
+              }}
+            />
+          </div>
+        ) : null}
+        {tab === 'trend' && trendPool ? (
+          <div className="aqs-reports" style={{ width: '100%', height: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' }}>
+              <button
+                type="button"
+                style={{ padding: '4px 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 13, cursor: 'pointer' }}
+                onClick={() => { setTab('reports') }}
+              >
+                ← 返回列表
+              </button>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{trendPool} 趋势分析</span>
+            </div>
+            <iframe
+              src={`/aquasense-reports/trend?pool=${encodeURIComponent(trendPool)}`}
+              style={{ flex: 1, width: '100%', border: 'none' }}
+              title={`${trendPool} 趋势分析`}
+            />
           </div>
         ) : null}
       </div>

@@ -114,7 +114,7 @@ const CLS_OPTIONS: [string, string][] = [
   ['unknown', '未知']
 ]
 
-const CLS_LABEL: Record<string, string> = { normal: '正常', early: '前兆', disease: '发病', unknown: '未知' }
+const CLS_LABEL: Record<string, string> = { normal: 'normal', early: 'early', disease: 'disease', unknown: 'unknown' }
 const CLS_COLOR: Record<string, string> = { normal: '#52c41a', early: '#faad14', disease: '#ff4d4f', unknown: '#9ca3af' }
 const SOURCE_LABEL: Record<string, string> = { h5_upload: 'H5上传', group_chat: '群聊发图', api: 'API' }
 
@@ -537,9 +537,11 @@ function formatBytes(bytes: number): string {
 
 interface TraceRecordListProps {
   apiBase?: string
+  /** 点击趋势分析时的回调（面板内切换） */
+  onOpenTrend?: (pool: string) => void
 }
 
-export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordListProps): ReactNode {
+export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }: TraceRecordListProps): ReactNode {
   // --- 列表状态 ---
   const [records, setRecords] = useState<RecordSummary[]>([])
   const [total, setTotal] = useState(0)
@@ -659,7 +661,6 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
   if (detailId) {
     return (
       <div style={S.detailWrap}>
-        <button type="button" style={S.detailBack} onClick={backToList}>← 返回列表</button>
         {detailLoading && <div style={S.empty}>加载中…</div>}
         {detailError && (
           <div style={S.err}>
@@ -671,8 +672,9 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
         )}
         {detailRecord && (
           <div>
-            {/* 标题行：ID + 池号 + 状态 */}
+            {/* 标题行：返回 + ID + 池号 + 状态 */}
             <div style={S.detailTitle}>
+              <button type="button" style={S.detailBack} onClick={backToList}>← 返回</button>
               <span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>
                 {detailRecord.id}
               </span>
@@ -689,21 +691,21 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
               })()}
             </div>
 
-            {/* 元信息区 */}
+            {/* 元信息区（原型图：水平布局） */}
             <div style={S.metaGrid}>
-              <span style={S.metaLabel}>池号</span>
+              <span style={S.metaLabel}>池号:</span>
               <span style={S.metaValue}>{detailRecord.pool}</span>
-              <span style={S.metaLabel}>上报人</span>
+              <span style={S.metaLabel}>上报人:</span>
               <span style={S.metaValue}>{detailRecord.reporter || '—'}</span>
-              <span style={S.metaLabel}>来源</span>
+              <span style={S.metaLabel}>来源:</span>
               <span style={S.metaValue}>{SOURCE_LABEL[detailRecord.source] || detailRecord.source}</span>
-              <span style={S.metaLabel}>时间</span>
+              <span style={S.metaLabel}>时间:</span>
               <span style={S.metaValue}>{formatDateTime(detailRecord.created_at)}</span>
-              <span style={S.metaLabel}>总耗时</span>
+              <span style={S.metaLabel}>总耗时:</span>
               <span style={S.metaValue}>{durationText(detailRecord.total_duration_ms)}</span>
-              <span style={S.metaLabel}>模型</span>
+              <span style={S.metaLabel}>模型:</span>
               <span style={S.metaValue}>{detailRecord.model || '—'}</span>
-              <span style={S.metaLabel}>Token</span>
+              <span style={S.metaLabel}>Token:</span>
               <span style={S.metaValue}>input={tokenText(detailRecord.span_analyze?.input_tokens ?? 0)} output={tokenText(detailRecord.span_analyze?.output_tokens ?? 0)}</span>
             </div>
 
@@ -763,6 +765,16 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
           {CLS_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', alignSelf: 'center' }}>{total} 条记录</span>
+        <button
+          type="button"
+          style={{ ...S.trendLink, marginTop: 0 }}
+          onClick={() => {
+            const targetPool = pool || '池1'
+            onOpenTrend?.(targetPool)
+          }}
+        >
+          📈 池号趋势分析 →
+        </button>
       </div>
 
       {/* 列表区 */}
@@ -820,20 +832,6 @@ export function TraceRecordList({ apiBase = '/aquasense-reports' }: TraceRecordL
         )}
         {loading && records.length > 0 && (
           <div style={{ ...S.empty, padding: '20px 0' }}>加载中…</div>
-        )}
-
-        {/* 底部趋势链接 */}
-        {!loading && records.length > 0 && (
-          <button
-            type="button"
-            style={S.trendLink}
-            onClick={() => {
-              const targetPool = pool || '池1'
-              window.open(`${apiBase}/trend?pool=${encodeURIComponent(targetPool)}`, '_blank')
-            }}
-          >
-            📈 池号趋势分析 →
-          </button>
         )}
       </div>
     </>
