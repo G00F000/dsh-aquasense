@@ -83,6 +83,19 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
 .sym{display:inline-block;margin:2px 6px 2px 0;padding:1px 8px;border-radius:999px;background:var(--chip);font-size:12px}
 .err{margin:12px 0;padding:10px 12px;border-radius:10px;border:1px solid var(--danger);color:var(--danger);font-size:13px;background:var(--bg-card)}
 .footer-link{display:block;margin:22px 2px 0;color:var(--accent);text-decoration:none}
+
+/* ---- 现场照片(工人发送的图片) ---- */
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+.photos .p{position:relative;aspect-ratio:1/1;padding:0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--chip);cursor:zoom-in}
+.photos .p img{display:block;width:100%;height:100%;object-fit:cover}
+.photos .p .idx{position:absolute;left:6px;bottom:6px;padding:1px 7px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;line-height:16px}
+.lightbox{position:fixed;inset:0;z-index:99;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.82);cursor:zoom-out}
+.lightbox.show{display:flex}
+.lightbox img{max-width:92vw;max-height:88vh;border-radius:10px}
+.lightbox .close{position:absolute;top:14px;right:14px;width:34px;height:34px;border:0;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font-size:16px;cursor:pointer}
+.lightbox .nav{position:absolute;top:50%;transform:translateY(-50%);width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font-size:18px;cursor:pointer}
+.lightbox .nav.prev{left:14px}.lightbox .nav.next{right:14px}
+.lightbox .count{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.85);font-size:13px}
 </style>
 </head>
 <body>
@@ -92,6 +105,13 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
   <span class="badge unknown" id="badge" style="display:none"></span>
 </header>
 <main id="main"><p style="color:var(--text-secondary)">加载中…</p></main>
+<div class="lightbox" id="lightbox">
+  <button type="button" class="close" id="lightbox-close" aria-label="关闭预览">✕</button>
+  <button type="button" class="nav prev" id="lightbox-prev" aria-label="上一张">‹</button>
+  <img id="lightbox-img" alt="现场照片预览">
+  <button type="button" class="nav next" id="lightbox-next" aria-label="下一张">›</button>
+  <span class="count" id="lightbox-count"></span>
+</div>
 <script>
 (function () {
   'use strict';
@@ -217,6 +237,55 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
       kv('耗时', esc(dur(span.duration_ms))) + errLine(span);
   }
 
+  // ---- 现场照片(record.images 由详情接口附加) ----
+  var photosCache = [];   // [{ url }]
+  var photoIndex = -1;
+
+  function photosHtml(images) {
+    if (!images || !images.length) return '';
+    photosCache = images;
+    var html = '';
+    for (var i = 0; i < images.length; i++) {
+      html += '<button type="button" class="p" data-idx="' + i + '" aria-label="查看第 ' + (i + 1) + ' 张现场照片">' +
+        '<img src="' + esc(images[i].url) + '" alt="现场照片 ' + (i + 1) + '" loading="lazy">' +
+        '<span class="idx">' + (i + 1) + '</span></button>';
+    }
+    return '<h2>── 现场照片（' + images.length + ' 张）──</h2><div class="card"><div class="photos">' + html + '</div></div>';
+  }
+
+  function showPhoto(i) {
+    if (i < 0 || i >= photosCache.length) return;
+    photoIndex = i;
+    var box = document.getElementById('lightbox');
+    var img = document.getElementById('lightbox-img');
+    var count = document.getElementById('lightbox-count');
+    img.src = photosCache[i].url;
+    img.alt = '现场照片 ' + (i + 1);
+    count.textContent = (i + 1) + ' / ' + photosCache.length;
+    box.classList.add('show');
+    document.getElementById('lightbox-prev').style.display = i > 0 ? '' : 'none';
+    document.getElementById('lightbox-next').style.display = i < photosCache.length - 1 ? '' : 'none';
+  }
+
+  function hidePhoto() {
+    photoIndex = -1;
+    document.getElementById('lightbox').classList.remove('show');
+  }
+
+  function bindPhotoClicks() {
+    var box = document.getElementById('lightbox');
+    box.addEventListener('click', function (ev) {
+      if (ev.target === box || ev.target.id === 'lightbox-img') hidePhoto();
+    });
+    document.getElementById('lightbox-close').addEventListener('click', hidePhoto);
+    document.getElementById('lightbox-prev').addEventListener('click', function () { showPhoto(photoIndex - 1); });
+    document.getElementById('lightbox-next').addEventListener('click', function () { showPhoto(photoIndex + 1); });
+    var photos = document.querySelectorAll('.photos .p');
+    for (var i = 0; i < photos.length; i++) {
+      photos[i].addEventListener('click', function () { showPhoto(Number(this.getAttribute('data-idx'))); });
+    }
+  }
+
   function errLine(span) {
     return span && span.error ? '<div class="err">' + esc(span.error) + '</div>' : '';
   }
@@ -257,6 +326,7 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
         (record.task ? '<div><span class="k">任务</span><b>' + esc(record.task) + '</b></div>' : '') +
         (record.status === 'error' ? '<div style="grid-column:1/-1"><span class="k">状态</span><b style="color:var(--danger)">中断：' + esc(record.error || '') + '</b></div>' : '') +
       '</div></div>' +
+      photosHtml(record.images) +
       '<h2>── 瀑布图（Trace Timeline）──</h2>' +
       '<div class="card">' + waterfall(record) + '</div>' +
       '<h2>── 步骤详情 ──</h2>' +
@@ -267,6 +337,7 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
       ev.preventDefault();
       location.href = '/aquasense-reports/trend?pool=' + encodeURIComponent(record.pool);
     });
+    bindPhotoClicks();
   }
 
   function fail(msg) {

@@ -32,7 +32,7 @@ import {
   type ReportPipelineDeps
 } from './report-handler.js'
 import { AnalysisTracer } from './trace-recorder.js'
-import { readReport } from './trace-store.js'
+import { listReportImages, readReport } from './trace-store.js'
 import type { AnalysisResult } from '../tools/analyze-image.js'
 import type { AdviceResult, KnowledgeRetrieval } from '../tools/generate-advice.js'
 
@@ -361,6 +361,11 @@ describe('runReportPipeline', () => {
       success: true
     })
     expect(record!.status).toBe('success')
+
+    // 工人发送的图片已落盘(详情页展示用)
+    const images = await listReportImages(job.record_id!)
+    expect(images).toHaveLength(1)
+    expect(images[0]).toMatchObject({ index: 0, mimeType: 'image/jpeg', size: Buffer.byteLength(JPEG_BYTES) })
   })
 
   it('normal 分支:跳过 retrieve/advice,不推预警,记录无对应 Span', async () => {

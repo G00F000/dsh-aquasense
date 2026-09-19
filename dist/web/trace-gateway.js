@@ -19,7 +19,7 @@
 import { readFile } from 'node:fs/promises';
 import { HttpError } from './remind-gateway.js';
 import { getPoolIds } from '../config/aqua-settings.js';
-import { computeTrend, queryIndex, readReport } from './trace-store.js';
+import { computeTrend, listReportImages, queryIndex, readReport, readReportImage } from './trace-store.js';
 // ========== 常量 ==========
 /** 分析记录路由前缀 */
 export const TRACE_PREFIX = '/aquasense-reports';
@@ -31,6 +31,8 @@ const MAX_TREND_DAYS = 3650;
 const MIN_TREND_DAYS = 1;
 /** 池号参数最大长度(过滤条件,不参与路径拼接,仅限制异常长输入) */
 const MAX_POOL_LENGTH = 32;
+/** 图片序号上限(单次最多 9 张,留余量) */
+const MAX_IMAGE_INDEX = 99;
 // ========== 路由解析 ==========
 /**
  * 将路径解析为路由(纯函数,导出供测试)。
@@ -52,7 +54,13 @@ export function resolveTraceRoute(pathname) {
     if (rest === 'api/pools')
         return { kind: 'api-pools' };
     if (rest.startsWith('api/records/')) {
-        const id = safeDecode(rest.slice('api/records/'.length));
+        const tail = rest.slice('api/records/'.length);
+        // 图片二进制:api/records/<id>/images/<index>
+        const imageMatch = /^([^/]+)\/images\/(\d{1,3})$/.exec(tail);
+        if (imageMatch) {
+            return { kind: 'api-record-image', id: safeDecode(imageMatch[1]), index: Number(imageMatch[2]) };
+        }
+        const id = safeDecode(tail);
         return { kind: 'api-record', id };
     }
     if (rest.startsWith('api/trend/')) {
@@ -177,7 +185,35 @@ export function createTraceHandler(deps) {
                         writeEnvelope(res, 404, fail(404, 'not-found', `记录不存在: ${route.id}`).body);
                         return;
                     }
-                    writeEnvelope(res, 200, ok(record).body);
+                    // 附加工人发送的图片元数据(URL 供详情页 <img> 直接加载)
+                    const images = (await deps.listImages(route.id)).map((img) => ({
+                        ...img,
+                        url: `${TRACE_PREFIX}/api/records/${route.id}/images/${img.index}`
+                    }));
+                    writeEnvelope(res, 200, ok({ ...record, images }).body);
+                    return;
+                }
+                case 'api-record-image': {
+                    if (!REPORT_ID_RE.test(route.id)) {
+                        writeEnvelope(res, 400, fail(400, 'invalid-id', `记录 ID 非法: ${route.id}`).body);
+                        return;
+                    }
+                    if (!Number.isInteger(route.index) || route.index < 0 || route.index > MAX_IMAGE_INDEX) {
+                        writeEnvelope(res, 400, fail(400, 'invalid-param', `图片序号非法: ${route.index}`).body);
+                        return;
+                    }
+                    const image = await deps.readImage(route.id, route.index);
+                    if (!image) {
+                        writeEnvelope(res, 404, fail(404, 'not-found', `图片不存在: ${route.id}#${route.index}`).body);
+                        return;
+                    }
+                    res.writeHead(200, {
+                        'content-type': image.mimeType || 'image/jpeg',
+                        // 图片内容不可变:长缓存 + 防嗅探
+                        'cache-control': 'public, max-age=31536000, immutable',
+                        'x-content-type-options': 'nosniff'
+                    });
+                    res.end(image.buffer);
                     return;
                 }
                 case 'api-trend': {
@@ -254,6 +290,8 @@ export function installTraceWeb(ctx) {
         queryIndex,
         readReport,
         computeTrend,
+        listImages: listReportImages,
+        readImage: readReportImage,
         getPools: getPoolIds,
         readPage: readTracePage
     };

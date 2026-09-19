@@ -782,6 +782,19 @@ const TRACE_CSS = `
 .trc-bar{height:100%;border-radius:999px;transition:width .5s cubic-bezier(.22,.61,.36,1)}
 .trc-back-link{display:inline-flex;align-items:center;gap:4px;flex:none;padding:5px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-button-primary-fill,#4d6bfe);font:inherit;font-size:13px;cursor:pointer;transition:background .16s ease}
 .trc-back-link:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
+/* ===== 现场照片(详情页) ===== */
+.trc-photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+.trc-photo{position:relative;aspect-ratio:1/1;padding:0;border:1px solid var(--dsw-alias-border-l2,#e2e4e8);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-secondary,#f0f1f3);cursor:zoom-in;transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease}
+.trc-photo:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 4px 14px rgba(77,107,254,.18);transform:translateY(-1px)}
+.trc-photo img{display:block;width:100%;height:100%;object-fit:cover}
+.trc-photo-idx{position:absolute;left:6px;bottom:6px;padding:1px 7px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;line-height:16px}
+.trc-lightbox{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.82);animation:trc-fade-up .18s ease;cursor:zoom-out}
+.trc-lightbox img{max-width:92vw;max-height:88vh;border-radius:10px;box-shadow:0 12px 48px rgba(0,0,0,.5)}
+.trc-lightbox-close{position:absolute;top:14px;right:14px;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:0;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font-size:16px;cursor:pointer;transition:background .16s ease}
+.trc-lightbox-close:hover{background:rgba(255,255,255,.32)}
+.trc-lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font-size:18px;cursor:pointer;transition:background .16s ease}
+.trc-lightbox-nav:hover{background:rgba(255,255,255,.32)}
+.trc-lightbox-nav.prev{left:14px}.trc-lightbox-nav.next{right:14px}
 `;
 /** 注入分析记录页样式(幂等,SSR 安全) */
 function ensureTraceStyle() {
@@ -1347,6 +1360,8 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 	const [detailLoading, setDetailLoading] = (0, react.useState)(false);
 	const [detailError, setDetailError] = (0, react.useState)(null);
 	const [openSteps, setOpenSteps] = (0, react.useState)(/* @__PURE__ */ new Set());
+	/** 灯箱预览的图片序号(null=关闭) */
+	const [previewIndex, setPreviewIndex] = (0, react.useState)(null);
 	const fetchPage = (0, react.useCallback)(async (reset) => {
 		if (loading) return;
 		setLoading(true);
@@ -1420,6 +1435,7 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 		setDetailLoading(true);
 		setDetailError(null);
 		setOpenSteps(/* @__PURE__ */ new Set());
+		setPreviewIndex(null);
 		try {
 			const url = `${apiBase}/api/records/${encodeURIComponent(id)}`;
 			let resp;
@@ -1442,6 +1458,7 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 		setDetailId(null);
 		setDetailRecord(null);
 		setDetailError(null);
+		setPreviewIndex(null);
 	}, []);
 	const toggleStep = (0, react.useCallback)((key) => {
 		setOpenSteps((prev) => {
@@ -1593,6 +1610,35 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 						})
 					]
 				}),
+				detailRecord.images && detailRecord.images.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: { marginBottom: 20 },
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "trc-section-title",
+						children: [
+							"现场照片 · ",
+							detailRecord.images.length,
+							" 张"
+						]
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						className: "trc-photos",
+						children: detailRecord.images.map((img, i) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+							type: "button",
+							className: "trc-photo",
+							onClick: () => {
+								setPreviewIndex(i);
+							},
+							"aria-label": `查看第 ${i + 1} 张现场照片`,
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("img", {
+								src: img.url,
+								alt: `现场照片 ${i + 1}`,
+								loading: "lazy"
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: "trc-photo-idx",
+								children: i + 1
+							})]
+						}, img.index))
+					})]
+				}),
 				/* @__PURE__ */ (0, react_jsx_runtime.jsx)(WaterfallChart, { record: detailRecord }),
 				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 					className: "trc-section-title",
@@ -1609,7 +1655,69 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 						}
 					}, def.key))
 				})
-			] })
+			] }),
+			previewIndex !== null && detailRecord?.images && detailRecord.images[previewIndex] && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "trc-lightbox",
+				role: "dialog",
+				"aria-modal": "true",
+				onClick: () => {
+					setPreviewIndex(null);
+				},
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "trc-lightbox-close",
+						onClick: (e) => {
+							e.stopPropagation();
+							setPreviewIndex(null);
+						},
+						"aria-label": "关闭预览",
+						children: "✕"
+					}),
+					previewIndex > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "trc-lightbox-nav prev",
+						onClick: (e) => {
+							e.stopPropagation();
+							setPreviewIndex(previewIndex - 1);
+						},
+						"aria-label": "上一张",
+						children: "‹"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("img", {
+						src: detailRecord.images[previewIndex].url,
+						alt: `现场照片 ${previewIndex + 1}`,
+						onClick: (e) => {
+							e.stopPropagation();
+						}
+					}),
+					previewIndex < detailRecord.images.length - 1 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "trc-lightbox-nav next",
+						onClick: (e) => {
+							e.stopPropagation();
+							setPreviewIndex(previewIndex + 1);
+						},
+						"aria-label": "下一张",
+						children: "›"
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+						style: {
+							position: "absolute",
+							bottom: 16,
+							left: "50%",
+							transform: "translateX(-50%)",
+							color: "rgba(255,255,255,.85)",
+							fontSize: 13
+						},
+						children: [
+							previewIndex + 1,
+							" / ",
+							detailRecord.images.length
+						]
+					})
+				]
+			})
 		]
 	});
 	const groups = [];

@@ -33,10 +33,10 @@ function mockRequest(options: { method?: string; url?: string; headers?: Record<
 /** 响应 mock 的可读字段面 */
 interface MockResponseFields {
   status: number
-  body: string
+  body: string | Uint8Array
   headers: Record<string, string>
   writeHead(status: number, headers?: Record<string, string>): void
-  end(body: string): void
+  end(body: string | Uint8Array): void
 }
 
 /** 构造最小 ServerResponse mock */
@@ -69,6 +69,8 @@ function createDeps(overrides: Partial<TraceServerDeps> = {}): TraceServerDeps {
       top_symptoms: [],
       recent_records: []
     }),
+    listImages: async () => [],
+    readImage: async () => null,
     getPools: () => ['池1', '池2', '池3', '池4'],
     readPage: async () => '<!doctype html><html><body>page</body></html>',
     ...overrides
@@ -76,8 +78,8 @@ function createDeps(overrides: Partial<TraceServerDeps> = {}): TraceServerDeps {
 }
 
 /** 解析响应信封 */
-function envelopeOf(res: { body: string }): unknown {
-  return JSON.parse(res.body)
+function envelopeOf(res: { body: string | Uint8Array }): unknown {
+  return JSON.parse(String(res.body))
 }
 
 describe('resolveTraceRoute', () => {
@@ -95,6 +97,24 @@ describe('resolveTraceRoute', () => {
       id: 'RPT-20260917-100532'
     })
     expect(resolveTraceRoute(`${TRACE_PREFIX}/api/trend/%E6%B1%A01`)).toEqual({ kind: 'api-trend', pool: '池1' })
+  })
+
+  it('API 路由:记录图片二进制(api/records/:id/images/:index)', () => {
+    expect(resolveTraceRoute(`${TRACE_PREFIX}/api/records/RPT-20260917-100532/images/0`)).toEqual({
+      kind: 'api-record-image',
+      id: 'RPT-20260917-100532',
+      index: 0
+    })
+    expect(resolveTraceRoute(`${TRACE_PREFIX}/api/records/RPT-20260917-100532/images/12`)).toEqual({
+      kind: 'api-record-image',
+      id: 'RPT-20260917-100532',
+      index: 12
+    })
+    // 非数字/带后缀 → 落入普通详情路由(ID 校验拦截)
+    expect(resolveTraceRoute(`${TRACE_PREFIX}/api/records/RPT-20260917-100532/images/abc`)).toEqual({
+      kind: 'api-record',
+      id: 'RPT-20260917-100532/images/abc'
+    })
   })
 
   it('前缀外/未知子路径 → unknown', () => {
@@ -207,7 +227,59 @@ describe('createTraceHandler(协议层)', () => {
     expect(envelopeOf(res)).toMatchObject({ ok: true, value: { total: 0, has_more: false } })
   })
 
-  it('api/records/:id ID 非法 → 400(含穿越尝试);不存在 → 404;存在 → 200', async () => {
+  it('api/records/:id 存在 → 200 并附带图片元数据(含 url)', async () => {
+    const found = mockResponse()
+    const record = { id: 'RPT-20260917-100532', pool: '池1' } as unknown as AnalysisRecord
+    await createTraceHandler(
+      createDeps({
+        readReport: async () => record,
+        listImages: async () => [
+          { index: 0, fileName: 'img-000.jpg', mimeType: 'image/jpeg', size: 1024 },
+          { index: 1, fileName: 'img-001.png', mimeType: 'image/png', size: 2048 }
+        ]
+      })
+    )(mockRequest({ url: `${TRACE_PREFIX}/api/records/RPT-20260917-100532` }), found)
+    expect(found.status).toBe(200)
+    const value = (envelopeOf(found) as { value: { images: unknown[] } }).value
+    expect(value.images).toHaveLength(2)
+    expect(value.images[0]).toMatchObject({
+      index: 0,
+      url: `${TRACE_PREFIX}/api/records/RPT-20260917-100532/images/0`
+    })
+    expect(value.images[1]).toMatchObject({
+      index: 1,
+      url: `${TRACE_PREFIX}/api/records/RPT-20260917-100532/images/1`
+    })
+  })
+
+  it('api/records/:id/images/:index:非法 ID/序号 → 400;不存在 → 404;存在 → 二进制', async () => {
+    const handler = createTraceHandler(
+      createDeps({
+        readImage: async (id, index) => {
+          if (index === 0) return { buffer: Buffer.from('fake-image'), mimeType: 'image/jpeg' }
+          return null
+        }
+      })
+    )
+
+    const badId = mockResponse()
+    await handler(mockRequest({ url: `${TRACE_PREFIX}/api/records/${encodeURIComponent('../etc')}/images/0` }), badId)
+    expect(badId.status).toBe(400)
+
+    const missing = mockResponse()
+    await handler(mockRequest({ url: `${TRACE_PREFIX}/api/records/RPT-20260917-100532/images/3` }), missing)
+    expect(missing.status).toBe(404)
+    expect(envelopeOf(missing)).toMatchObject({ ok: false, error: { code: 'not-found' } })
+
+    const okRes = mockResponse()
+    await handler(mockRequest({ url: `${TRACE_PREFIX}/api/records/RPT-20260917-100532/images/0` }), okRes)
+    expect(okRes.status).toBe(200)
+    expect(okRes.headers['content-type']).toBe('image/jpeg')
+    expect(okRes.headers['cache-control']).toContain('immutable')
+    expect(String(okRes.body)).toBe('fake-image')
+  })
+
+  it('api/records/:id ID 非法 → 400(含穿越尝试);不存在 → 404', async () => {
     const readReport = vi.fn(async () => null)
     const handler = createTraceHandler(createDeps({ readReport }))
 
@@ -225,15 +297,6 @@ describe('createTraceHandler(协议层)', () => {
     await handler(mockRequest({ url: `${TRACE_PREFIX}/api/records/RPT-20260917-100532` }), missing)
     expect(missing.status).toBe(404)
     expect(envelopeOf(missing)).toMatchObject({ ok: false, error: { code: 'not-found' } })
-
-    const found = mockResponse()
-    const record = { id: 'RPT-20260917-100532', pool: '池1' } as unknown as AnalysisRecord
-    await createTraceHandler(createDeps({ readReport: async () => record }))(
-      mockRequest({ url: `${TRACE_PREFIX}/api/records/RPT-20260917-100532` }),
-      found
-    )
-    expect(found.status).toBe(200)
-    expect(envelopeOf(found)).toMatchObject({ ok: true, value: { id: 'RPT-20260917-100532', pool: '池1' } })
   })
 
   it('api/trend/:pool:天数透传;空池号 → 400', async () => {

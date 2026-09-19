@@ -24,10 +24,13 @@ import { HttpError, type ApiEnvelope, type ApiResult } from './remind-gateway.js
 import { getPoolIds } from '../config/aqua-settings.js'
 import {
   computeTrend,
+  listReportImages,
   queryIndex,
   readReport,
+  readReportImage,
   type RecordQuery,
   type RecordQueryResult,
+  type ReportImageMeta,
   type TrendData
 } from './trace-store.js'
 import type { AnalysisRecord } from './trace-recorder.js'
@@ -49,6 +52,9 @@ const MIN_TREND_DAYS = 1
 /** 池号参数最大长度(过滤条件,不参与路径拼接,仅限制异常长输入) */
 const MAX_POOL_LENGTH = 32
 
+/** 图片序号上限(单次最多 9 张,留余量) */
+const MAX_IMAGE_INDEX = 99
+
 // ========== 类型 ==========
 
 /** 静态页面标识 */
@@ -59,6 +65,7 @@ export type TraceRoute =
   | { kind: 'page'; page: TracePage }
   | { kind: 'api-records' }
   | { kind: 'api-record'; id: string }
+  | { kind: 'api-record-image'; id: string; index: number }
   | { kind: 'api-trend'; pool: string }
   | { kind: 'api-pools' }
   | { kind: 'unknown' }
@@ -68,6 +75,10 @@ export interface TraceServerDeps {
   queryIndex(query: RecordQuery): Promise<RecordQueryResult>
   readReport(id: string): Promise<AnalysisRecord | null>
   computeTrend(pool: string, days: number): Promise<TrendData>
+  /** 已落盘的工人图片元数据(详情接口附加展示) */
+  listImages(id: string): Promise<ReportImageMeta[]>
+  /** 读取工人图片二进制(不存在返回 null) */
+  readImage(id: string, index: number): Promise<{ buffer: Buffer; mimeType: string } | null>
   /** 池号枚举(设置页「AquaSense 设置」配置,供列表筛选/趋势页选项) */
   getPools(): string[]
   /** 读取页面 HTML(生产环境从 dist/web/ 同目录读取) */
@@ -107,7 +118,13 @@ export function resolveTraceRoute(pathname: string): TraceRoute {
   if (rest === 'api/pools') return { kind: 'api-pools' }
 
   if (rest.startsWith('api/records/')) {
-    const id = safeDecode(rest.slice('api/records/'.length))
+    const tail = rest.slice('api/records/'.length)
+    // 图片二进制:api/records/<id>/images/<index>
+    const imageMatch = /^([^/]+)\/images\/(\d{1,3})$/.exec(tail)
+    if (imageMatch) {
+      return { kind: 'api-record-image', id: safeDecode(imageMatch[1]), index: Number(imageMatch[2]) }
+    }
+    const id = safeDecode(tail)
     return { kind: 'api-record', id }
   }
   if (rest.startsWith('api/trend/')) {
@@ -240,7 +257,35 @@ export function createTraceHandler(deps: TraceServerDeps): (req: IncomingMessage
             writeEnvelope(res, 404, fail(404, 'not-found', `记录不存在: ${route.id}`).body)
             return
           }
-          writeEnvelope(res, 200, ok(record).body)
+          // 附加工人发送的图片元数据(URL 供详情页 <img> 直接加载)
+          const images = (await deps.listImages(route.id)).map((img) => ({
+            ...img,
+            url: `${TRACE_PREFIX}/api/records/${route.id}/images/${img.index}`
+          }))
+          writeEnvelope(res, 200, ok({ ...record, images }).body)
+          return
+        }
+        case 'api-record-image': {
+          if (!REPORT_ID_RE.test(route.id)) {
+            writeEnvelope(res, 400, fail(400, 'invalid-id', `记录 ID 非法: ${route.id}`).body)
+            return
+          }
+          if (!Number.isInteger(route.index) || route.index < 0 || route.index > MAX_IMAGE_INDEX) {
+            writeEnvelope(res, 400, fail(400, 'invalid-param', `图片序号非法: ${route.index}`).body)
+            return
+          }
+          const image = await deps.readImage(route.id, route.index)
+          if (!image) {
+            writeEnvelope(res, 404, fail(404, 'not-found', `图片不存在: ${route.id}#${route.index}`).body)
+            return
+          }
+          res.writeHead(200, {
+            'content-type': image.mimeType || 'image/jpeg',
+            // 图片内容不可变:长缓存 + 防嗅探
+            'cache-control': 'public, max-age=31536000, immutable',
+            'x-content-type-options': 'nosniff'
+          })
+          res.end(image.buffer)
           return
         }
         case 'api-trend': {
@@ -322,6 +367,8 @@ export function installTraceWeb(ctx: Context): void {
     queryIndex,
     readReport,
     computeTrend,
+    listImages: listReportImages,
+    readImage: readReportImage,
     getPools: getPoolIds,
     readPage: readTracePage
   }

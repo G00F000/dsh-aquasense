@@ -30,6 +30,90 @@ export async function writeReport(record) {
     await fs.mkdir(reportsDir(), { recursive: true });
     await fs.writeFile(reportFile(record.id), JSON.stringify(record, null, 2), 'utf-8');
 }
+/** 单张图片文件路径(index 由调用方保证非负整数) */
+function reportImageFile(id, index, ext) {
+    return path.join(reportsDir(), 'images', id, `img-${String(index).padStart(3, '0')}${ext}`);
+}
+/** MIME → 扩展名(未知类型降级 .jpg,与 feishu/token.ts 一致) */
+const IMAGE_MIME_EXT = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif'
+};
+function extOfImageMime(mimeType) {
+    const key = (mimeType || '').split(';')[0].trim().toLowerCase();
+    return IMAGE_MIME_EXT[key] || '.jpg';
+}
+/**
+ * 将工人发送的图片(base64 data)按序落盘到 reports/images/<id>/。
+ * 写入失败不阻断管线,由调用方捕获后仅告警。
+ * @returns 已保存的图片元数据(按 index 升序)
+ */
+export async function saveReportImages(id, images) {
+    const dir = path.join(reportsDir(), 'images', id);
+    await fs.mkdir(dir, { recursive: true });
+    const saved = [];
+    for (let i = 0; i < images.length; i++) {
+        const mimeType = (images[i].mimeType || 'image/jpeg').split(';')[0].trim().toLowerCase();
+        const ext = extOfImageMime(mimeType);
+        const buffer = Buffer.from(images[i].data, 'base64');
+        const fileName = `img-${String(i).padStart(3, '0')}${ext}`;
+        await fs.writeFile(path.join(dir, fileName), buffer);
+        saved.push({ index: i, fileName, mimeType, size: buffer.byteLength });
+    }
+    return saved;
+}
+/** 列出某条记录的已保存图片(不存在/为空返回 []) */
+export async function listReportImages(id) {
+    const dir = path.join(reportsDir(), 'images', id);
+    let files = [];
+    try {
+        files = await fs.readdir(dir);
+    }
+    catch {
+        return [];
+    }
+    const out = [];
+    for (const file of files) {
+        const m = /^img-\d{3}\.(jpg|png|webp|gif)$/.exec(file);
+        if (!m)
+            continue;
+        try {
+            const stat = await fs.stat(path.join(dir, file));
+            out.push({
+                index: Number(file.slice(4, 7)),
+                fileName: file,
+                mimeType: `image/${m[1] === 'jpg' ? 'jpeg' : m[1]}`,
+                size: stat.size
+            });
+        }
+        catch {
+            /* 单文件读取失败跳过 */
+        }
+    }
+    return out.sort((a, b) => a.index - b.index);
+}
+/** 读取某条记录的第 index 张图片(不存在/越界返回 null) */
+export async function readReportImage(id, index) {
+    // 按扩展名依次探测:同一 index 只可能有一个扩展名
+    for (const ext of ['.jpg', '.png', '.webp', '.gif']) {
+        const file = reportImageFile(id, index, ext);
+        try {
+            const buffer = await fs.readFile(file);
+            const mime = ext === '.jpg' ? 'image/jpeg' : `image/${ext.slice(1)}`;
+            return { buffer, mimeType: mime };
+        }
+        catch {
+            /* 尝试下一扩展名 */
+        }
+    }
+    return null;
+}
+/** 删除某条记录的图片目录(随记录清理) */
+export async function removeReportImages(id) {
+    await fs.rm(path.join(reportsDir(), 'images', id), { recursive: true, force: true }).catch(() => { });
+}
 /** 摘要条目(从完整记录提取;索引与重建共用) */
 export function toSummary(record) {
     return {
@@ -160,6 +244,7 @@ export async function cleanupOldReports(daysToKeep = 90) {
     const toRemove = index.records.filter((r) => r.created_at < cutoff);
     for (const record of toRemove) {
         await fs.unlink(reportFile(record.id)).catch(() => { });
+        await removeReportImages(record.id);
     }
     index.records = index.records.filter((r) => r.created_at >= cutoff);
     await fs.writeFile(indexFile(), JSON.stringify(index, null, 2), 'utf-8');

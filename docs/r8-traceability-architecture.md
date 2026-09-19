@@ -67,6 +67,7 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 │  │  GET  /aquasense-reports/trend                → 趋势页 HTML  │  │
 │  │  GET  /aquasense-reports/api/records          → 列表 JSON    │  │
 │  │  GET  /aquasense-reports/api/records/:id      → 详情 JSON    │  │
+  │  GET  /aquasense-reports/api/records/:id/images/:index → 原图 │  │
 │  │  GET  /aquasense-reports/api/trend/:pool      → 趋势 JSON    │  │
 │  │  GET  /aquasense-reports/api/pools          → 池号枚举 JSON│  │
 │  └─────────────────────────────────────────────────────────────┘  │
@@ -90,6 +91,7 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
                   $AQUASENSE_CACHE_DIR/reports/
                     index.json                 ← 轻量索引
                     RPT-*.json                 ← 完整记录
+                    images/<RPT-id>/img-NNN.ext ← 工人发送的原图(详情页展示;随记录清理)
 ```
 
 ### 2.2 在总架构中的位置
@@ -111,7 +113,7 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 |------|------|------|
 | Trace 记录器 | `src/web/trace-recorder.ts` | Span 数据收集 + AnalysisRecord 组装 + JSON 写入 |
 | Trace 网关 | `src/web/trace-gateway.ts` | HTTP 路由注册 + API 处理 + 趋势页托管（v1.6：列表/详情页路由停用） |
-| Trace 存储 | `src/web/trace-store.ts` | index.json 读写 + reports/ 目录管理 |
+| Trace 存储 | `src/web/trace-store.ts` | index.json 读写 + reports/ 目录管理 + 图片落盘/读取/清理 |
 | 分析记录视图（入口 C） | `src/client/TraceRecordList.tsx` + `src/client/AquaConfig.tsx` | 面板内列表态 ⇄ 详情态同页切换（React 组件直调 JSON API）；PC 端唯一查看入口 |
 | 趋势页 | `src/web/trace-trend.html` | 池号趋势分析（纯 HTML） |
 

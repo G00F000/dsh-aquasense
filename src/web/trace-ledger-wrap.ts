@@ -16,8 +16,9 @@
  */
 
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { getFeishuUserName } from '../feishu/token.js'
+import { getFeishuUserName, parseDataUrl } from '../feishu/token.js'
 import { AnalysisTracer } from './trace-recorder.js'
+import { saveReportImages } from './trace-store.js'
 
 // ========== 常量 ==========
 
@@ -44,6 +45,8 @@ interface LedgerTraceInput {
   openId: string
   analysis: Record<string, unknown> | null
   advice: Record<string, unknown> | null
+  /** 工人发送的图片(data URL 或 http(s) URL,台账 images 参数) */
+  images: string[]
 }
 
 interface LedgerTraceResult {
@@ -72,7 +75,8 @@ function pickTraceInput(args: unknown): LedgerTraceInput | null {
     reporter: String(a.reporter ?? '').trim(),
     openId: String(a.open_id ?? '').trim(),
     analysis,
-    advice
+    advice,
+    images: Array.isArray(a.images) ? (a.images as unknown[]).filter((v): v is string => typeof v === 'string') : []
   }
 }
 
@@ -98,6 +102,64 @@ function toStringArray(value: unknown): string[] {
 /** 操作类型判定:recordLedger 以消息文案区分更新/新增 */
 function operationOf(message: string): 'create' | 'update' {
   return message.includes('已更新') ? 'update' : 'create'
+}
+
+// ========== 图片下载(群聊发图,详情页展示) ==========
+
+/** 下载一张工人发送的图片(data URL 直接解析;http(s) URL 走网络);失败返回 null */
+async function downloadChatImage(url: string): Promise<{ data: string; mimeType: string; name: string } | null> {
+  try {
+    if (url.startsWith('data:')) {
+      const parsed = parseDataUrl(url)
+      if (!parsed) return null
+      return {
+        data: parsed.buffer.toString('base64'),
+        mimeType: parsed.mimeType,
+        name: `image-${Date.now()}${parsed.mimeType === 'image/png' ? '.png' : '.jpg'}`
+      }
+    }
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return null
+    const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+    if (!resp.ok) return null
+    const buffer = Buffer.from(await resp.arrayBuffer())
+    const ct = resp.headers.get('content-type') || ''
+    let mimeType = 'image/jpeg'
+    if (ct.includes('png')) mimeType = 'image/png'
+    else if (ct.includes('webp')) mimeType = 'image/webp'
+    else if (ct.includes('gif')) mimeType = 'image/gif'
+    const name = url.split('/').pop()?.split('?')[0] || `image-${Date.now()}`
+    return { data: buffer.toString('base64'), mimeType, name }
+  } catch (error) {
+    console.warn(`[aquasense-trace] 群聊图片下载失败(跳过): ${url.slice(0, 80)}`, error instanceof Error ? error.message : error)
+    return null
+  }
+}
+
+/**
+ * 下载并落盘工人发送的图片。
+ * 逐张容错:单张失败不阻断其余;整体失败不阻断 trace 主链路。
+ * @returns 成功落盘的图片(name + 字节数,供 span_upload 埋点)
+ */
+async function saveChatImages(recordId: string, urls: string[]): Promise<Array<{ name: string; size: number }>> {
+  if (urls.length === 0) return []
+  const results = await Promise.allSettled(urls.map((url) => downloadChatImage(url)))
+  const images: Array<{ data: string; mimeType: string }> = []
+  const names: string[] = []
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) {
+      images.push({ data: r.value.data, mimeType: r.value.mimeType })
+      names.push(r.value.name)
+    }
+  }
+  if (images.length === 0) return []
+  try {
+    const saved = await saveReportImages(recordId, images)
+    console.log(`[aquasense-trace] 群聊图片已落盘: ${recordId}, ${saved.length} 张`)
+    return saved.map((m, i) => ({ name: names[i] ?? m.fileName, size: m.size }))
+  } catch (error) {
+    console.warn('[aquasense-trace] 群聊图片落盘失败(详情页将无图):', error instanceof Error ? error.message : error)
+    return []
+  }
 }
 
 // ========== 后置收集 ==========
@@ -132,6 +194,16 @@ export async function recordChatTrace(args: unknown, result: unknown, ledgerDura
       reporter_open_id: input.openId,
       source: 'group_chat'
     })
+
+    // upload:下载工人发送的图片并落盘,供详情页展示(失败仅告警)
+    const savedImages = await saveChatImages(tracer.id, input.images)
+    if (savedImages.length > 0) {
+      tracer.recordSpan('upload', {
+        image_count: savedImages.length,
+        image_names: savedImages.map((img) => img.name),
+        image_sizes: savedImages.map((img) => img.size)
+      })
+    }
 
     // analyze:数据来自 Agent 透传的分析结果(无耗时/Token)
     const analysis = input.analysis

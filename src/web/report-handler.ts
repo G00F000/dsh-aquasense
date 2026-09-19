@@ -39,6 +39,7 @@ import {
 } from '../tools/generate-advice.js'
 import { recordLedger } from '../tools/record-ledger.js'
 import type { KnowledgeItem, SearchResult } from '../ima/ima-api.js'
+import { saveReportImages } from './trace-store.js'
 
 // ========== 常量 ==========
 
@@ -456,6 +457,12 @@ export async function runReportPipeline(
       },
       uploadDurationMs
     )
+    // 图片落盘供分析记录详情页展示;失败不阻断管线(仅告警)
+    try {
+      await saveReportImages(tracer.id, input.images.map((img) => ({ data: img.base64, mimeType: img.mimeType })))
+    } catch (error) {
+      console.warn('[aquasense-trace] H5 图片落盘失败(详情页将无图):', messageOf(error))
+    }
     setProgress(job, 20, '图片接收完成')
 
     // ── Span 2: analyze(视觉模型;管线必经步骤)

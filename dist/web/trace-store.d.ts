@@ -16,6 +16,32 @@ export declare function reportsDir(): string;
 export declare function indexFile(): string;
 /** 写入单条完整记录(目录不存在时自动创建) */
 export declare function writeReport(record: AnalysisRecord): Promise<void>;
+/** 图片元数据(详情接口附加、前端渲染 <img> 用) */
+export interface ReportImageMeta {
+    /** 图片序号(0 起,与 <img> 接口路径对应) */
+    index: number;
+    fileName: string;
+    mimeType: string;
+    size: number;
+}
+/**
+ * 将工人发送的图片(base64 data)按序落盘到 reports/images/<id>/。
+ * 写入失败不阻断管线,由调用方捕获后仅告警。
+ * @returns 已保存的图片元数据(按 index 升序)
+ */
+export declare function saveReportImages(id: string, images: Array<{
+    data: string;
+    mimeType: string;
+}>): Promise<ReportImageMeta[]>;
+/** 列出某条记录的已保存图片(不存在/为空返回 []) */
+export declare function listReportImages(id: string): Promise<ReportImageMeta[]>;
+/** 读取某条记录的第 index 张图片(不存在/越界返回 null) */
+export declare function readReportImage(id: string, index: number): Promise<{
+    buffer: Buffer;
+    mimeType: string;
+} | null>;
+/** 删除某条记录的图片目录(随记录清理) */
+export declare function removeReportImages(id: string): Promise<void>;
 /** 摘要条目(从完整记录提取;索引与重建共用) */
 export declare function toSummary(record: AnalysisRecord): RecordSummary;
 /**

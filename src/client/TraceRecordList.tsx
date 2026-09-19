@@ -92,6 +92,8 @@ interface AnalysisRecord {
     duration_ms?: number
     error?: string
   }
+  /** 工人发送的图片(详情接口附加,已落盘缓存目录) */
+  images?: Array<{ index: number; fileName: string; mimeType: string; size: number; url: string }>
 }
 
 /** 列表接口信封 */
@@ -232,6 +234,19 @@ const TRACE_CSS = `
 .trc-bar{height:100%;border-radius:999px;transition:width .5s cubic-bezier(.22,.61,.36,1)}
 .trc-back-link{display:inline-flex;align-items:center;gap:4px;flex:none;padding:5px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-button-primary-fill,#4d6bfe);font:inherit;font-size:13px;cursor:pointer;transition:background .16s ease}
 .trc-back-link:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
+/* ===== 现场照片(详情页) ===== */
+.trc-photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+.trc-photo{position:relative;aspect-ratio:1/1;padding:0;border:1px solid var(--dsw-alias-border-l2,#e2e4e8);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-secondary,#f0f1f3);cursor:zoom-in;transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease}
+.trc-photo:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 4px 14px rgba(77,107,254,.18);transform:translateY(-1px)}
+.trc-photo img{display:block;width:100%;height:100%;object-fit:cover}
+.trc-photo-idx{position:absolute;left:6px;bottom:6px;padding:1px 7px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;line-height:16px}
+.trc-lightbox{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.82);animation:trc-fade-up .18s ease;cursor:zoom-out}
+.trc-lightbox img{max-width:92vw;max-height:88vh;border-radius:10px;box-shadow:0 12px 48px rgba(0,0,0,.5)}
+.trc-lightbox-close{position:absolute;top:14px;right:14px;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:0;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font-size:16px;cursor:pointer;transition:background .16s ease}
+.trc-lightbox-close:hover{background:rgba(255,255,255,.32)}
+.trc-lightbox-nav{position:absolute;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font-size:18px;cursor:pointer;transition:background .16s ease}
+.trc-lightbox-nav:hover{background:rgba(255,255,255,.32)}
+.trc-lightbox-nav.prev{left:14px}.trc-lightbox-nav.next{right:14px}
 `
 
 /** 注入分析记录页样式(幂等,SSR 安全) */
@@ -634,6 +649,8 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [openSteps, setOpenSteps] = useState<Set<string>>(new Set())
+  /** 灯箱预览的图片序号(null=关闭) */
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null)
 
   // ---------- 列表 ----------
 
@@ -719,6 +736,7 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
     setDetailLoading(true)
     setDetailError(null)
     setOpenSteps(new Set())
+    setPreviewIndex(null)
     try {
       const url = `${apiBase}/api/records/${encodeURIComponent(id)}`
       let resp: Response
@@ -742,6 +760,7 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
     setDetailId(null)
     setDetailRecord(null)
     setDetailError(null)
+    setPreviewIndex(null)
   }, [])
 
   const toggleStep = useCallback((key: string): void => {
@@ -823,6 +842,27 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
               </div>
             </div>
 
+            {/* 现场照片(工人发送的图片,已落盘缓存目录) */}
+            {detailRecord.images && detailRecord.images.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <div className="trc-section-title">现场照片 · {detailRecord.images.length} 张</div>
+                <div className="trc-photos">
+                  {detailRecord.images.map((img, i) => (
+                    <button
+                      key={img.index}
+                      type="button"
+                      className="trc-photo"
+                      onClick={() => { setPreviewIndex(i) }}
+                      aria-label={`查看第 ${i + 1} 张现场照片`}
+                    >
+                      <img src={img.url} alt={`现场照片 ${i + 1}`} loading="lazy" />
+                      <span className="trc-photo-idx">{i + 1}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* 瀑布图 */}
             <WaterfallChart record={detailRecord} />
 
@@ -839,6 +879,53 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
                 />
               ))}
             </div>
+          </div>
+        )}
+
+        {/* 图片灯箱(点击缩略图打开,左右切换/点击关闭) */}
+        {previewIndex !== null && detailRecord?.images && detailRecord.images[previewIndex] && (
+          <div
+            className="trc-lightbox"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => { setPreviewIndex(null) }}
+          >
+            <button
+              type="button"
+              className="trc-lightbox-close"
+              onClick={(e) => { e.stopPropagation(); setPreviewIndex(null) }}
+              aria-label="关闭预览"
+            >
+              ✕
+            </button>
+            {previewIndex > 0 && (
+              <button
+                type="button"
+                className="trc-lightbox-nav prev"
+                onClick={(e) => { e.stopPropagation(); setPreviewIndex(previewIndex - 1) }}
+                aria-label="上一张"
+              >
+                ‹
+              </button>
+            )}
+            <img
+              src={detailRecord.images[previewIndex].url}
+              alt={`现场照片 ${previewIndex + 1}`}
+              onClick={(e) => { e.stopPropagation() }}
+            />
+            {previewIndex < detailRecord.images.length - 1 && (
+              <button
+                type="button"
+                className="trc-lightbox-nav next"
+                onClick={(e) => { e.stopPropagation(); setPreviewIndex(previewIndex + 1) }}
+                aria-label="下一张"
+              >
+                ›
+              </button>
+            )}
+            <span style={{ position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,.85)', fontSize: 13 }}>
+              {previewIndex + 1} / {detailRecord.images.length}
+            </span>
           </div>
         )}
       </div>

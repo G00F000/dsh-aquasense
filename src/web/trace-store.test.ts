@@ -16,11 +16,15 @@ import {
   cleanupOldReports,
   computeTrend,
   indexFile,
+  listReportImages,
   queryIndex,
   readIndex,
   readReport,
+  readReportImage,
   rebuildIndex,
+  removeReportImages,
   reportsDir,
+  saveReportImages,
   updateIndex,
   writeReport
 } from './trace-store.js'
@@ -76,6 +80,58 @@ async function fileExists(name: string): Promise<boolean> {
     return false
   }
 }
+
+describe('图片存储(saveReportImages/listReportImages/readReportImage/removeReportImages)', () => {
+  const ID = 'RPT-20260917-100532'
+
+  it('保存 → 列出(按 index 升序)→ 读取二进制', async () => {
+    const saved = await saveReportImages(ID, [
+      { data: Buffer.from('aaa').toString('base64'), mimeType: 'image/png' },
+      { data: Buffer.from('bbb').toString('base64'), mimeType: 'image/jpeg' }
+    ])
+    expect(saved).toHaveLength(2)
+    expect(saved[0]).toMatchObject({ index: 0, fileName: 'img-000.png', mimeType: 'image/png', size: 3 })
+    expect(saved[1]).toMatchObject({ index: 1, fileName: 'img-001.jpg', mimeType: 'image/jpeg', size: 3 })
+
+    const listed = await listReportImages(ID)
+    expect(listed.map((m) => m.index)).toEqual([0, 1])
+
+    const first = await readReportImage(ID, 0)
+    expect(first?.mimeType).toBe('image/png')
+    expect(first?.buffer.toString()).toBe('aaa')
+    const second = await readReportImage(ID, 1)
+    expect(second?.mimeType).toBe('image/jpeg')
+  })
+
+  it('不存在/越界 → 空列表与 null', async () => {
+    expect(await listReportImages('RPT-99999999-000000')).toEqual([])
+    expect(await readReportImage('RPT-99999999-000000', 0)).toBeNull()
+    await saveReportImages(ID, [{ data: Buffer.from('x').toString('base64'), mimeType: 'image/jpeg' }])
+    expect(await readReportImage(ID, 5)).toBeNull()
+  })
+
+  it('未知 MIME 降级 .jpg', async () => {
+    const saved = await saveReportImages(ID, [{ data: Buffer.from('x').toString('base64'), mimeType: 'image/tiff' }])
+    expect(saved[0].fileName).toBe('img-000.jpg')
+  })
+
+  it('删除目录后列表为空', async () => {
+    await saveReportImages(ID, [{ data: Buffer.from('x').toString('base64'), mimeType: 'image/jpeg' }])
+    await removeReportImages(ID)
+    expect(await listReportImages(ID)).toEqual([])
+  })
+
+  it('cleanupOldReports 同步清理图片目录', async () => {
+    const old = new Date(Date.now() - 100 * 86400000).toISOString()
+    const record = makeRecord('RPT-20260601-090001', { created_at: old })
+    await writeReport(record)
+    await updateIndex(record)
+    await saveReportImages('RPT-20260601-090001', [{ data: Buffer.from('x').toString('base64'), mimeType: 'image/jpeg' }])
+    await cleanupOldReports(90)
+    expect(await fileExists('RPT-20260601-090001.json')).toBe(false)
+    expect(await listReportImages('RPT-20260601-090001')).toEqual([])
+  })
+})
 
 describe('writeReport / readReport', () => {
   it('往返读写(目录自动创建)', async () => {

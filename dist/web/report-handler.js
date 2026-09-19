@@ -21,6 +21,7 @@ import { pushAbnormalAlert } from '../scheduler/s9-reminder.js';
 import { buildPrompt, callVisionModelWithUsage, parseAnalysisResponse } from '../tools/analyze-image.js';
 import { generateAdviceInternal, retrieveKnowledge } from '../tools/generate-advice.js';
 import { recordLedger } from '../tools/record-ledger.js';
+import { saveReportImages } from './trace-store.js';
 // ========== 常量 ==========
 /** H5 提交/进度接口路径(remind-gateway 分流用) */
 export const REPORT_SUBMIT_PATH = '/aquasense-remind/api/report/submit';
@@ -305,6 +306,13 @@ export async function runReportPipeline(job, input, uploadDurationMs, depsOverri
             image_names: input.images.map((img) => img.name),
             image_sizes: input.images.map((img) => img.size)
         }, uploadDurationMs);
+        // 图片落盘供分析记录详情页展示;失败不阻断管线(仅告警)
+        try {
+            await saveReportImages(tracer.id, input.images.map((img) => ({ data: img.base64, mimeType: img.mimeType })));
+        }
+        catch (error) {
+            console.warn('[aquasense-trace] H5 图片落盘失败(详情页将无图):', messageOf(error));
+        }
         setProgress(job, 20, '图片接收完成');
         // ── Span 2: analyze(视觉模型;管线必经步骤)
         const visionImages = input.images.map((img) => ({ data: img.base64, mimeType: img.mimeType }));

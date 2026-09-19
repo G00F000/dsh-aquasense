@@ -18,7 +18,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Context } from '@deepseek-ai/cordis';
-import { type RecordQuery, type RecordQueryResult, type TrendData } from './trace-store.js';
+import { type RecordQuery, type RecordQueryResult, type ReportImageMeta, type TrendData } from './trace-store.js';
 import type { AnalysisRecord } from './trace-recorder.js';
 /** 分析记录路由前缀 */
 export declare const TRACE_PREFIX = "/aquasense-reports";
@@ -34,6 +34,10 @@ export type TraceRoute = {
     kind: 'api-record';
     id: string;
 } | {
+    kind: 'api-record-image';
+    id: string;
+    index: number;
+} | {
     kind: 'api-trend';
     pool: string;
 } | {
@@ -46,6 +50,13 @@ export interface TraceServerDeps {
     queryIndex(query: RecordQuery): Promise<RecordQueryResult>;
     readReport(id: string): Promise<AnalysisRecord | null>;
     computeTrend(pool: string, days: number): Promise<TrendData>;
+    /** 已落盘的工人图片元数据(详情接口附加展示) */
+    listImages(id: string): Promise<ReportImageMeta[]>;
+    /** 读取工人图片二进制(不存在返回 null) */
+    readImage(id: string, index: number): Promise<{
+        buffer: Buffer;
+        mimeType: string;
+    } | null>;
     /** 池号枚举(设置页「AquaSense 设置」配置,供列表筛选/趋势页选项) */
     getPools(): string[];
     /** 读取页面 HTML(生产环境从 dist/web/ 同目录读取) */
