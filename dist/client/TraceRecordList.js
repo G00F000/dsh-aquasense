@@ -60,7 +60,7 @@ const S = {
     /* 错误 */
     err: { margin: 12, padding: '10px 12px', borderRadius: 10, border: '1px solid #ff4d4f', background: 'var(--dsw-alias-bg-layer-3,#fff)', color: '#ff4d4f', fontSize: 13 },
     /* ===== 详情态 ===== */
-    detailWrap: { padding: '16px 20px 32px' },
+    detailWrap: { flex: 1, overflow: 'auto', padding: '16px 20px 32px' },
     detailBack: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: 0, borderRadius: 8, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 14, cursor: 'pointer', marginBottom: 12 },
     /* 标题行：返回 + ID + 状态 */
     detailTitle: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 15, fontWeight: 600, marginBottom: 16 },
@@ -377,11 +377,28 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
                                 return (_jsxs("button", { type: "button", style: S.row, onClick: () => { void openDetail(r.id); }, children: [_jsxs("div", { style: S.line1, children: [_jsx("span", { style: S.dot(r.cls) }), _jsx("span", { style: { fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: r.id }), _jsx("span", { style: { fontWeight: 600 }, children: r.pool }), _jsx("span", { style: { fontWeight: 600, color: CLS_COLOR[r.cls] || '#9ca3af' }, children: clsName }), _jsx("span", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: (r.confidence || 0).toFixed(2) }), _jsx("span", { style: { ...S.symptom, color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)' }, children: sym })] }), _jsxs("div", { style: S.line2, children: [_jsx("span", { children: timeText(r.created_at) }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: SOURCE_LABEL[r.source || ''] || r.source }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: r.alert_level ? 'AI视觉+知识库' : 'AI视觉' }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: durationText(r.total_duration_ms) }), _jsx("span", { children: "\u00B7" }), _jsxs("span", { children: [tokenText(r.total_tokens), " tokens"] })] })] }, r.id));
                             })] }, g.title))), hasMore && !loading && (_jsx("button", { type: "button", style: S.moreBtn, onClick: () => { void fetchPage(false); }, children: "\u52A0\u8F7D\u66F4\u591A" })), loading && records.length > 0 && (_jsx("div", { style: { ...S.empty, padding: '20px 0' }, children: "\u52A0\u8F7D\u4E2D\u2026" }))] })] }));
 }
-export function TraceTrendView({ pool, apiBase = '/aquasense-reports', onBack }) {
+export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports', onBack }) {
+    const [pool, setPool] = useState(initPool);
+    const [pools, setPools] = useState([initPool]);
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [days, setDays] = useState(7);
+    // 加载所有记录以提取可用池号列表
+    useEffect(() => {
+        fetch(`${apiBase}/api/records`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((b) => {
+            if (!b?.ok)
+                return;
+            const recs = b.value || [];
+            const poolSet = new Set();
+            recs.forEach((r) => poolSet.add(r.pool));
+            if (poolSet.size > 0)
+                setPools(Array.from(poolSet).sort());
+        })
+            .catch(() => { }); // 静默失败
+    }, [apiBase]);
     useEffect(() => {
         setLoading(true);
         setError(null);
@@ -413,7 +430,7 @@ export function TraceTrendView({ pool, apiBase = '/aquasense-reports', onBack })
         ['disease', '发病', '#ff4d4f'],
         ['unknown', '未知', '#9ca3af']
     ];
-    return (_jsxs("div", { style: { flex: 1, overflow: 'auto' }, children: [_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' }, children: [_jsx("button", { type: "button", style: { padding: '4px 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 13, cursor: 'pointer' }, onClick: onBack, children: "\u2190 \u8FD4\u56DE\u5217\u8868" }), _jsxs("span", { style: { fontSize: 14, fontWeight: 600 }, children: [pool, " \u8D8B\u52BF\u5206\u6790"] }), _jsx("span", { style: { marginLeft: 'auto' }, children: _jsxs("select", { style: { padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)' }, value: days, onChange: (e) => setDays(Number(e.target.value)), children: [_jsx("option", { value: 7, children: "\u8FD17\u5929" }), _jsx("option", { value: 30, children: "\u8FD130\u5929" }), _jsx("option", { value: 3650, children: "\u5168\u90E8" })] }) })] }), _jsxs("div", { style: { padding: '12px 16px 32px' }, children: [_jsxs("div", { style: { fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 16 }, children: ["\u8FD1 ", days, " \u5929\u5171 ", _jsx("b", { style: { color: 'var(--dsw-alias-label-primary,#17191c)' }, children: total }), " \u6761\u5206\u6790\u8BB0\u5F55"] }), _jsxs("div", { style: { marginBottom: 20 }, children: [_jsx("div", { style: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }, children: "\u2500\u2500 \u72B6\u6001\u5206\u5E03 \u2500\u2500" }), _jsx("div", { style: { background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, padding: 12 }, children: total > 0 ? distOrder.map(([key, label, color]) => {
+    return (_jsxs("div", { style: { flex: 1, overflow: 'auto' }, children: [_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' }, children: [_jsx("button", { type: "button", style: { padding: '4px 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 13, cursor: 'pointer' }, onClick: onBack, children: "\u2190 \u8FD4\u56DE\u5217\u8868" }), _jsx("select", { style: { padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 13, fontWeight: 600, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)', cursor: 'pointer' }, value: pool, onChange: (e) => setPool(e.target.value), children: pools.map((p) => _jsx("option", { value: p, children: p }, p)) }), _jsx("span", { style: { fontSize: 14, fontWeight: 600 }, children: "\u8D8B\u52BF\u5206\u6790" }), _jsx("span", { style: { marginLeft: 'auto' }, children: _jsxs("select", { style: { padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)' }, value: days, onChange: (e) => setDays(Number(e.target.value)), children: [_jsx("option", { value: 7, children: "\u8FD17\u5929" }), _jsx("option", { value: 30, children: "\u8FD130\u5929" }), _jsx("option", { value: 3650, children: "\u5168\u90E8" })] }) })] }), _jsxs("div", { style: { padding: '12px 16px 32px' }, children: [_jsxs("div", { style: { fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 16 }, children: ["\u8FD1 ", days, " \u5929\u5171 ", _jsx("b", { style: { color: 'var(--dsw-alias-label-primary,#17191c)' }, children: total }), " \u6761\u5206\u6790\u8BB0\u5F55"] }), _jsxs("div", { style: { marginBottom: 20 }, children: [_jsx("div", { style: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }, children: "\u2500\u2500 \u72B6\u6001\u5206\u5E03 \u2500\u2500" }), _jsx("div", { style: { background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, padding: 12 }, children: total > 0 ? distOrder.map(([key, label, color]) => {
                                     const n = dist[key] || 0;
                                     const pct = Math.round(n / total * 100);
                                     return (_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }, children: [_jsx("span", { style: { width: 48, flexShrink: 0 }, children: label }), _jsx("div", { style: { flex: 1, height: 16, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', borderRadius: 4, overflow: 'hidden' }, children: _jsx("div", { style: { height: '100%', width: `${pct}%`, background: color, borderRadius: 4, transition: 'width 0.4s' } }) }), _jsxs("span", { style: { width: 96, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }, children: [pct, "% (", n, "\u6B21)"] })] }, key));

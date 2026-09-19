@@ -783,7 +783,11 @@ const S = {
 		color: "#ff4d4f",
 		fontSize: 13
 	},
-	detailWrap: { padding: "16px 20px 32px" },
+	detailWrap: {
+		flex: 1,
+		overflow: "auto",
+		padding: "16px 20px 32px"
+	},
 	detailBack: {
 		display: "inline-flex",
 		alignItems: "center",
@@ -1923,11 +1927,22 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 		]
 	})] });
 }
-function TraceTrendView({ pool, apiBase = "/aquasense-reports", onBack }) {
+function TraceTrendView({ pool: initPool, apiBase = "/aquasense-reports", onBack }) {
+	const [pool, setPool] = (0, react.useState)(initPool);
+	const [pools, setPools] = (0, react.useState)([initPool]);
 	const [data, setData] = (0, react.useState)(null);
 	const [loading, setLoading] = (0, react.useState)(true);
 	const [error, setError] = (0, react.useState)(null);
 	const [days, setDays] = (0, react.useState)(7);
+	(0, react.useEffect)(() => {
+		fetch(`${apiBase}/api/records`).then((r) => r.ok ? r.json() : null).then((b) => {
+			if (!b?.ok) return;
+			const recs = b.value || [];
+			const poolSet = /* @__PURE__ */ new Set();
+			recs.forEach((r) => poolSet.add(r.pool));
+			if (poolSet.size > 0) setPools(Array.from(poolSet).sort());
+		}).catch(() => {});
+	}, [apiBase]);
 	(0, react.useEffect)(() => {
 		setLoading(true);
 		setError(null);
@@ -1994,12 +2009,30 @@ function TraceTrendView({ pool, apiBase = "/aquasense-reports", onBack }) {
 					onClick: onBack,
 					children: "← 返回列表"
 				}),
-				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("select", {
+					style: {
+						padding: "4px 8px",
+						border: "1px solid var(--dsw-alias-border-l2,#d1d5db)",
+						borderRadius: 6,
+						fontSize: 13,
+						fontWeight: 600,
+						background: "var(--dsw-alias-bg-layer-3,#fff)",
+						color: "var(--dsw-alias-label-primary,#17191c)",
+						cursor: "pointer"
+					},
+					value: pool,
+					onChange: (e) => setPool(e.target.value),
+					children: pools.map((p) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+						value: p,
+						children: p
+					}, p))
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 					style: {
 						fontSize: 14,
 						fontWeight: 600
 					},
-					children: [pool, " 趋势分析"]
+					children: "趋势分析"
 				}),
 				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 					style: { marginLeft: "auto" },

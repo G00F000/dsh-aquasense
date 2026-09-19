@@ -20,5 +20,5 @@ interface TraceTrendViewProps {
     apiBase?: string;
     onBack?: () => void;
 }
-export declare function TraceTrendView({ pool, apiBase, onBack }: TraceTrendViewProps): ReactNode;
+export declare function TraceTrendView({ pool: initPool, apiBase, onBack }: TraceTrendViewProps): ReactNode;
 export {};

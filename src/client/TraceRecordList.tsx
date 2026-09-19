@@ -164,7 +164,7 @@ const S = {
   err: { margin: 12, padding: '10px 12px', borderRadius: 10, border: '1px solid #ff4d4f', background: 'var(--dsw-alias-bg-layer-3,#fff)', color: '#ff4d4f', fontSize: 13 } satisfies CSSProperties,
 
   /* ===== 详情态 ===== */
-  detailWrap: { padding: '16px 20px 32px' } satisfies CSSProperties,
+  detailWrap: { flex: 1, overflow: 'auto', padding: '16px 20px 32px' } satisfies CSSProperties,
   detailBack: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: 0, borderRadius: 8, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 14, cursor: 'pointer', marginBottom: 12 } satisfies CSSProperties,
   /* 标题行：返回 + ID + 状态 */
   detailTitle: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 15, fontWeight: 600, marginBottom: 16 } satisfies CSSProperties,
@@ -855,11 +855,27 @@ interface TraceTrendViewProps {
   onBack?: () => void
 }
 
-export function TraceTrendView({ pool, apiBase = '/aquasense-reports', onBack }: TraceTrendViewProps): ReactNode {
+export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports', onBack }: TraceTrendViewProps): ReactNode {
+  const [pool, setPool] = useState(initPool)
+  const [pools, setPools] = useState<string[]>([initPool])
   const [data, setData] = useState<TrendData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [days, setDays] = useState(7)
+
+  // 加载所有记录以提取可用池号列表
+  useEffect(() => {
+    fetch(`${apiBase}/api/records`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((b) => {
+        if (!b?.ok) return
+        const recs = (b.value as RecordSummary[]) || []
+        const poolSet = new Set<string>()
+        recs.forEach((r) => poolSet.add(r.pool))
+        if (poolSet.size > 0) setPools(Array.from(poolSet).sort())
+      })
+      .catch(() => {})  // 静默失败
+  }, [apiBase])
 
   useEffect(() => {
     setLoading(true)
@@ -897,7 +913,11 @@ export function TraceTrendView({ pool, apiBase = '/aquasense-reports', onBack }:
         <button type="button" style={{ padding: '4px 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 13, cursor: 'pointer' }} onClick={onBack}>
           ← 返回列表
         </button>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>{pool} 趋势分析</span>
+        {/* 水池下拉框 */}
+        <select style={{ padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 13, fontWeight: 600, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)', cursor: 'pointer' }} value={pool} onChange={(e) => setPool(e.target.value)}>
+          {pools.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <span style={{ fontSize: 14, fontWeight: 600 }}>趋势分析</span>
         <span style={{ marginLeft: 'auto' }}>
           <select style={{ padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)' }} value={days} onChange={(e) => setDays(Number(e.target.value))}>
             <option value={7}>近7天</option>
