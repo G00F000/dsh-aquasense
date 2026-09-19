@@ -9,6 +9,8 @@
  * 样式复用面板 CSS 变量体系，与每日任务提醒表单视觉一致。
  */
 import type { ReactNode } from 'react';
+/** 注入分析记录页样式(幂等,SSR 安全) */
+export declare function ensureTraceStyle(): void;
 interface TraceRecordListProps {
     apiBase?: string;
     /** 点击趋势分析时的回调（面板内切换） */

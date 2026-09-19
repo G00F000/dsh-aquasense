@@ -31,80 +31,147 @@ const SPAN_DEFS = [
     { key: 'advice', label: '处置建议生成', icon: '💡', color: '#52c41a', field: 'span_advice' },
     { key: 'ledger', label: '台账写入', icon: '📝', color: '#722ed1', field: 'span_ledger' }
 ];
-// ========== 内联样式(面板 token 体系) ==========
+// ========== 视觉增强样式(.trc-* 类,注入一次) ==========
+const TRACE_STYLE_ID = 'aquasense-trace-style';
+/**
+ * 分析记录页静态样式(类名 trc- 前缀):布局/hover/动画收敛于此;
+ * 动态颜色(状态色、瀑布图渐变)由内联样式提供。令牌沿用 DSH
+ * --dsw-alias-* 体系并保留亮色 fallback,兼容宿主暗色主题。
+ */
+const TRACE_CSS = `
+/* 筛选条 */
+.trc-filterbar{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);flex-shrink:0;background:var(--dsw-alias-bg-base,#fff)}
+.trc-select-wrap{position:relative;display:inline-flex;flex:none;min-width:0}
+.trc-select{appearance:none;width:100%;padding:7px 30px 7px 12px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:10px;background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-label-primary,#17191c);font:inherit;font-size:13px;line-height:20px;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease}
+.trc-select:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe)}
+.trc-select:focus-visible{outline:none;border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 0 0 3px rgba(77,107,254,.16)}
+.trc-select-caret{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:10px;line-height:1;color:var(--dsw-alias-label-secondary,#7b8088);pointer-events:none}
+.trc-count{display:inline-flex;align-items:center;margin-left:auto;padding:3px 10px;border-radius:999px;background:var(--dsw-alias-bg-secondary,#f0f2f5);color:var(--dsw-alias-label-secondary,#7b8088);font-size:12px;white-space:nowrap;flex:none}
+.trc-trend-btn{display:inline-flex;align-items:center;gap:5px;flex:none;padding:7px 14px;border:0;border-radius:10px;background:linear-gradient(135deg,#4d6bfe 0%,#7c5cf6 100%);color:#fff;font:inherit;font-size:13px;font-weight:600;line-height:20px;cursor:pointer;box-shadow:0 4px 14px rgba(77,107,254,.3);transition:box-shadow .18s ease,transform .18s ease,filter .18s ease}
+.trc-trend-btn:hover{box-shadow:0 6px 20px rgba(77,107,254,.45);transform:translateY(-1px);filter:saturate(1.12)}
+.trc-trend-btn:active{transform:translateY(0);box-shadow:0 2px 8px rgba(77,107,254,.3)}
+/* 列表区 */
+.trc-list{flex:1 1 auto;min-height:0;overflow:auto;padding:14px 20px 32px}
+.trc-group-title{display:flex;align-items:center;gap:8px;margin:20px 2px 10px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-group-title::after{content:'';flex:1;height:1px;background:var(--dsw-alias-border-l2,#e8eaed)}
+/* 记录卡片 */
+.trc-row{display:block;width:100%;box-sizing:border-box;margin-bottom:10px;padding:14px 16px;text-align:left;border:1px solid var(--dsw-alias-border-l2,#e8eaed);border-radius:14px;background:var(--dsw-alias-bg-layer-3,#fff);cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease}
+.trc-row:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 8px 24px rgba(77,107,254,.14);transform:translateY(-1px)}
+.trc-row:active{transform:translateY(0)}
+.trc-line1{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.trc-line2{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-dot{flex:none;width:9px;height:9px;border-radius:50%;animation:trc-pulse 2.4s ease-in-out infinite}
+@keyframes trc-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+.trc-idchip{display:inline-flex;align-items:center;padding:2px 10px;border-radius:8px;background:var(--dsw-alias-bg-secondary,#f0f2f5);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-badge{display:inline-flex;align-items:center;gap:5px;padding:1px 9px;border-radius:999px;font-size:11px;font-weight:700;line-height:18px;flex:none}
+.trc-badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.trc-symptom{flex:1 1 0;min-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+/* 空态 / 加载态 / 错误 */
+.trc-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:64px 0;text-align:center;color:var(--dsw-alias-label-secondary,#7b8088);font-size:13px}
+.trc-empty-icon{font-size:44px;line-height:1;animation:trc-float 3s ease-in-out infinite;filter:drop-shadow(0 6px 12px rgba(77,107,254,.2))}
+@keyframes trc-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.trc-spin{width:22px;height:22px;border-radius:50%;border:2px solid var(--dsw-alias-border-l2,#e2e4e8);border-top-color:var(--dsw-alias-button-primary-fill,#4d6bfe);animation:trc-spin .7s linear infinite}
+@keyframes trc-spin{to{transform:rotate(360deg)}}
+.trc-err{margin:4px 0 12px;padding:12px 14px;border-radius:12px;border:1px solid var(--dsw-alias-state-error-primary,#ff4d4f);background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-state-error-primary,#ff4d4f);font-size:13px}
+.trc-more-btn{display:block;width:100%;margin:16px 0 0;padding:10px;border:1px solid transparent;border-radius:12px;background:linear-gradient(var(--dsw-alias-bg-layer-3,#fff),var(--dsw-alias-bg-layer-3,#fff)) padding-box,linear-gradient(135deg,#4d6bfe,#7c5cf6) border-box;color:var(--dsw-alias-button-primary-fill,#4d6bfe);font:inherit;font-size:14px;cursor:pointer;transition:box-shadow .16s ease,transform .16s ease}
+.trc-more-btn:hover{box-shadow:0 4px 14px rgba(77,107,254,.18);transform:translateY(-1px)}
+/* ===== 详情态 ===== */
+.trc-detail{flex:1;overflow:auto;padding:16px 20px 36px;animation:trc-fade-up .28s ease}
+@keyframes trc-fade-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.trc-back{display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:10px;background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-button-primary-fill,#4d6bfe);font:inherit;font-size:13px;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease}
+.trc-back:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 2px 10px rgba(77,107,254,.14)}
+.trc-title{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:15px;font-weight:600;margin-bottom:16px}
+.trc-meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px}
+.trc-meta-item{display:flex;align-items:baseline;gap:8px;min-width:0;padding:10px 14px;border:1px solid var(--dsw-alias-border-l2,#e8eaed);border-radius:12px;background:var(--dsw-alias-bg-layer-3,#fff);font-size:13px;transition:border-color .16s ease}
+.trc-meta-item:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe)}
+.trc-meta-label{flex:none;color:var(--dsw-alias-label-secondary,#7b8088);white-space:nowrap}
+.trc-meta-value{color:var(--dsw-alias-label-primary,#17191c);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trc-section-title{display:flex;align-items:center;gap:8px;margin:22px 0 12px;font-size:13px;font-weight:700;color:var(--dsw-alias-label-primary,#17191c)}
+.trc-section-title::after{content:'';flex:1;height:1px;background:var(--dsw-alias-border-l2,#e8eaed)}
+/* 瀑布图 */
+.trc-wf{display:flex;flex-direction:column;gap:6px}
+.trc-wf-row{display:flex;align-items:center;gap:10px}
+.trc-wf-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;border-radius:9px;font-size:14px}
+.trc-wf-label{width:110px;flex:none;font-size:12px;color:var(--dsw-alias-label-primary,#17191c);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trc-wf-track{flex:1 1 auto;height:20px;border-radius:999px;background:var(--dsw-alias-bg-secondary,#f0f1f3);position:relative;overflow:hidden}
+.trc-wf-bar{position:absolute;top:0;left:0;height:100%;border-radius:999px;transition:width .5s cubic-bezier(.22,.61,.36,1)}
+.trc-wf-dur{width:46px;flex:none;font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088);text-align:right}
+.trc-wf-status{width:20px;flex:none;font-size:12px;text-align:center}
+/* 步骤 Accordion */
+.trc-steps{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
+.trc-step{border:1px solid var(--dsw-alias-border-l2,#e2e4e8);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-3,#fff);transition:border-color .16s ease,box-shadow .16s ease}
+.trc-step:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 2px 12px rgba(77,107,254,.1)}
+.trc-step-head{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border:0;background:transparent;cursor:pointer;font:inherit;font-size:13px;text-align:left;color:var(--dsw-alias-label-primary,#17191c)}
+.trc-step-icon{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;flex:none;border-radius:8px;font-size:13px}
+.trc-step-arrow{flex:none;font-size:10px;color:var(--dsw-alias-label-secondary,#7b8088);transition:transform .2s ease}
+.trc-step-right{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-step-body{padding:12px 14px;border-top:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-secondary,#f9fafb);font-size:13px;animation:trc-fade-up .2s ease}
+.trc-step-field{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px}
+.trc-step-label{color:var(--dsw-alias-label-secondary,#7b8088);white-space:nowrap}
+.trc-step-value{color:var(--dsw-alias-label-primary,#17191c);word-break:break-all;white-space:pre-wrap}
+.trc-excerpt{padding:8px 12px;margin-bottom:4px;border-radius:8px;background:var(--dsw-alias-bg-layer-3,#fff);border:1px solid var(--dsw-alias-border-l2,#e8eaed)}
+.trc-excerpt-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,#17191c);margin-bottom:2px}
+.trc-excerpt-meta{font-size:11px;color:var(--dsw-alias-label-secondary,#7b8088);margin-bottom:2px}
+.trc-excerpt-text{font-size:12px;color:var(--dsw-alias-label-secondary,#555);font-style:italic}
+/* ===== 趋势态 ===== */
+.trc-trend-top{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
+.trc-trend-body{padding:16px 20px 36px;animation:trc-fade-up .28s ease}
+.trc-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:20px}
+.trc-kpi{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2,#e8eaed);border-radius:14px;background:var(--dsw-alias-bg-layer-3,#fff);transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease}
+.trc-kpi:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 4px 16px rgba(77,107,254,.12);transform:translateY(-1px)}
+.trc-kpi-num{font-size:24px;font-weight:700;line-height:1.1}
+.trc-kpi-label{font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-card{padding:14px 16px;border:1px solid var(--dsw-alias-border-l2,#e8eaed);border-radius:14px;background:var(--dsw-alias-bg-layer-3,#fff);margin-bottom:20px}
+.trc-bar-row{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:13px}
+.trc-bar-track{flex:1;height:16px;border-radius:999px;background:var(--dsw-alias-bg-secondary,#f0f1f3);overflow:hidden}
+.trc-bar{height:100%;border-radius:999px;transition:width .5s cubic-bezier(.22,.61,.36,1)}
+.trc-back-link{display:inline-flex;align-items:center;gap:4px;flex:none;padding:5px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-button-primary-fill,#4d6bfe);font:inherit;font-size:13px;cursor:pointer;transition:background .16s ease}
+.trc-back-link:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
+`;
+/** 注入分析记录页样式(幂等,SSR 安全) */
+export function ensureTraceStyle() {
+    if (typeof document === 'undefined')
+        return;
+    let style = document.getElementById(TRACE_STYLE_ID);
+    if (!style) {
+        style = document.createElement('style');
+        style.id = TRACE_STYLE_ID;
+        document.head.appendChild(style);
+    }
+    style.textContent = TRACE_CSS;
+}
+// ========== 内联样式(仅动态颜色;布局/hover/动画由 .trc-* 类提供) ==========
 const S = {
-    /* 筛选条 */
-    filterBar: { display: 'flex', gap: 8, padding: '12px 20px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', flexShrink: 0 },
-    select: { appearance: 'none', padding: '6px 28px 6px 10px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)', fontSize: 13, lineHeight: '20px' },
-    /* 列表区 */
-    list: { flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '12px 20px 32px' },
-    empty: { padding: '60px 0', textAlign: 'center', color: 'var(--dsw-alias-label-secondary,#7b8088)' },
-    /* 日期分组标题 */
-    groupTitle: { margin: '18px 0 8px', fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)' },
-    /* 记录行 */
-    row: { display: 'block', padding: '12px 14px', color: 'inherit', textDecoration: 'none', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', cursor: 'pointer', background: 'transparent' },
-    /* 记录行第一行：圆点 + ID + 池号 + 状态 + 置信度 + 症状（同行） */
-    line1: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 13 },
+    /** 状态圆点:发光 + 呼吸动画(类 .trc-dot) */
     dot: (cls) => ({
-        flex: 'none', width: 8, height: 8, borderRadius: '50%',
-        background: CLS_COLOR[cls] || '#9ca3af'
+        background: CLS_COLOR[cls] || '#9ca3af',
+        boxShadow: `0 0 8px ${CLS_COLOR[cls] || '#9ca3af'}`
     }),
-    /* 症状（同行，自动截断） */
-    symptom: { flex: '1 1 0', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 },
-    /* 记录行第二行 */
-    line2: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' },
-    /* 趋势链接 */
-    trendLink: { display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 20, fontSize: 14, color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', cursor: 'pointer', border: 0, background: 'transparent', padding: 0 },
-    /* 加载更多 */
-    moreBtn: { display: 'block', width: '100%', margin: '16px 0 0', padding: 10, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 14, cursor: 'pointer' },
-    /* 错误 */
-    err: { margin: 12, padding: '10px 12px', borderRadius: 10, border: '1px solid #ff4d4f', background: 'var(--dsw-alias-bg-layer-3,#fff)', color: '#ff4d4f', fontSize: 13 },
-    /* ===== 详情态 ===== */
-    detailWrap: { flex: 1, overflow: 'auto', padding: '16px 20px 32px' },
-    detailBack: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: 0, borderRadius: 8, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 14, cursor: 'pointer', marginBottom: 12 },
-    /* 标题行：返回 + ID + 状态 */
-    detailTitle: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 15, fontWeight: 600, marginBottom: 16 },
-    statusBadge: (cls) => ({
-        display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 10px', borderRadius: 999,
-        background: (CLS_COLOR[cls] || '#9ca3af') + '18',
-        color: CLS_COLOR[cls] || '#9ca3af', fontSize: 12, fontWeight: 600, flexShrink: 0
-    }),
-    /* 元信息区 */
-    metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', fontSize: 13, padding: '12px 16px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary,#f4f5f7)', marginBottom: 20 },
-    metaLabel: { color: 'var(--dsw-alias-label-secondary,#7b8088)', whiteSpace: 'nowrap' },
-    metaValue: { color: 'var(--dsw-alias-label-primary,#17191c)' },
-    /* 瀑布图 */
-    waterfallWrap: { marginBottom: 20 },
-    sectionTitle: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' },
-    waterfall: { display: 'flex', flexDirection: 'column', gap: 4 },
-    wfRow: { display: 'flex', alignItems: 'center', gap: 8 },
-    wfIcon: { width: 20, textAlign: 'center', fontSize: 14, flexShrink: 0 },
-    wfLabel: { width: 110, fontSize: 12, color: 'var(--dsw-alias-label-primary,#17191c)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-    wfTrack: { flex: '1 1 auto', height: 18, borderRadius: 4, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', position: 'relative', overflow: 'hidden' },
+    /** 状态徽章:半透明底 + 发光(类 .trc-badge 提供 pill 布局) */
+    badge: (cls) => {
+        const color = CLS_COLOR[cls] || '#9ca3af';
+        return { background: color + '1a', color, boxShadow: `0 0 10px ${color}40` };
+    },
+    /** 瀑布图条:渐变 + 发光(类 .trc-wf-bar 提供定位/动画) */
     wfBar: (color, pct) => ({
-        position: 'absolute', top: 0, left: 0, height: '100%', width: `${Math.max(pct, 2)}%`,
-        background: color, borderRadius: 4, transition: 'width 0.3s'
+        width: `${Math.max(pct, 2)}%`,
+        background: `linear-gradient(90deg, ${color}, ${color}b3)`,
+        boxShadow: `0 0 10px ${color}66`
     }),
-    wfDur: { width: 44, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', textAlign: 'right', flexShrink: 0 },
-    wfStatus: { width: 20, fontSize: 12, textAlign: 'center', flexShrink: 0 },
-    /* 步骤 Accordion */
-    stepsWrap: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 },
-    stepItem: { border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, overflow: 'hidden' },
-    stepHeader: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', background: 'var(--dsw-alias-bg-layer-3,#fff)', border: 0, width: '100%', textAlign: 'left', fontSize: 13, color: 'var(--dsw-alias-label-primary,#17191c)' },
-    stepArrow: (open) => ({
-        transition: 'transform 0.2s', fontSize: 10, color: 'var(--dsw-alias-label-secondary,#7b8088)',
-        transform: open ? 'rotate(90deg)' : 'rotate(0deg)', flexShrink: 0
+    /** 图标圆底(类 .trc-wf-icon / .trc-step-icon 提供尺寸圆角) */
+    iconBg: (color) => ({ background: color + '1c' }),
+    /** 趋势分布条:渐变 + 发光(类 .trc-bar 提供动画) */
+    bar: (color, pct) => ({
+        width: `${pct}%`,
+        background: `linear-gradient(90deg, ${color}66, ${color})`,
+        boxShadow: `0 0 10px ${color}55`
     }),
-    stepHeaderRight: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' },
-    stepBody: { padding: '10px 14px', borderTop: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', fontSize: 13, background: 'var(--dsw-alias-bg-secondary,#f9fafb)' },
-    stepField: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', fontSize: 13 },
-    stepLabel: { color: 'var(--dsw-alias-label-secondary,#7b8088)', whiteSpace: 'nowrap' },
-    stepValue: { color: 'var(--dsw-alias-label-primary,#17191c)', wordBreak: 'break-all', whiteSpace: 'pre-wrap' },
-    /* 知识库命中条目 */
-    excerptItem: { padding: '6px 10px', marginBottom: 4, borderRadius: 6, background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e8eaed)' },
-    excerptTitle: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-primary,#17191c)', marginBottom: 2 },
-    excerptMeta: { fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 2 },
-    excerptText: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#555)', fontStyle: 'italic' },
+    /** 症状 TOP 条:主色渐变 */
+    barAccent: (pct) => ({
+        width: `${pct}%`,
+        background: 'linear-gradient(90deg, #4d6bfe, #8b5cf6)',
+        boxShadow: '0 0 10px rgba(77,107,254,.4)'
+    })
 };
 // ========== 辅助 ==========
 function dayKey(iso) {
@@ -150,13 +217,13 @@ function WaterfallChart({ record }) {
     const hasAny = spans.some((s) => s.duration > 0);
     if (!hasAny)
         return null;
-    return (_jsxs("div", { style: S.waterfallWrap, children: [_jsx("div", { style: S.sectionTitle, children: "\u2500\u2500 \u7011\u5E03\u56FE\uFF08Trace Timeline\uFF09\u2500\u2500" }), _jsx("div", { style: S.waterfall, children: spans.map((s) => (_jsxs("div", { style: S.wfRow, children: [_jsx("span", { style: S.wfIcon, children: s.icon }), _jsx("span", { style: S.wfLabel, children: s.label }), _jsx("div", { style: S.wfTrack, children: _jsx("div", { style: S.wfBar(s.color, (s.duration / total) * 100) }) }), _jsx("span", { style: S.wfDur, children: durationText(s.duration) }), _jsx("span", { style: S.wfStatus, children: s.data?.error ? '❌' : (s.duration > 0 ? '✅' : '—') })] }, s.key))) })] }));
+    return (_jsxs("div", { style: { marginBottom: 20 }, children: [_jsx("div", { className: "trc-section-title", children: "\u7011\u5E03\u56FE \u00B7 Trace Timeline" }), _jsx("div", { className: "trc-wf", children: spans.map((s) => (_jsxs("div", { className: "trc-wf-row", children: [_jsx("span", { className: "trc-wf-icon", style: S.iconBg(s.color), children: s.icon }), _jsx("span", { className: "trc-wf-label", children: s.label }), _jsx("div", { className: "trc-wf-track", children: _jsx("div", { className: "trc-wf-bar", style: S.wfBar(s.color, (s.duration / total) * 100) }) }), _jsx("span", { className: "trc-wf-dur", children: durationText(s.duration) }), _jsx("span", { className: "trc-wf-status", children: s.data?.error ? '❌' : (s.duration > 0 ? '✅' : '—') })] }, s.key))) })] }));
 }
 /** 单个步骤 Accordion */
 function StepAccordion({ def, record, isOpen, onToggle }) {
     const data = record[def.field];
     const dur = data?.duration_ms ?? 0;
-    return (_jsxs("div", { style: S.stepItem, children: [_jsxs("button", { type: "button", style: S.stepHeader, onClick: onToggle, children: [_jsx("span", { style: S.stepArrow(isOpen), children: "\u25B6" }), _jsxs("span", { children: [def.icon, " ", def.label] }), _jsxs("span", { style: S.stepHeaderRight, children: [_jsx("span", { children: durationText(dur) }), _jsx("span", { children: data?.error ? '❌' : (dur > 0 ? '✅' : '—') })] })] }), isOpen && data && (_jsx("div", { style: S.stepBody, children: renderStepContent(def.key, data, record) }))] }));
+    return (_jsxs("div", { className: "trc-step", children: [_jsxs("button", { type: "button", className: "trc-step-head", onClick: onToggle, children: [_jsx("span", { className: "trc-step-icon", style: S.iconBg(def.color), children: def.icon }), _jsx("span", { style: { fontWeight: 600 }, children: def.label }), _jsxs("span", { className: "trc-step-right", children: [_jsx("span", { children: durationText(dur) }), _jsx("span", { children: data?.error ? '❌' : (dur > 0 ? '✅' : '—') }), _jsx("span", { className: "trc-step-arrow", style: { transform: isOpen ? 'rotate(90deg)' : undefined }, children: "\u25B6" })] })] }), isOpen && data && (_jsx("div", { className: "trc-step-body", children: renderStepContent(def.key, data, record) }))] }));
 }
 /** 根据步骤类型渲染不同内容 */
 function renderStepContent(key, data, record) {
@@ -175,7 +242,7 @@ function renderUploadStep(data) {
     const compressed = data.compressed_sizes ?? [];
     const names = data.image_names ?? [];
     const err = data.error;
-    return (_jsxs("div", { style: S.stepField, children: [_jsx("span", { style: S.stepLabel, children: "\u8F93\u5165" }), _jsxs("span", { style: S.stepValue, children: [imageCount, " \u5F20\u56FE\u7247"] }), sizes.map((size, i) => (_jsxs(_Fragment, { children: [_jsx("span", { style: S.stepLabel, children: " " }, `k${i}`), _jsxs("span", { style: S.stepValue, children: ["\uD83D\uDC1F ", names[i] || `image_${String(i + 1).padStart(3, '0')}`, ' ', "(", formatBytes(size), compressed[i] ? ` → ${formatBytes(compressed[i])}` : '', ")"] }, `v${i}`)] }))), _jsx("span", { style: S.stepLabel, children: "\u8F93\u51FA" }), _jsxs("span", { style: S.stepValue, children: [imageCount, " \u5F20\u56FE\u7247\u5DF2\u538B\u7F29\u5E76\u8F6C\u4E3A base64"] }), err && (_jsxs(_Fragment, { children: [_jsx("span", { style: { ...S.stepLabel, color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { style: { ...S.stepValue, color: '#ff4d4f' }, children: err })] }))] }));
+    return (_jsxs("div", { className: "trc-step-field", children: [_jsx("span", { className: "trc-step-label", children: "\u8F93\u5165" }), _jsxs("span", { className: "trc-step-value", children: [imageCount, " \u5F20\u56FE\u7247"] }), sizes.map((size, i) => (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", children: " " }, `k${i}`), _jsxs("span", { className: "trc-step-value", children: ["\uD83D\uDC1F ", names[i] || `image_${String(i + 1).padStart(3, '0')}`, ' ', "(", formatBytes(size), compressed[i] ? ` → ${formatBytes(compressed[i])}` : '', ")"] }, `v${i}`)] }))), _jsx("span", { className: "trc-step-label", children: "\u8F93\u51FA" }), _jsxs("span", { className: "trc-step-value", children: [imageCount, " \u5F20\u56FE\u7247\u5DF2\u538B\u7F29\u5E76\u8F6C\u4E3A base64"] }), err && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", style: { color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { className: "trc-step-value", style: { color: '#ff4d4f' }, children: err })] }))] }));
 }
 function renderAnalyzeStep(data, record) {
     const cls = data.cls ?? 'unknown';
@@ -188,7 +255,7 @@ function renderAnalyzeStep(data, record) {
     const outputTok = data.output_tokens ?? 0;
     const raw = data.output_raw ?? '';
     const err = data.error;
-    return (_jsxs("div", { style: S.stepField, children: [_jsx("span", { style: S.stepLabel, children: "\u6A21\u578B" }), _jsxs("span", { style: S.stepValue, children: [record?.model || '—', " (temperature=0.1)"] }), _jsx("span", { style: S.stepLabel, children: "\u8F93\u5165" }), _jsxs("span", { style: S.stepValue, children: ["system prompt (", promptLen, " chars) + \u56FE\u7247"] }), _jsx("span", { style: S.stepLabel, children: "\u8F93\u51FA" }), _jsxs("span", { style: S.stepValue, children: ["\u72B6\u6001: ", CLS_LABEL[cls] || cls, "\uFF08", cls, "\uFF09", '\n', "\u7F6E\u4FE1\u5EA6: ", confidence.toFixed(2), '\n', "\u75C7\u72B6: ", symptoms.length > 0 ? symptoms.join('、') : '无异常', severity ? `\n严重度: ${severity}` : '', organs.length > 0 ? `\n器官: ${organs.join('、')}` : ''] }), _jsx("span", { style: S.stepLabel, children: "Token" }), _jsxs("span", { style: S.stepValue, children: ["input=", tokenText(inputTok), " output=", tokenText(outputTok)] }), raw && (_jsxs(_Fragment, { children: [_jsx("span", { style: S.stepLabel, children: "\u539F\u59CB\u8F93\u51FA" }), _jsx("span", { style: S.stepValue, children: raw })] })), err && (_jsxs(_Fragment, { children: [_jsx("span", { style: { ...S.stepLabel, color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { style: { ...S.stepValue, color: '#ff4d4f' }, children: err })] }))] }));
+    return (_jsxs("div", { className: "trc-step-field", children: [_jsx("span", { className: "trc-step-label", children: "\u6A21\u578B" }), _jsxs("span", { className: "trc-step-value", children: [record?.model || '—', " (temperature=0.1)"] }), _jsx("span", { className: "trc-step-label", children: "\u8F93\u5165" }), _jsxs("span", { className: "trc-step-value", children: ["system prompt (", promptLen, " chars) + \u56FE\u7247"] }), _jsx("span", { className: "trc-step-label", children: "\u8F93\u51FA" }), _jsxs("span", { className: "trc-step-value", children: ["\u72B6\u6001: ", CLS_LABEL[cls] || cls, "\uFF08", cls, "\uFF09", '\n', "\u7F6E\u4FE1\u5EA6: ", confidence.toFixed(2), '\n', "\u75C7\u72B6: ", symptoms.length > 0 ? symptoms.join('、') : '无异常', severity ? `\n严重度: ${severity}` : '', organs.length > 0 ? `\n器官: ${organs.join('、')}` : ''] }), _jsx("span", { className: "trc-step-label", children: "Token" }), _jsxs("span", { className: "trc-step-value", children: ["input=", tokenText(inputTok), " output=", tokenText(outputTok)] }), raw && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", children: "\u539F\u59CB\u8F93\u51FA" }), _jsx("span", { className: "trc-step-value", children: raw })] })), err && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", style: { color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { className: "trc-step-value", style: { color: '#ff4d4f' }, children: err })] }))] }));
 }
 function renderRetrieveStep(data) {
     const query = data.query ?? '';
@@ -198,7 +265,7 @@ function renderRetrieveStep(data) {
     const merged = data.merged_count ?? 0;
     const excerpts = data.excerpts ?? [];
     const err = data.error;
-    return (_jsxs("div", { style: S.stepField, children: [_jsx("span", { style: S.stepLabel, children: "\u67E5\u8BE2" }), _jsxs("span", { style: S.stepValue, children: ["\"", query, "\""] }), _jsx("span", { style: S.stepLabel, children: "\u901A\u9053A (wiki)" }), _jsxs("span", { style: S.stepValue, children: ["\u547D\u4E2D ", chA, " \u6761"] }), _jsx("span", { style: S.stepLabel, children: "\u901A\u9053B (note)" }), _jsxs("span", { style: S.stepValue, children: ["\u547D\u4E2D ", chB, " \u6761"] }), _jsx("span", { style: S.stepLabel, children: "\u901A\u9053C (PDF)" }), _jsxs("span", { style: S.stepValue, children: ["\u547D\u4E2D ", chC, " \u6761"] }), _jsx("span", { style: S.stepLabel, children: "\u5408\u5E76\u53BB\u91CD" }), _jsxs("span", { style: S.stepValue, children: [merged, " \u6761"] }), excerpts.length > 0 && (_jsxs(_Fragment, { children: [_jsx("span", { style: S.stepLabel, children: "\u547D\u4E2D\u6761\u76EE" }), _jsx("span", { style: S.stepValue, children: excerpts.map((ex, i) => (_jsxs("div", { style: S.excerptItem, children: [_jsxs("div", { style: S.excerptTitle, children: ["\uD83D\uDCC4 \u300A", ex.title, "\u300B", ex.from ? `[${fromLabel(ex.from)}]` : ''] }), ex.locator && _jsx("div", { style: S.excerptMeta, children: ex.locator }), _jsxs("div", { style: S.excerptText, children: ["\u300C", ex.excerpt_preview, "\u300D"] })] }, i))) })] })), err && (_jsxs(_Fragment, { children: [_jsx("span", { style: { ...S.stepLabel, color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { style: { ...S.stepValue, color: '#ff4d4f' }, children: err })] }))] }));
+    return (_jsxs("div", { className: "trc-step-field", children: [_jsx("span", { className: "trc-step-label", children: "\u67E5\u8BE2" }), _jsxs("span", { className: "trc-step-value", children: ["\"", query, "\""] }), _jsx("span", { className: "trc-step-label", children: "\u901A\u9053A (wiki)" }), _jsxs("span", { className: "trc-step-value", children: ["\u547D\u4E2D ", chA, " \u6761"] }), _jsx("span", { className: "trc-step-label", children: "\u901A\u9053B (note)" }), _jsxs("span", { className: "trc-step-value", children: ["\u547D\u4E2D ", chB, " \u6761"] }), _jsx("span", { className: "trc-step-label", children: "\u901A\u9053C (PDF)" }), _jsxs("span", { className: "trc-step-value", children: ["\u547D\u4E2D ", chC, " \u6761"] }), _jsx("span", { className: "trc-step-label", children: "\u5408\u5E76\u53BB\u91CD" }), _jsxs("span", { className: "trc-step-value", children: [merged, " \u6761"] }), excerpts.length > 0 && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", children: "\u547D\u4E2D\u6761\u76EE" }), _jsx("span", { className: "trc-step-value", children: excerpts.map((ex, i) => (_jsxs("div", { className: "trc-excerpt", children: [_jsxs("div", { className: "trc-excerpt-title", children: ["\uD83D\uDCC4 \u300A", ex.title, "\u300B", ex.from ? `[${fromLabel(ex.from)}]` : ''] }), ex.locator && _jsx("div", { className: "trc-excerpt-meta", children: ex.locator }), _jsxs("div", { className: "trc-excerpt-text", children: ["\u300C", ex.excerpt_preview, "\u300D"] })] }, i))) })] })), err && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", style: { color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { className: "trc-step-value", style: { color: '#ff4d4f' }, children: err })] }))] }));
 }
 function renderAdviceStep(data) {
     const alertLevel = data.alert_level ?? '';
@@ -206,7 +273,7 @@ function renderAdviceStep(data) {
     const diagnosis = data.diagnosis_summary ?? '';
     const reasoning = data.reasoning_preview ?? '';
     const err = data.error;
-    return (_jsxs("div", { style: S.stepField, children: [_jsx("span", { style: S.stepLabel, children: "\u9884\u8B66\u7EA7\u522B" }), _jsx("span", { style: S.stepValue, children: alertLevel || '—' }), _jsx("span", { style: S.stepLabel, children: "\u77E5\u8BC6\u6765\u6E90" }), _jsxs("span", { style: S.stepValue, children: [refsCount, " \u6761"] }), _jsx("span", { style: S.stepLabel, children: "\u8BCA\u65AD" }), _jsx("span", { style: S.stepValue, children: diagnosis || '—' }), _jsx("span", { style: S.stepLabel, children: "\u63A8\u7406" }), _jsx("span", { style: S.stepValue, children: reasoning || '—' }), err && (_jsxs(_Fragment, { children: [_jsx("span", { style: { ...S.stepLabel, color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { style: { ...S.stepValue, color: '#ff4d4f' }, children: err })] }))] }));
+    return (_jsxs("div", { className: "trc-step-field", children: [_jsx("span", { className: "trc-step-label", children: "\u9884\u8B66\u7EA7\u522B" }), _jsx("span", { className: "trc-step-value", children: alertLevel || '—' }), _jsx("span", { className: "trc-step-label", children: "\u77E5\u8BC6\u6765\u6E90" }), _jsxs("span", { className: "trc-step-value", children: [refsCount, " \u6761"] }), _jsx("span", { className: "trc-step-label", children: "\u8BCA\u65AD" }), _jsx("span", { className: "trc-step-value", children: diagnosis || '—' }), _jsx("span", { className: "trc-step-label", children: "\u63A8\u7406" }), _jsx("span", { className: "trc-step-value", children: reasoning || '—' }), err && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", style: { color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { className: "trc-step-value", style: { color: '#ff4d4f' }, children: err })] }))] }));
 }
 function renderLedgerStep(data) {
     const table = data.target_table ?? '';
@@ -215,7 +282,7 @@ function renderLedgerStep(data) {
     const success = data.success;
     const message = data.message ?? '';
     const err = data.error;
-    return (_jsxs("div", { style: S.stepField, children: [_jsx("span", { style: S.stepLabel, children: "\u76EE\u6807\u8868" }), _jsx("span", { style: S.stepValue, children: table || '—' }), _jsx("span", { style: S.stepLabel, children: "\u64CD\u4F5C" }), _jsx("span", { style: S.stepValue, children: op === 'create' ? '新增' : op === 'update' ? '更新' : op || '—' }), recId && (_jsxs(_Fragment, { children: [_jsx("span", { style: S.stepLabel, children: "\u8BB0\u5F55ID" }), _jsx("span", { style: S.stepValue, children: recId })] })), success !== undefined && (_jsxs(_Fragment, { children: [_jsx("span", { style: S.stepLabel, children: "\u7ED3\u679C" }), _jsx("span", { style: S.stepValue, children: success ? '✅ 成功' : '❌ 失败' })] })), message && (_jsxs(_Fragment, { children: [_jsx("span", { style: S.stepLabel, children: "\u4FE1\u606F" }), _jsx("span", { style: S.stepValue, children: message })] })), err && (_jsxs(_Fragment, { children: [_jsx("span", { style: { ...S.stepLabel, color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { style: { ...S.stepValue, color: '#ff4d4f' }, children: err })] }))] }));
+    return (_jsxs("div", { className: "trc-step-field", children: [_jsx("span", { className: "trc-step-label", children: "\u76EE\u6807\u8868" }), _jsx("span", { className: "trc-step-value", children: table || '—' }), _jsx("span", { className: "trc-step-label", children: "\u64CD\u4F5C" }), _jsx("span", { className: "trc-step-value", children: op === 'create' ? '新增' : op === 'update' ? '更新' : op || '—' }), recId && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", children: "\u8BB0\u5F55ID" }), _jsx("span", { className: "trc-step-value", children: recId })] })), success !== undefined && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", children: "\u7ED3\u679C" }), _jsx("span", { className: "trc-step-value", children: success ? '✅ 成功' : '❌ 失败' })] })), message && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", children: "\u4FE1\u606F" }), _jsx("span", { className: "trc-step-value", children: message })] })), err && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", style: { color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { className: "trc-step-value", style: { color: '#ff4d4f' }, children: err })] }))] }));
 }
 // ========== 辅助 ==========
 /** 知识来源通道名翻译 */
@@ -234,6 +301,9 @@ function formatBytes(bytes) {
 export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }) {
     // --- 列表状态 ---
     const [records, setRecords] = useState([]);
+    useEffect(() => {
+        ensureTraceStyle();
+    }, []);
     const [total, setTotal] = useState(0);
     const [hasMore, setHasMore] = useState(false);
     const [offset, setOffset] = useState(0);
@@ -352,10 +422,10 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
     }, []);
     // ---------- 渲染：详情 ----------
     if (detailId) {
-        return (_jsxs("div", { style: S.detailWrap, children: [detailLoading && _jsx("div", { style: S.empty, children: "\u52A0\u8F7D\u4E2D\u2026" }), detailError && (_jsxs("div", { style: S.err, children: [_jsx("div", { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' }, children: detailError }), _jsx("button", { type: "button", style: { ...S.moreBtn, marginTop: 8, width: 'auto', display: 'inline-block' }, onClick: backToList, children: "\u8FD4\u56DE\u5217\u8868" })] })), detailRecord && (_jsxs("div", { children: [_jsxs("div", { style: S.detailTitle, children: [_jsx("button", { type: "button", style: S.detailBack, onClick: backToList, children: "\u2190 \u8FD4\u56DE" }), _jsx("span", { style: { fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: detailRecord.id }), _jsx("span", { style: { fontWeight: 600 }, children: detailRecord.pool }), _jsx("span", { style: { fontWeight: 600 }, children: "\u5DE1\u68C0\u5206\u6790" }), (() => {
+        return (_jsxs("div", { className: "trc-detail", children: [detailLoading && (_jsxs("div", { className: "trc-empty", children: [_jsx("span", { className: "trc-spin" }), _jsx("span", { children: "\u52A0\u8F7D\u4E2D\u2026" })] })), detailError && (_jsxs("div", { className: "trc-err", children: [_jsx("div", { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' }, children: detailError }), _jsx("button", { type: "button", className: "trc-more-btn", style: { marginTop: 8, width: 'auto', display: 'inline-block', padding: '6px 14px', fontSize: 13 }, onClick: backToList, children: "\u8FD4\u56DE\u5217\u8868" })] })), detailRecord && (_jsxs("div", { children: [_jsxs("div", { className: "trc-title", children: [_jsx("button", { type: "button", className: "trc-back", onClick: backToList, children: "\u2190 \u8FD4\u56DE" }), _jsx("span", { className: "trc-idchip", children: detailRecord.id }), _jsx("span", { style: { fontWeight: 600 }, children: detailRecord.pool }), _jsx("span", { style: { fontWeight: 600 }, children: "\u5DE1\u68C0\u5206\u6790" }), (() => {
                                     const cls = detailRecord.span_analyze?.cls ?? 'unknown';
-                                    return (_jsxs("span", { style: S.statusBadge(cls), children: [_jsx("span", { style: { width: 6, height: 6, borderRadius: '50%', background: CLS_COLOR[cls] || '#9ca3af' } }), CLS_LABEL[cls] || cls] }));
-                                })()] }), _jsxs("div", { style: S.metaGrid, children: [_jsx("span", { style: S.metaLabel, children: "\u6C60\u53F7:" }), _jsx("span", { style: S.metaValue, children: detailRecord.pool }), _jsx("span", { style: S.metaLabel, children: "\u4E0A\u62A5\u4EBA:" }), _jsx("span", { style: S.metaValue, children: detailRecord.reporter || '—' }), _jsx("span", { style: S.metaLabel, children: "\u6765\u6E90:" }), _jsx("span", { style: S.metaValue, children: SOURCE_LABEL[detailRecord.source] || detailRecord.source }), _jsx("span", { style: S.metaLabel, children: "\u65F6\u95F4:" }), _jsx("span", { style: S.metaValue, children: formatDateTime(detailRecord.created_at) }), _jsx("span", { style: S.metaLabel, children: "\u603B\u8017\u65F6:" }), _jsx("span", { style: S.metaValue, children: durationText(detailRecord.total_duration_ms) }), _jsx("span", { style: S.metaLabel, children: "\u6A21\u578B:" }), _jsx("span", { style: S.metaValue, children: detailRecord.model || '—' }), _jsx("span", { style: S.metaLabel, children: "Token:" }), _jsxs("span", { style: S.metaValue, children: ["input=", tokenText(detailRecord.span_analyze?.input_tokens ?? 0), " output=", tokenText(detailRecord.span_analyze?.output_tokens ?? 0)] })] }), _jsx(WaterfallChart, { record: detailRecord }), _jsx("div", { style: S.sectionTitle, children: "\u2500\u2500 \u6B65\u9AA4\u8BE6\u60C5\uFF08Accordion \u5C55\u5F00\uFF09\u2500\u2500" }), _jsx("div", { style: S.stepsWrap, children: SPAN_DEFS.map((def) => (_jsx(StepAccordion, { def: def, record: detailRecord, isOpen: openSteps.has(def.key), onToggle: () => { toggleStep(def.key); } }, def.key))) })] }))] }));
+                                    return (_jsxs("span", { className: "trc-badge", style: S.badge(cls), children: [_jsx("span", { className: "trc-badge-dot" }), CLS_LABEL[cls] || cls] }));
+                                })()] }), _jsxs("div", { className: "trc-meta-grid", children: [_jsxs("div", { className: "trc-meta-item", children: [_jsx("span", { className: "trc-meta-label", children: "\u6C60\u53F7:" }), _jsx("span", { className: "trc-meta-value", children: detailRecord.pool })] }), _jsxs("div", { className: "trc-meta-item", children: [_jsx("span", { className: "trc-meta-label", children: "\u4E0A\u62A5\u4EBA:" }), _jsx("span", { className: "trc-meta-value", children: detailRecord.reporter || '—' })] }), _jsxs("div", { className: "trc-meta-item", children: [_jsx("span", { className: "trc-meta-label", children: "\u6765\u6E90:" }), _jsx("span", { className: "trc-meta-value", children: SOURCE_LABEL[detailRecord.source] || detailRecord.source })] }), _jsxs("div", { className: "trc-meta-item", children: [_jsx("span", { className: "trc-meta-label", children: "\u65F6\u95F4:" }), _jsx("span", { className: "trc-meta-value", children: formatDateTime(detailRecord.created_at) })] }), _jsxs("div", { className: "trc-meta-item", children: [_jsx("span", { className: "trc-meta-label", children: "\u603B\u8017\u65F6:" }), _jsx("span", { className: "trc-meta-value", children: durationText(detailRecord.total_duration_ms) })] }), _jsxs("div", { className: "trc-meta-item", children: [_jsx("span", { className: "trc-meta-label", children: "\u6A21\u578B:" }), _jsx("span", { className: "trc-meta-value", children: detailRecord.model || '—' })] }), _jsxs("div", { className: "trc-meta-item", style: { gridColumn: '1 / -1' }, children: [_jsx("span", { className: "trc-meta-label", children: "Token:" }), _jsxs("span", { className: "trc-meta-value", children: ["input=", tokenText(detailRecord.span_analyze?.input_tokens ?? 0), " output=", tokenText(detailRecord.span_analyze?.output_tokens ?? 0)] })] })] }), _jsx(WaterfallChart, { record: detailRecord }), _jsx("div", { className: "trc-section-title", children: "\u6B65\u9AA4\u8BE6\u60C5" }), _jsx("div", { className: "trc-steps", children: SPAN_DEFS.map((def) => (_jsx(StepAccordion, { def: def, record: detailRecord, isOpen: openSteps.has(def.key), onToggle: () => { toggleStep(def.key); } }, def.key))) })] }))] }));
     }
     // ---------- 渲染：列表 ----------
     const groups = [];
@@ -368,14 +438,14 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
         }
         groups[groups.length - 1].items.push(r);
     }
-    return (_jsxs(_Fragment, { children: [_jsxs("div", { style: S.filterBar, children: [_jsx("select", { style: S.select, value: pool, onChange: (e) => { applyFilter(e.target.value, cls); }, "aria-label": "\u6309\u6C60\u53F7\u7B5B\u9009", children: POOL_OPTIONS.map((p) => _jsx("option", { value: p, children: p || '全部池号' }, p)) }), _jsx("select", { style: S.select, value: cls, onChange: (e) => { applyFilter(pool, e.target.value); }, "aria-label": "\u6309\u72B6\u6001\u7B5B\u9009", children: CLS_OPTIONS.map(([v, l]) => _jsx("option", { value: v, children: l }, v)) }), _jsxs("span", { style: { marginLeft: 'auto', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', alignSelf: 'center' }, children: [total, " \u6761\u8BB0\u5F55"] }), _jsx("button", { type: "button", style: { ...S.trendLink, marginTop: 0 }, onClick: () => {
+    return (_jsxs(_Fragment, { children: [_jsxs("div", { className: "trc-filterbar", children: [_jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: pool, onChange: (e) => { applyFilter(e.target.value, cls); }, "aria-label": "\u6309\u6C60\u53F7\u7B5B\u9009", children: POOL_OPTIONS.map((p) => _jsx("option", { value: p, children: p || '全部池号' }, p)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: cls, onChange: (e) => { applyFilter(pool, e.target.value); }, "aria-label": "\u6309\u72B6\u6001\u7B5B\u9009", children: CLS_OPTIONS.map(([v, l]) => _jsx("option", { value: v, children: l }, v)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-count", children: [total, " \u6761\u8BB0\u5F55"] }), _jsx("button", { type: "button", className: "trc-trend-btn", onClick: () => {
                             const targetPool = pool || '池1';
                             onOpenTrend?.(targetPool);
-                        }, children: "\uD83D\uDCC8 \u6C60\u53F7\u8D8B\u52BF\u5206\u6790 \u2192" })] }), _jsxs("div", { style: S.list, children: [error && (_jsxs("div", { style: S.err, children: [_jsx("div", { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' }, children: error }), _jsx("button", { type: "button", style: { ...S.moreBtn, marginTop: 8, width: 'auto', display: 'inline-block' }, onClick: () => { void fetchPage(true); }, children: "\u91CD\u8BD5" })] })), !error && records.length === 0 && !loading && _jsx("div", { style: S.empty, children: "\u6682\u65E0\u5206\u6790\u8BB0\u5F55" }), loading && records.length === 0 && _jsx("div", { style: S.empty, children: "\u52A0\u8F7D\u4E2D\u2026" }), groups.map((g) => (_jsxs("div", { children: [_jsx("div", { style: S.groupTitle, children: g.title }), g.items.map((r) => {
+                        }, children: "\uD83D\uDCC8 \u6C60\u53F7\u8D8B\u52BF\u5206\u6790 \u2192" })] }), _jsxs("div", { className: "trc-list", children: [error && (_jsxs("div", { className: "trc-err", children: [_jsx("div", { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' }, children: error }), _jsx("button", { type: "button", className: "trc-more-btn", style: { marginTop: 8, width: 'auto', display: 'inline-block', padding: '6px 14px', fontSize: 13 }, onClick: () => { void fetchPage(true); }, children: "\u91CD\u8BD5" })] })), !error && records.length === 0 && !loading && (_jsxs("div", { className: "trc-empty", children: [_jsx("span", { className: "trc-empty-icon", children: "\uD83D\uDC1F" }), _jsx("span", { children: "\u6682\u65E0\u5206\u6790\u8BB0\u5F55" })] })), loading && records.length === 0 && (_jsxs("div", { className: "trc-empty", children: [_jsx("span", { className: "trc-spin" }), _jsx("span", { children: "\u52A0\u8F7D\u4E2D\u2026" })] })), groups.map((g) => (_jsxs("div", { children: [_jsx("div", { className: "trc-group-title", children: g.title }), g.items.map((r) => {
                                 const clsName = CLS_LABEL[r.cls] || r.cls || '未知';
                                 const sym = r.symptoms?.length ? r.symptoms.join('、') : '无异常';
-                                return (_jsxs("button", { type: "button", style: S.row, onClick: () => { void openDetail(r.id); }, children: [_jsxs("div", { style: S.line1, children: [_jsx("span", { style: S.dot(r.cls) }), _jsx("span", { style: { fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: r.id }), _jsx("span", { style: { fontWeight: 600 }, children: r.pool }), _jsx("span", { style: { fontWeight: 600, color: CLS_COLOR[r.cls] || '#9ca3af' }, children: clsName }), _jsx("span", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: (r.confidence || 0).toFixed(2) }), _jsx("span", { style: { ...S.symptom, color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)' }, children: sym })] }), _jsxs("div", { style: S.line2, children: [_jsx("span", { children: timeText(r.created_at) }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: SOURCE_LABEL[r.source || ''] || r.source }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: r.alert_level ? 'AI视觉+知识库' : 'AI视觉' }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: durationText(r.total_duration_ms) }), _jsx("span", { children: "\u00B7" }), _jsxs("span", { children: [tokenText(r.total_tokens), " tokens"] })] })] }, r.id));
-                            })] }, g.title))), hasMore && !loading && (_jsx("button", { type: "button", style: S.moreBtn, onClick: () => { void fetchPage(false); }, children: "\u52A0\u8F7D\u66F4\u591A" })), loading && records.length > 0 && (_jsx("div", { style: { ...S.empty, padding: '20px 0' }, children: "\u52A0\u8F7D\u4E2D\u2026" }))] })] }));
+                                return (_jsxs("button", { type: "button", className: "trc-row", onClick: () => { void openDetail(r.id); }, children: [_jsxs("div", { className: "trc-line1", children: [_jsx("span", { className: "trc-dot", style: S.dot(r.cls) }), _jsx("span", { className: "trc-idchip", children: r.id }), _jsx("span", { style: { fontWeight: 600 }, children: r.pool }), _jsxs("span", { className: "trc-badge", style: S.badge(r.cls), children: [_jsx("span", { className: "trc-badge-dot" }), clsName] }), _jsx("span", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: (r.confidence || 0).toFixed(2) }), _jsx("span", { className: "trc-symptom", style: { color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)' }, children: sym })] }), _jsxs("div", { className: "trc-line2", children: [_jsx("span", { children: timeText(r.created_at) }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: SOURCE_LABEL[r.source || ''] || r.source }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: r.alert_level ? 'AI视觉+知识库' : 'AI视觉' }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: durationText(r.total_duration_ms) }), _jsx("span", { children: "\u00B7" }), _jsxs("span", { children: [tokenText(r.total_tokens), " tokens"] })] })] }, r.id));
+                            })] }, g.title))), hasMore && !loading && (_jsx("button", { type: "button", className: "trc-more-btn", onClick: () => { void fetchPage(false); }, children: "\u52A0\u8F7D\u66F4\u591A" })), loading && records.length > 0 && (_jsx("div", { className: "trc-empty", style: { padding: '20px 0' }, children: _jsx("span", { className: "trc-spin" }) }))] })] }));
 }
 export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports', onBack }) {
     const [pool, setPool] = useState(initPool);
@@ -416,8 +486,9 @@ export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports',
             .catch((err) => setError(err instanceof Error ? err.message : String(err)))
             .finally(() => setLoading(false));
     }, [pool, days, apiBase]);
-    if (loading)
-        return _jsx("div", { style: { padding: 20, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: "\u52A0\u8F7D\u4E2D\u2026" });
+    if (loading) {
+        return (_jsxs("div", { className: "trc-empty", style: { flex: 1 }, children: [_jsx("span", { className: "trc-spin" }), _jsx("span", { children: "\u52A0\u8F7D\u4E2D\u2026" })] }));
+    }
     if (error)
         return _jsxs("div", { style: { padding: 20, color: '#ff4d4f' }, children: ["\u52A0\u8F7D\u5931\u8D25: ", error] });
     if (!data)
@@ -430,15 +501,15 @@ export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports',
         ['disease', '发病', '#ff4d4f'],
         ['unknown', '未知', '#9ca3af']
     ];
-    return (_jsxs("div", { style: { flex: 1, overflow: 'auto' }, children: [_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' }, children: [_jsx("button", { type: "button", style: { padding: '4px 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 13, cursor: 'pointer' }, onClick: onBack, children: "\u2190 \u8FD4\u56DE\u5217\u8868" }), _jsx("select", { style: { padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 13, fontWeight: 600, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)', cursor: 'pointer' }, value: pool, onChange: (e) => setPool(e.target.value), children: pools.map((p) => _jsx("option", { value: p, children: p }, p)) }), _jsx("span", { style: { fontSize: 14, fontWeight: 600 }, children: "\u8D8B\u52BF\u5206\u6790" }), _jsx("span", { style: { marginLeft: 'auto' }, children: _jsxs("select", { style: { padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)' }, value: days, onChange: (e) => setDays(Number(e.target.value)), children: [_jsx("option", { value: 7, children: "\u8FD17\u5929" }), _jsx("option", { value: 30, children: "\u8FD130\u5929" }), _jsx("option", { value: 3650, children: "\u5168\u90E8" })] }) })] }), _jsxs("div", { style: { padding: '12px 16px 32px' }, children: [_jsxs("div", { style: { fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 16 }, children: ["\u8FD1 ", days, " \u5929\u5171 ", _jsx("b", { style: { color: 'var(--dsw-alias-label-primary,#17191c)' }, children: total }), " \u6761\u5206\u6790\u8BB0\u5F55"] }), _jsxs("div", { style: { marginBottom: 20 }, children: [_jsx("div", { style: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }, children: "\u2500\u2500 \u72B6\u6001\u5206\u5E03 \u2500\u2500" }), _jsx("div", { style: { background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, padding: 12 }, children: total > 0 ? distOrder.map(([key, label, color]) => {
-                                    const n = dist[key] || 0;
-                                    const pct = Math.round(n / total * 100);
-                                    return (_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }, children: [_jsx("span", { style: { width: 48, flexShrink: 0 }, children: label }), _jsx("div", { style: { flex: 1, height: 16, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', borderRadius: 4, overflow: 'hidden' }, children: _jsx("div", { style: { height: '100%', width: `${pct}%`, background: color, borderRadius: 4, transition: 'width 0.4s' } }) }), _jsxs("span", { style: { width: 96, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }, children: [pct, "% (", n, "\u6B21)"] })] }, key));
-                                }) : _jsx("div", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }, children: "\u6682\u65E0\u6570\u636E" }) })] }), _jsxs("div", { style: { marginBottom: 20 }, children: [_jsx("div", { style: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }, children: "\u2500\u2500 \u75C7\u72B6\u9891\u6B21 TOP \u2500\u2500" }), _jsx("div", { style: { background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, padding: 12 }, children: data.top_symptoms.length > 0 ? (() => {
-                                    const max = data.top_symptoms[0]?.count || 1;
-                                    return data.top_symptoms.map((s) => (_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }, children: [_jsx("span", { style: { width: 80, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: s.symptom }), _jsx("div", { style: { flex: 1, height: 14, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', borderRadius: 4, overflow: 'hidden' }, children: _jsx("div", { style: { height: '100%', width: `${Math.round(s.count / max * 100)}%`, background: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', borderRadius: 4 } }) }), _jsxs("span", { style: { width: 44, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }, children: [s.count, "\u6B21"] })] }, s.symptom)));
-                                })() : _jsx("div", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }, children: "\u6682\u65E0\u5F02\u5E38\u75C7\u72B6\u8BB0\u5F55" }) })] }), _jsxs("div", { children: [_jsx("div", { style: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }, children: "\u2500\u2500 \u6700\u8FD1\u8BB0\u5F55 \u2500\u2500" }), _jsx("div", { style: { background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, overflow: 'hidden' }, children: data.recent_records.length > 0 ? data.recent_records.map((r) => {
-                                    const sym = r.symptoms?.length ? r.symptoms.join('、') : '无异常';
-                                    return (_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e8eaed)', fontSize: 13 }, children: [_jsx("span", { style: { width: 44, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: timeText(r.created_at) }), _jsx("span", { style: { width: 44, flexShrink: 0, fontWeight: 600, color: CLS_COLOR[r.cls] || '#9ca3af' }, children: CLS_LABEL[r.cls] || r.cls }), _jsx("span", { style: { width: 36, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: (r.confidence || 0).toFixed(2) }), _jsx("span", { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: sym }), _jsx("span", { style: { flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: durationText(r.total_duration_ms) })] }, r.id));
-                                }) : _jsx("div", { style: { padding: 20, textAlign: 'center', color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: "\u6682\u65E0\u8BB0\u5F55" }) })] })] })] }));
+    return (_jsxs("div", { style: { flex: 1, overflow: 'auto' }, children: [_jsxs("div", { className: "trc-trend-top", children: [_jsx("button", { type: "button", className: "trc-back-link", onClick: onBack, children: "\u2190 \u8FD4\u56DE\u5217\u8868" }), _jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", style: { fontWeight: 600 }, value: pool, onChange: (e) => setPool(e.target.value), children: pools.map((p) => _jsx("option", { value: p, children: p }, p)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsx("span", { style: { fontSize: 14, fontWeight: 600 }, children: "\u8D8B\u52BF\u5206\u6790" }), _jsx("span", { style: { marginLeft: 'auto' }, children: _jsxs("span", { className: "trc-select-wrap", children: [_jsxs("select", { className: "trc-select", style: { fontSize: 12 }, value: days, onChange: (e) => setDays(Number(e.target.value)), children: [_jsx("option", { value: 7, children: "\u8FD17\u5929" }), _jsx("option", { value: 30, children: "\u8FD130\u5929" }), _jsx("option", { value: 3650, children: "\u5168\u90E8" })] }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }) })] }), _jsxs("div", { className: "trc-trend-body", children: [_jsxs("div", { className: "trc-kpis", children: [_jsxs("div", { className: "trc-kpi", children: [_jsx("span", { className: "trc-kpi-num", style: { color: 'var(--dsw-alias-label-primary,#17191c)' }, children: total }), _jsxs("span", { className: "trc-kpi-label", children: ["\u8FD1 ", days, " \u5929\u5206\u6790\u8BB0\u5F55"] })] }), distOrder.slice(0, 3).map(([key, label, color]) => (_jsxs("div", { className: "trc-kpi", children: [_jsx("span", { className: "trc-kpi-num", style: { color }, children: dist[key] || 0 }), _jsx("span", { className: "trc-kpi-label", children: label })] }, key)))] }), _jsxs("div", { className: "trc-card", children: [_jsx("div", { className: "trc-section-title", style: { margin: '0 0 12px' }, children: "\u72B6\u6001\u5206\u5E03" }), total > 0 ? distOrder.map(([key, label, color]) => {
+                                const n = dist[key] || 0;
+                                const pct = Math.round(n / total * 100);
+                                return (_jsxs("div", { className: "trc-bar-row", children: [_jsx("span", { style: { width: 48, flexShrink: 0 }, children: label }), _jsx("div", { className: "trc-bar-track", children: _jsx("div", { className: "trc-bar", style: S.bar(color, pct) }) }), _jsxs("span", { style: { width: 96, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }, children: [pct, "% (", n, "\u6B21)"] })] }, key));
+                            }) : _jsx("div", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }, children: "\u6682\u65E0\u6570\u636E" })] }), _jsxs("div", { className: "trc-card", children: [_jsx("div", { className: "trc-section-title", style: { margin: '0 0 12px' }, children: "\u75C7\u72B6\u9891\u6B21 TOP" }), data.top_symptoms.length > 0 ? (() => {
+                                const max = data.top_symptoms[0]?.count || 1;
+                                return data.top_symptoms.map((s) => (_jsxs("div", { className: "trc-bar-row", children: [_jsx("span", { style: { width: 80, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: s.symptom }), _jsx("div", { className: "trc-bar-track", style: { height: 14 }, children: _jsx("div", { className: "trc-bar", style: S.barAccent(Math.round(s.count / max * 100)) }) }), _jsxs("span", { style: { width: 44, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }, children: [s.count, "\u6B21"] })] }, s.symptom)));
+                            })() : _jsx("div", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }, children: "\u6682\u65E0\u5F02\u5E38\u75C7\u72B6\u8BB0\u5F55" })] }), _jsxs("div", { className: "trc-card", style: { marginBottom: 0 }, children: [_jsx("div", { className: "trc-section-title", style: { margin: '0 0 4px' }, children: "\u6700\u8FD1\u8BB0\u5F55" }), data.recent_records.length > 0 ? data.recent_records.map((r) => {
+                                const sym = r.symptoms?.length ? r.symptoms.join('、') : '无异常';
+                                return (_jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#e8eaed)', fontSize: 13 }, children: [_jsx("span", { style: { width: 44, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: timeText(r.created_at) }), _jsx("span", { className: "trc-badge", style: S.badge(r.cls), children: CLS_LABEL[r.cls] || r.cls }), _jsx("span", { style: { width: 36, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: (r.confidence || 0).toFixed(2) }), _jsx("span", { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: sym }), _jsx("span", { style: { flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: durationText(r.total_duration_ms) })] }, r.id));
+                            }) : _jsx("div", { style: { padding: 20, textAlign: 'center', color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: "\u6682\u65E0\u8BB0\u5F55" })] })] })] }));
 }

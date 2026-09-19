@@ -89,18 +89,18 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-ico{flex:none;display:block;width:16px;height:16px}
 .aqs-wrap.rail .aqs-ico{width:18px;height:18px}
 .aqs-txt{white-space:nowrap;overflow:hidden}
-.aqs-page{position:fixed;z-index:40;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#17191c)}
-.aqs-top{display:flex;align-items:center;gap:12px;flex:none;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
+.aqs-page{position:fixed;z-index:40;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;overflow:hidden;background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-primary,#17191c);box-shadow:0 12px 40px rgba(15,23,42,.14),0 0 0 1px var(--dsw-alias-border-l2,#e2e4e8)}
+.aqs-top{display:flex;align-items:center;gap:12px;flex:none;padding:10px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:linear-gradient(180deg,rgba(77,107,254,.06),rgba(77,107,254,0) 56px) var(--dsw-alias-bg-base,#fff)}
 /* 顶栏页签组：「每日任务提醒」与「📊 分析记录」（入口 C，R8 需求 v1.3）为同页
    切换的两个页签（role=tablist，样式对齐 SkillHub 插件广场「插件 / 技能」），
    后者在面板内容区以 React 组件直调 API 展示（去 iframe 化），不新开标签页 */
 .aqs-tabs{display:flex;align-items:center;gap:2px;min-width:0}
-.aqs-tab{position:relative;display:flex;align-items:center;gap:4px;padding:6px 10px;border:0;border-radius:8px;background:transparent;font:inherit;font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-secondary,#4b5563);cursor:pointer}
+.aqs-tab{position:relative;display:flex;align-items:center;gap:4px;padding:6px 10px;border:0;border-radius:8px;background:transparent;font:inherit;font-size:15px;font-weight:600;line-height:22px;color:var(--dsw-alias-label-secondary,#4b5563);cursor:pointer;transition:background .16s ease,color .16s ease}
 .aqs-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#17191c)}
 .aqs-tab.on{color:var(--dsw-alias-label-primary,#17191c)}
-.aqs-tab.on::after{content:'';position:absolute;left:10px;right:10px;bottom:1px;height:2px;border-radius:2px;background:var(--dsw-alias-button-primary-fill,#4d6bfe)}
-.aqs-close{margin-left:auto;width:32px;height:32px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-3,#fff);cursor:pointer;font-size:18px;line-height:1;color:var(--dsw-alias-label-secondary,#4b5563)}
-.aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
+.aqs-tab.on::after{content:'';position:absolute;left:10px;right:10px;bottom:1px;height:2.5px;border-radius:999px;background:linear-gradient(90deg,var(--dsw-alias-button-primary-fill,#4d6bfe),#8b5cf6)}
+.aqs-close{margin-left:auto;width:32px;height:32px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-3,#fff);cursor:pointer;font-size:18px;line-height:1;color:var(--dsw-alias-label-secondary,#4b5563);transition:background .16s ease,border-color .16s ease,color .16s ease}
+.aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);color:var(--dsw-alias-label-primary,#17191c)}
 .aqs-body{flex:1;min-height:0;overflow:auto;padding:18px 20px 32px}
 /* 分析记录页签:内容区去掉内边距,React 组件铺满(自带筛选条与滚动) */
 .aqs-body.flush{display:flex;flex-direction:column;padding:0;overflow:hidden}

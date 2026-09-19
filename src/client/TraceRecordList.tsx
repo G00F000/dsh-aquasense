@@ -133,83 +133,151 @@ const SPAN_DEFS: Array<{
   { key: 'ledger', label: '台账写入', icon: '📝', color: '#722ed1', field: 'span_ledger' }
 ]
 
-// ========== 内联样式(面板 token 体系) ==========
+// ========== 视觉增强样式(.trc-* 类,注入一次) ==========
+
+const TRACE_STYLE_ID = 'aquasense-trace-style'
+
+/**
+ * 分析记录页静态样式(类名 trc- 前缀):布局/hover/动画收敛于此;
+ * 动态颜色(状态色、瀑布图渐变)由内联样式提供。令牌沿用 DSH
+ * --dsw-alias-* 体系并保留亮色 fallback,兼容宿主暗色主题。
+ */
+const TRACE_CSS = `
+/* 筛选条 */
+.trc-filterbar{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);flex-shrink:0;background:var(--dsw-alias-bg-base,#fff)}
+.trc-select-wrap{position:relative;display:inline-flex;flex:none;min-width:0}
+.trc-select{appearance:none;width:100%;padding:7px 30px 7px 12px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:10px;background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-label-primary,#17191c);font:inherit;font-size:13px;line-height:20px;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease}
+.trc-select:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe)}
+.trc-select:focus-visible{outline:none;border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 0 0 3px rgba(77,107,254,.16)}
+.trc-select-caret{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:10px;line-height:1;color:var(--dsw-alias-label-secondary,#7b8088);pointer-events:none}
+.trc-count{display:inline-flex;align-items:center;margin-left:auto;padding:3px 10px;border-radius:999px;background:var(--dsw-alias-bg-secondary,#f0f2f5);color:var(--dsw-alias-label-secondary,#7b8088);font-size:12px;white-space:nowrap;flex:none}
+.trc-trend-btn{display:inline-flex;align-items:center;gap:5px;flex:none;padding:7px 14px;border:0;border-radius:10px;background:linear-gradient(135deg,#4d6bfe 0%,#7c5cf6 100%);color:#fff;font:inherit;font-size:13px;font-weight:600;line-height:20px;cursor:pointer;box-shadow:0 4px 14px rgba(77,107,254,.3);transition:box-shadow .18s ease,transform .18s ease,filter .18s ease}
+.trc-trend-btn:hover{box-shadow:0 6px 20px rgba(77,107,254,.45);transform:translateY(-1px);filter:saturate(1.12)}
+.trc-trend-btn:active{transform:translateY(0);box-shadow:0 2px 8px rgba(77,107,254,.3)}
+/* 列表区 */
+.trc-list{flex:1 1 auto;min-height:0;overflow:auto;padding:14px 20px 32px}
+.trc-group-title{display:flex;align-items:center;gap:8px;margin:20px 2px 10px;font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-group-title::after{content:'';flex:1;height:1px;background:var(--dsw-alias-border-l2,#e8eaed)}
+/* 记录卡片 */
+.trc-row{display:block;width:100%;box-sizing:border-box;margin-bottom:10px;padding:14px 16px;text-align:left;border:1px solid var(--dsw-alias-border-l2,#e8eaed);border-radius:14px;background:var(--dsw-alias-bg-layer-3,#fff);cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease}
+.trc-row:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 8px 24px rgba(77,107,254,.14);transform:translateY(-1px)}
+.trc-row:active{transform:translateY(0)}
+.trc-line1{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.trc-line2{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-dot{flex:none;width:9px;height:9px;border-radius:50%;animation:trc-pulse 2.4s ease-in-out infinite}
+@keyframes trc-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+.trc-idchip{display:inline-flex;align-items:center;padding:2px 10px;border-radius:8px;background:var(--dsw-alias-bg-secondary,#f0f2f5);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-badge{display:inline-flex;align-items:center;gap:5px;padding:1px 9px;border-radius:999px;font-size:11px;font-weight:700;line-height:18px;flex:none}
+.trc-badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.trc-symptom{flex:1 1 0;min-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+/* 空态 / 加载态 / 错误 */
+.trc-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:64px 0;text-align:center;color:var(--dsw-alias-label-secondary,#7b8088);font-size:13px}
+.trc-empty-icon{font-size:44px;line-height:1;animation:trc-float 3s ease-in-out infinite;filter:drop-shadow(0 6px 12px rgba(77,107,254,.2))}
+@keyframes trc-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.trc-spin{width:22px;height:22px;border-radius:50%;border:2px solid var(--dsw-alias-border-l2,#e2e4e8);border-top-color:var(--dsw-alias-button-primary-fill,#4d6bfe);animation:trc-spin .7s linear infinite}
+@keyframes trc-spin{to{transform:rotate(360deg)}}
+.trc-err{margin:4px 0 12px;padding:12px 14px;border-radius:12px;border:1px solid var(--dsw-alias-state-error-primary,#ff4d4f);background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-state-error-primary,#ff4d4f);font-size:13px}
+.trc-more-btn{display:block;width:100%;margin:16px 0 0;padding:10px;border:1px solid transparent;border-radius:12px;background:linear-gradient(var(--dsw-alias-bg-layer-3,#fff),var(--dsw-alias-bg-layer-3,#fff)) padding-box,linear-gradient(135deg,#4d6bfe,#7c5cf6) border-box;color:var(--dsw-alias-button-primary-fill,#4d6bfe);font:inherit;font-size:14px;cursor:pointer;transition:box-shadow .16s ease,transform .16s ease}
+.trc-more-btn:hover{box-shadow:0 4px 14px rgba(77,107,254,.18);transform:translateY(-1px)}
+/* ===== 详情态 ===== */
+.trc-detail{flex:1;overflow:auto;padding:16px 20px 36px;animation:trc-fade-up .28s ease}
+@keyframes trc-fade-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.trc-back{display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:10px;background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-button-primary-fill,#4d6bfe);font:inherit;font-size:13px;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease}
+.trc-back:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 2px 10px rgba(77,107,254,.14)}
+.trc-title{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:15px;font-weight:600;margin-bottom:16px}
+.trc-meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px}
+.trc-meta-item{display:flex;align-items:baseline;gap:8px;min-width:0;padding:10px 14px;border:1px solid var(--dsw-alias-border-l2,#e8eaed);border-radius:12px;background:var(--dsw-alias-bg-layer-3,#fff);font-size:13px;transition:border-color .16s ease}
+.trc-meta-item:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe)}
+.trc-meta-label{flex:none;color:var(--dsw-alias-label-secondary,#7b8088);white-space:nowrap}
+.trc-meta-value{color:var(--dsw-alias-label-primary,#17191c);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trc-section-title{display:flex;align-items:center;gap:8px;margin:22px 0 12px;font-size:13px;font-weight:700;color:var(--dsw-alias-label-primary,#17191c)}
+.trc-section-title::after{content:'';flex:1;height:1px;background:var(--dsw-alias-border-l2,#e8eaed)}
+/* 瀑布图 */
+.trc-wf{display:flex;flex-direction:column;gap:6px}
+.trc-wf-row{display:flex;align-items:center;gap:10px}
+.trc-wf-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;border-radius:9px;font-size:14px}
+.trc-wf-label{width:110px;flex:none;font-size:12px;color:var(--dsw-alias-label-primary,#17191c);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trc-wf-track{flex:1 1 auto;height:20px;border-radius:999px;background:var(--dsw-alias-bg-secondary,#f0f1f3);position:relative;overflow:hidden}
+.trc-wf-bar{position:absolute;top:0;left:0;height:100%;border-radius:999px;transition:width .5s cubic-bezier(.22,.61,.36,1)}
+.trc-wf-dur{width:46px;flex:none;font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088);text-align:right}
+.trc-wf-status{width:20px;flex:none;font-size:12px;text-align:center}
+/* 步骤 Accordion */
+.trc-steps{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
+.trc-step{border:1px solid var(--dsw-alias-border-l2,#e2e4e8);border-radius:12px;overflow:hidden;background:var(--dsw-alias-bg-layer-3,#fff);transition:border-color .16s ease,box-shadow .16s ease}
+.trc-step:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 2px 12px rgba(77,107,254,.1)}
+.trc-step-head{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border:0;background:transparent;cursor:pointer;font:inherit;font-size:13px;text-align:left;color:var(--dsw-alias-label-primary,#17191c)}
+.trc-step-icon{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;flex:none;border-radius:8px;font-size:13px}
+.trc-step-arrow{flex:none;font-size:10px;color:var(--dsw-alias-label-secondary,#7b8088);transition:transform .2s ease}
+.trc-step-right{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-step-body{padding:12px 14px;border-top:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-secondary,#f9fafb);font-size:13px;animation:trc-fade-up .2s ease}
+.trc-step-field{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px}
+.trc-step-label{color:var(--dsw-alias-label-secondary,#7b8088);white-space:nowrap}
+.trc-step-value{color:var(--dsw-alias-label-primary,#17191c);word-break:break-all;white-space:pre-wrap}
+.trc-excerpt{padding:8px 12px;margin-bottom:4px;border-radius:8px;background:var(--dsw-alias-bg-layer-3,#fff);border:1px solid var(--dsw-alias-border-l2,#e8eaed)}
+.trc-excerpt-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-primary,#17191c);margin-bottom:2px}
+.trc-excerpt-meta{font-size:11px;color:var(--dsw-alias-label-secondary,#7b8088);margin-bottom:2px}
+.trc-excerpt-text{font-size:12px;color:var(--dsw-alias-label-secondary,#555);font-style:italic}
+/* ===== 趋势态 ===== */
+.trc-trend-top{display:flex;align-items:center;gap:10px;padding:14px 20px;border-bottom:1px solid var(--dsw-alias-border-l2,#e2e4e8);background:var(--dsw-alias-bg-base,#fff)}
+.trc-trend-body{padding:16px 20px 36px;animation:trc-fade-up .28s ease}
+.trc-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:20px}
+.trc-kpi{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border:1px solid var(--dsw-alias-border-l2,#e8eaed);border-radius:14px;background:var(--dsw-alias-bg-layer-3,#fff);transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease}
+.trc-kpi:hover{border-color:var(--dsw-alias-button-primary-fill,#4d6bfe);box-shadow:0 4px 16px rgba(77,107,254,.12);transform:translateY(-1px)}
+.trc-kpi-num{font-size:24px;font-weight:700;line-height:1.1}
+.trc-kpi-label{font-size:12px;color:var(--dsw-alias-label-secondary,#7b8088)}
+.trc-card{padding:14px 16px;border:1px solid var(--dsw-alias-border-l2,#e8eaed);border-radius:14px;background:var(--dsw-alias-bg-layer-3,#fff);margin-bottom:20px}
+.trc-bar-row{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:13px}
+.trc-bar-track{flex:1;height:16px;border-radius:999px;background:var(--dsw-alias-bg-secondary,#f0f1f3);overflow:hidden}
+.trc-bar{height:100%;border-radius:999px;transition:width .5s cubic-bezier(.22,.61,.36,1)}
+.trc-back-link{display:inline-flex;align-items:center;gap:4px;flex:none;padding:5px 10px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-button-primary-fill,#4d6bfe);font:inherit;font-size:13px;cursor:pointer;transition:background .16s ease}
+.trc-back-link:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
+`
+
+/** 注入分析记录页样式(幂等,SSR 安全) */
+export function ensureTraceStyle(): void {
+  if (typeof document === 'undefined') return
+  let style = document.getElementById(TRACE_STYLE_ID)
+  if (!style) {
+    style = document.createElement('style')
+    style.id = TRACE_STYLE_ID
+    document.head.appendChild(style)
+  }
+  style.textContent = TRACE_CSS
+}
+
+// ========== 内联样式(仅动态颜色;布局/hover/动画由 .trc-* 类提供) ==========
 
 const S = {
-  /* 筛选条 */
-  filterBar: { display: 'flex', gap: 8, padding: '12px 20px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', flexShrink: 0 } satisfies CSSProperties,
-  select: { appearance: 'none', padding: '6px 28px 6px 10px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 8, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)', fontSize: 13, lineHeight: '20px' } satisfies CSSProperties,
-  /* 列表区 */
-  list: { flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '12px 20px 32px' } satisfies CSSProperties,
-  empty: { padding: '60px 0', textAlign: 'center', color: 'var(--dsw-alias-label-secondary,#7b8088)' } satisfies CSSProperties,
-  /* 日期分组标题 */
-  groupTitle: { margin: '18px 0 8px', fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)' } satisfies CSSProperties,
-  /* 记录行 */
-  row: { display: 'block', padding: '12px 14px', color: 'inherit', textDecoration: 'none', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', cursor: 'pointer', background: 'transparent' } satisfies CSSProperties,
-  /* 记录行第一行：圆点 + ID + 池号 + 状态 + 置信度 + 症状（同行） */
-  line1: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 13 } satisfies CSSProperties,
+  /** 状态圆点:发光 + 呼吸动画(类 .trc-dot) */
   dot: (cls: string): CSSProperties => ({
-    flex: 'none', width: 8, height: 8, borderRadius: '50%',
-    background: CLS_COLOR[cls] || '#9ca3af'
+    background: CLS_COLOR[cls] || '#9ca3af',
+    boxShadow: `0 0 8px ${CLS_COLOR[cls] || '#9ca3af'}`
   }),
-  /* 症状（同行，自动截断） */
-  symptom: { flex: '1 1 0', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 } satisfies CSSProperties,
-  /* 记录行第二行 */
-  line2: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' } satisfies CSSProperties,
-  /* 趋势链接 */
-  trendLink: { display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 20, fontSize: 14, color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', cursor: 'pointer', border: 0, background: 'transparent', padding: 0 } satisfies CSSProperties,
-  /* 加载更多 */
-  moreBtn: { display: 'block', width: '100%', margin: '16px 0 0', padding: 10, border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 14, cursor: 'pointer' } satisfies CSSProperties,
-  /* 错误 */
-  err: { margin: 12, padding: '10px 12px', borderRadius: 10, border: '1px solid #ff4d4f', background: 'var(--dsw-alias-bg-layer-3,#fff)', color: '#ff4d4f', fontSize: 13 } satisfies CSSProperties,
-
-  /* ===== 详情态 ===== */
-  detailWrap: { flex: 1, overflow: 'auto', padding: '16px 20px 32px' } satisfies CSSProperties,
-  detailBack: { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: 0, borderRadius: 8, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 14, cursor: 'pointer', marginBottom: 12 } satisfies CSSProperties,
-  /* 标题行：返回 + ID + 状态 */
-  detailTitle: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 15, fontWeight: 600, marginBottom: 16 } satisfies CSSProperties,
-  statusBadge: (cls: string): CSSProperties => ({
-    display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 10px', borderRadius: 999,
-    background: (CLS_COLOR[cls] || '#9ca3af') + '18',
-    color: CLS_COLOR[cls] || '#9ca3af', fontSize: 12, fontWeight: 600, flexShrink: 0
-  }),
-  /* 元信息区 */
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', fontSize: 13, padding: '12px 16px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary,#f4f5f7)', marginBottom: 20 } satisfies CSSProperties,
-  metaLabel: { color: 'var(--dsw-alias-label-secondary,#7b8088)', whiteSpace: 'nowrap' } satisfies CSSProperties,
-  metaValue: { color: 'var(--dsw-alias-label-primary,#17191c)' } satisfies CSSProperties,
-  /* 瀑布图 */
-  waterfallWrap: { marginBottom: 20 } satisfies CSSProperties,
-  sectionTitle: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' } satisfies CSSProperties,
-  waterfall: { display: 'flex', flexDirection: 'column', gap: 4 } satisfies CSSProperties,
-  wfRow: { display: 'flex', alignItems: 'center', gap: 8 } satisfies CSSProperties,
-  wfIcon: { width: 20, textAlign: 'center', fontSize: 14, flexShrink: 0 } satisfies CSSProperties,
-  wfLabel: { width: 110, fontSize: 12, color: 'var(--dsw-alias-label-primary,#17191c)', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } satisfies CSSProperties,
-  wfTrack: { flex: '1 1 auto', height: 18, borderRadius: 4, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', position: 'relative', overflow: 'hidden' } satisfies CSSProperties,
+  /** 状态徽章:半透明底 + 发光(类 .trc-badge 提供 pill 布局) */
+  badge: (cls: string): CSSProperties => {
+    const color = CLS_COLOR[cls] || '#9ca3af'
+    return { background: color + '1a', color, boxShadow: `0 0 10px ${color}40` }
+  },
+  /** 瀑布图条:渐变 + 发光(类 .trc-wf-bar 提供定位/动画) */
   wfBar: (color: string, pct: number): CSSProperties => ({
-    position: 'absolute', top: 0, left: 0, height: '100%', width: `${Math.max(pct, 2)}%`,
-    background: color, borderRadius: 4, transition: 'width 0.3s'
+    width: `${Math.max(pct, 2)}%`,
+    background: `linear-gradient(90deg, ${color}, ${color}b3)`,
+    boxShadow: `0 0 10px ${color}66`
   }),
-  wfDur: { width: 44, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', textAlign: 'right', flexShrink: 0 } satisfies CSSProperties,
-  wfStatus: { width: 20, fontSize: 12, textAlign: 'center', flexShrink: 0 } satisfies CSSProperties,
-
-  /* 步骤 Accordion */
-  stepsWrap: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 } satisfies CSSProperties,
-  stepItem: { border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, overflow: 'hidden' } satisfies CSSProperties,
-  stepHeader: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', background: 'var(--dsw-alias-bg-layer-3,#fff)', border: 0, width: '100%', textAlign: 'left', fontSize: 13, color: 'var(--dsw-alias-label-primary,#17191c)' } satisfies CSSProperties,
-  stepArrow: (open: boolean): CSSProperties => ({
-    transition: 'transform 0.2s', fontSize: 10, color: 'var(--dsw-alias-label-secondary,#7b8088)',
-    transform: open ? 'rotate(90deg)' : 'rotate(0deg)', flexShrink: 0
+  /** 图标圆底(类 .trc-wf-icon / .trc-step-icon 提供尺寸圆角) */
+  iconBg: (color: string): CSSProperties => ({ background: color + '1c' }),
+  /** 趋势分布条:渐变 + 发光(类 .trc-bar 提供动画) */
+  bar: (color: string, pct: number): CSSProperties => ({
+    width: `${pct}%`,
+    background: `linear-gradient(90deg, ${color}66, ${color})`,
+    boxShadow: `0 0 10px ${color}55`
   }),
-  stepHeaderRight: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' } satisfies CSSProperties,
-  stepBody: { padding: '10px 14px', borderTop: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', fontSize: 13, background: 'var(--dsw-alias-bg-secondary,#f9fafb)' } satisfies CSSProperties,
-  stepField: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', fontSize: 13 } satisfies CSSProperties,
-  stepLabel: { color: 'var(--dsw-alias-label-secondary,#7b8088)', whiteSpace: 'nowrap' } satisfies CSSProperties,
-  stepValue: { color: 'var(--dsw-alias-label-primary,#17191c)', wordBreak: 'break-all', whiteSpace: 'pre-wrap' } satisfies CSSProperties,
-  /* 知识库命中条目 */
-  excerptItem: { padding: '6px 10px', marginBottom: 4, borderRadius: 6, background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e8eaed)' } satisfies CSSProperties,
-  excerptTitle: { fontSize: 12, fontWeight: 600, color: 'var(--dsw-alias-label-primary,#17191c)', marginBottom: 2 } satisfies CSSProperties,
-  excerptMeta: { fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 2 } satisfies CSSProperties,
-  excerptText: { fontSize: 12, color: 'var(--dsw-alias-label-secondary,#555)', fontStyle: 'italic' } satisfies CSSProperties,
+  /** 症状 TOP 条:主色渐变 */
+  barAccent: (pct: number): CSSProperties => ({
+    width: `${pct}%`,
+    background: 'linear-gradient(90deg, #4d6bfe, #8b5cf6)',
+    boxShadow: '0 0 10px rgba(77,107,254,.4)'
+  })
 } as const
 
 // ========== 辅助 ==========
@@ -263,18 +331,18 @@ function WaterfallChart({ record }: { record: AnalysisRecord }): ReactNode {
   if (!hasAny) return null
 
   return (
-    <div style={S.waterfallWrap}>
-      <div style={S.sectionTitle}>── 瀑布图（Trace Timeline）──</div>
-      <div style={S.waterfall}>
+    <div style={{ marginBottom: 20 }}>
+      <div className="trc-section-title">瀑布图 · Trace Timeline</div>
+      <div className="trc-wf">
         {spans.map((s) => (
-          <div key={s.key} style={S.wfRow}>
-            <span style={S.wfIcon}>{s.icon}</span>
-            <span style={S.wfLabel}>{s.label}</span>
-            <div style={S.wfTrack}>
-              <div style={S.wfBar(s.color, (s.duration / total) * 100)} />
+          <div key={s.key} className="trc-wf-row">
+            <span className="trc-wf-icon" style={S.iconBg(s.color)}>{s.icon}</span>
+            <span className="trc-wf-label">{s.label}</span>
+            <div className="trc-wf-track">
+              <div className="trc-wf-bar" style={S.wfBar(s.color, (s.duration / total) * 100)} />
             </div>
-            <span style={S.wfDur}>{durationText(s.duration)}</span>
-            <span style={S.wfStatus}>{s.data?.error ? '❌' : (s.duration > 0 ? '✅' : '—')}</span>
+            <span className="trc-wf-dur">{durationText(s.duration)}</span>
+            <span className="trc-wf-status">{s.data?.error ? '❌' : (s.duration > 0 ? '✅' : '—')}</span>
           </div>
         ))}
       </div>
@@ -298,17 +366,18 @@ function StepAccordion({
   const dur = data?.duration_ms ?? 0
 
   return (
-    <div style={S.stepItem}>
-      <button type="button" style={S.stepHeader} onClick={onToggle}>
-        <span style={S.stepArrow(isOpen)}>▶</span>
-        <span>{def.icon} {def.label}</span>
-        <span style={S.stepHeaderRight}>
+    <div className="trc-step">
+      <button type="button" className="trc-step-head" onClick={onToggle}>
+        <span className="trc-step-icon" style={S.iconBg(def.color)}>{def.icon}</span>
+        <span style={{ fontWeight: 600 }}>{def.label}</span>
+        <span className="trc-step-right">
           <span>{durationText(dur)}</span>
           <span>{data?.error ? '❌' : (dur > 0 ? '✅' : '—')}</span>
+          <span className="trc-step-arrow" style={{ transform: isOpen ? 'rotate(90deg)' : undefined }}>▶</span>
         </span>
       </button>
       {isOpen && data && (
-        <div style={S.stepBody}>
+        <div className="trc-step-body">
           {renderStepContent(def.key, data, record)}
         </div>
       )}
@@ -336,24 +405,24 @@ function renderUploadStep(data: Record<string, unknown>): ReactNode {
   const err = data.error as string | undefined
 
   return (
-    <div style={S.stepField}>
-      <span style={S.stepLabel}>输入</span>
-      <span style={S.stepValue}>{imageCount} 张图片</span>
+    <div className="trc-step-field">
+      <span className="trc-step-label">输入</span>
+      <span className="trc-step-value">{imageCount} 张图片</span>
       {sizes.map((size, i) => (
         <>
-          <span key={`k${i}`} style={S.stepLabel}> </span>
-          <span key={`v${i}`} style={S.stepValue}>
+          <span key={`k${i}`} className="trc-step-label"> </span>
+          <span key={`v${i}`} className="trc-step-value">
             🐟 {names[i] || `image_${String(i + 1).padStart(3, '0')}`}
             {' '}({formatBytes(size)}{compressed[i] ? ` → ${formatBytes(compressed[i])}` : ''})
           </span>
         </>
       ))}
-      <span style={S.stepLabel}>输出</span>
-      <span style={S.stepValue}>{imageCount} 张图片已压缩并转为 base64</span>
+      <span className="trc-step-label">输出</span>
+      <span className="trc-step-value">{imageCount} 张图片已压缩并转为 base64</span>
       {err && (
         <>
-          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
-          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+          <span className="trc-step-label" style={{ color: '#ff4d4f' }}>错误</span>
+          <span className="trc-step-value" style={{ color: '#ff4d4f' }}>{err}</span>
         </>
       )}
     </div>
@@ -373,31 +442,31 @@ function renderAnalyzeStep(data: Record<string, unknown>, record?: AnalysisRecor
   const err = data.error as string | undefined
 
   return (
-    <div style={S.stepField}>
-      <span style={S.stepLabel}>模型</span>
-      <span style={S.stepValue}>{record?.model || '—'} (temperature=0.1)</span>
-      <span style={S.stepLabel}>输入</span>
-      <span style={S.stepValue}>system prompt ({promptLen} chars) + 图片</span>
-      <span style={S.stepLabel}>输出</span>
-      <span style={S.stepValue}>
+    <div className="trc-step-field">
+      <span className="trc-step-label">模型</span>
+      <span className="trc-step-value">{record?.model || '—'} (temperature=0.1)</span>
+      <span className="trc-step-label">输入</span>
+      <span className="trc-step-value">system prompt ({promptLen} chars) + 图片</span>
+      <span className="trc-step-label">输出</span>
+      <span className="trc-step-value">
         状态: {CLS_LABEL[cls] || cls}（{cls}）
         {'\n'}置信度: {confidence.toFixed(2)}
         {'\n'}症状: {symptoms.length > 0 ? symptoms.join('、') : '无异常'}
         {severity ? `\n严重度: ${severity}` : ''}
         {organs.length > 0 ? `\n器官: ${organs.join('、')}` : ''}
       </span>
-      <span style={S.stepLabel}>Token</span>
-      <span style={S.stepValue}>input={tokenText(inputTok)} output={tokenText(outputTok)}</span>
+      <span className="trc-step-label">Token</span>
+      <span className="trc-step-value">input={tokenText(inputTok)} output={tokenText(outputTok)}</span>
       {raw && (
         <>
-          <span style={S.stepLabel}>原始输出</span>
-          <span style={S.stepValue}>{raw}</span>
+          <span className="trc-step-label">原始输出</span>
+          <span className="trc-step-value">{raw}</span>
         </>
       )}
       {err && (
         <>
-          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
-          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+          <span className="trc-step-label" style={{ color: '#ff4d4f' }}>错误</span>
+          <span className="trc-step-value" style={{ color: '#ff4d4f' }}>{err}</span>
         </>
       )}
     </div>
@@ -414,26 +483,26 @@ function renderRetrieveStep(data: Record<string, unknown>): ReactNode {
   const err = data.error as string | undefined
 
   return (
-    <div style={S.stepField}>
-      <span style={S.stepLabel}>查询</span>
-      <span style={S.stepValue}>"{query}"</span>
-      <span style={S.stepLabel}>通道A (wiki)</span>
-      <span style={S.stepValue}>命中 {chA} 条</span>
-      <span style={S.stepLabel}>通道B (note)</span>
-      <span style={S.stepValue}>命中 {chB} 条</span>
-      <span style={S.stepLabel}>通道C (PDF)</span>
-      <span style={S.stepValue}>命中 {chC} 条</span>
-      <span style={S.stepLabel}>合并去重</span>
-      <span style={S.stepValue}>{merged} 条</span>
+    <div className="trc-step-field">
+      <span className="trc-step-label">查询</span>
+      <span className="trc-step-value">"{query}"</span>
+      <span className="trc-step-label">通道A (wiki)</span>
+      <span className="trc-step-value">命中 {chA} 条</span>
+      <span className="trc-step-label">通道B (note)</span>
+      <span className="trc-step-value">命中 {chB} 条</span>
+      <span className="trc-step-label">通道C (PDF)</span>
+      <span className="trc-step-value">命中 {chC} 条</span>
+      <span className="trc-step-label">合并去重</span>
+      <span className="trc-step-value">{merged} 条</span>
       {excerpts.length > 0 && (
         <>
-          <span style={S.stepLabel}>命中条目</span>
-          <span style={S.stepValue}>
+          <span className="trc-step-label">命中条目</span>
+          <span className="trc-step-value">
             {excerpts.map((ex, i) => (
-              <div key={i} style={S.excerptItem}>
-                <div style={S.excerptTitle}>📄 《{ex.title}》{ex.from ? `[${fromLabel(ex.from)}]` : ''}</div>
-                {ex.locator && <div style={S.excerptMeta}>{ex.locator}</div>}
-                <div style={S.excerptText}>「{ex.excerpt_preview}」</div>
+              <div key={i} className="trc-excerpt">
+                <div className="trc-excerpt-title">📄 《{ex.title}》{ex.from ? `[${fromLabel(ex.from)}]` : ''}</div>
+                {ex.locator && <div className="trc-excerpt-meta">{ex.locator}</div>}
+                <div className="trc-excerpt-text">「{ex.excerpt_preview}」</div>
               </div>
             ))}
           </span>
@@ -441,8 +510,8 @@ function renderRetrieveStep(data: Record<string, unknown>): ReactNode {
       )}
       {err && (
         <>
-          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
-          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+          <span className="trc-step-label" style={{ color: '#ff4d4f' }}>错误</span>
+          <span className="trc-step-value" style={{ color: '#ff4d4f' }}>{err}</span>
         </>
       )}
     </div>
@@ -457,19 +526,19 @@ function renderAdviceStep(data: Record<string, unknown>): ReactNode {
   const err = data.error as string | undefined
 
   return (
-    <div style={S.stepField}>
-      <span style={S.stepLabel}>预警级别</span>
-      <span style={S.stepValue}>{alertLevel || '—'}</span>
-      <span style={S.stepLabel}>知识来源</span>
-      <span style={S.stepValue}>{refsCount} 条</span>
-      <span style={S.stepLabel}>诊断</span>
-      <span style={S.stepValue}>{diagnosis || '—'}</span>
-      <span style={S.stepLabel}>推理</span>
-      <span style={S.stepValue}>{reasoning || '—'}</span>
+    <div className="trc-step-field">
+      <span className="trc-step-label">预警级别</span>
+      <span className="trc-step-value">{alertLevel || '—'}</span>
+      <span className="trc-step-label">知识来源</span>
+      <span className="trc-step-value">{refsCount} 条</span>
+      <span className="trc-step-label">诊断</span>
+      <span className="trc-step-value">{diagnosis || '—'}</span>
+      <span className="trc-step-label">推理</span>
+      <span className="trc-step-value">{reasoning || '—'}</span>
       {err && (
         <>
-          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
-          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+          <span className="trc-step-label" style={{ color: '#ff4d4f' }}>错误</span>
+          <span className="trc-step-value" style={{ color: '#ff4d4f' }}>{err}</span>
         </>
       )}
     </div>
@@ -485,33 +554,33 @@ function renderLedgerStep(data: Record<string, unknown>): ReactNode {
   const err = data.error as string | undefined
 
   return (
-    <div style={S.stepField}>
-      <span style={S.stepLabel}>目标表</span>
-      <span style={S.stepValue}>{table || '—'}</span>
-      <span style={S.stepLabel}>操作</span>
-      <span style={S.stepValue}>{op === 'create' ? '新增' : op === 'update' ? '更新' : op || '—'}</span>
+    <div className="trc-step-field">
+      <span className="trc-step-label">目标表</span>
+      <span className="trc-step-value">{table || '—'}</span>
+      <span className="trc-step-label">操作</span>
+      <span className="trc-step-value">{op === 'create' ? '新增' : op === 'update' ? '更新' : op || '—'}</span>
       {recId && (
         <>
-          <span style={S.stepLabel}>记录ID</span>
-          <span style={S.stepValue}>{recId}</span>
+          <span className="trc-step-label">记录ID</span>
+          <span className="trc-step-value">{recId}</span>
         </>
       )}
       {success !== undefined && (
         <>
-          <span style={S.stepLabel}>结果</span>
-          <span style={S.stepValue}>{success ? '✅ 成功' : '❌ 失败'}</span>
+          <span className="trc-step-label">结果</span>
+          <span className="trc-step-value">{success ? '✅ 成功' : '❌ 失败'}</span>
         </>
       )}
       {message && (
         <>
-          <span style={S.stepLabel}>信息</span>
-          <span style={S.stepValue}>{message}</span>
+          <span className="trc-step-label">信息</span>
+          <span className="trc-step-value">{message}</span>
         </>
       )}
       {err && (
         <>
-          <span style={{ ...S.stepLabel, color: '#ff4d4f' }}>错误</span>
-          <span style={{ ...S.stepValue, color: '#ff4d4f' }}>{err}</span>
+          <span className="trc-step-label" style={{ color: '#ff4d4f' }}>错误</span>
+          <span className="trc-step-value" style={{ color: '#ff4d4f' }}>{err}</span>
         </>
       )}
     </div>
@@ -544,6 +613,10 @@ interface TraceRecordListProps {
 export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }: TraceRecordListProps): ReactNode {
   // --- 列表状态 ---
   const [records, setRecords] = useState<RecordSummary[]>([])
+
+  useEffect(() => {
+    ensureTraceStyle()
+  }, [])
   const [total, setTotal] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [offset, setOffset] = useState(0)
@@ -660,12 +733,17 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
 
   if (detailId) {
     return (
-      <div style={S.detailWrap}>
-        {detailLoading && <div style={S.empty}>加载中…</div>}
+      <div className="trc-detail">
+        {detailLoading && (
+          <div className="trc-empty">
+            <span className="trc-spin" />
+            <span>加载中…</span>
+          </div>
+        )}
         {detailError && (
-          <div style={S.err}>
+          <div className="trc-err">
             <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{detailError}</div>
-            <button type="button" style={{ ...S.moreBtn, marginTop: 8, width: 'auto', display: 'inline-block' }} onClick={backToList}>
+            <button type="button" className="trc-more-btn" style={{ marginTop: 8, width: 'auto', display: 'inline-block', padding: '6px 14px', fontSize: 13 }} onClick={backToList}>
               返回列表
             </button>
           </div>
@@ -673,48 +751,60 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
         {detailRecord && (
           <div>
             {/* 标题行：返回 + ID + 池号 + 状态 */}
-            <div style={S.detailTitle}>
-              <button type="button" style={S.detailBack} onClick={backToList}>← 返回</button>
-              <span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>
-                {detailRecord.id}
-              </span>
+            <div className="trc-title">
+              <button type="button" className="trc-back" onClick={backToList}>← 返回</button>
+              <span className="trc-idchip">{detailRecord.id}</span>
               <span style={{ fontWeight: 600 }}>{detailRecord.pool}</span>
               <span style={{ fontWeight: 600 }}>巡检分析</span>
               {(() => {
                 const cls = detailRecord.span_analyze?.cls ?? 'unknown'
                 return (
-                  <span style={S.statusBadge(cls)}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: CLS_COLOR[cls] || '#9ca3af' }} />
+                  <span className="trc-badge" style={S.badge(cls)}>
+                    <span className="trc-badge-dot" />
                     {CLS_LABEL[cls] || cls}
                   </span>
                 )
               })()}
             </div>
 
-            {/* 元信息区（原型图：水平布局） */}
-            <div style={S.metaGrid}>
-              <span style={S.metaLabel}>池号:</span>
-              <span style={S.metaValue}>{detailRecord.pool}</span>
-              <span style={S.metaLabel}>上报人:</span>
-              <span style={S.metaValue}>{detailRecord.reporter || '—'}</span>
-              <span style={S.metaLabel}>来源:</span>
-              <span style={S.metaValue}>{SOURCE_LABEL[detailRecord.source] || detailRecord.source}</span>
-              <span style={S.metaLabel}>时间:</span>
-              <span style={S.metaValue}>{formatDateTime(detailRecord.created_at)}</span>
-              <span style={S.metaLabel}>总耗时:</span>
-              <span style={S.metaValue}>{durationText(detailRecord.total_duration_ms)}</span>
-              <span style={S.metaLabel}>模型:</span>
-              <span style={S.metaValue}>{detailRecord.model || '—'}</span>
-              <span style={S.metaLabel}>Token:</span>
-              <span style={S.metaValue}>input={tokenText(detailRecord.span_analyze?.input_tokens ?? 0)} output={tokenText(detailRecord.span_analyze?.output_tokens ?? 0)}</span>
+            {/* 元信息区（卡片网格，Token 项横跨整行） */}
+            <div className="trc-meta-grid">
+              <div className="trc-meta-item">
+                <span className="trc-meta-label">池号:</span>
+                <span className="trc-meta-value">{detailRecord.pool}</span>
+              </div>
+              <div className="trc-meta-item">
+                <span className="trc-meta-label">上报人:</span>
+                <span className="trc-meta-value">{detailRecord.reporter || '—'}</span>
+              </div>
+              <div className="trc-meta-item">
+                <span className="trc-meta-label">来源:</span>
+                <span className="trc-meta-value">{SOURCE_LABEL[detailRecord.source] || detailRecord.source}</span>
+              </div>
+              <div className="trc-meta-item">
+                <span className="trc-meta-label">时间:</span>
+                <span className="trc-meta-value">{formatDateTime(detailRecord.created_at)}</span>
+              </div>
+              <div className="trc-meta-item">
+                <span className="trc-meta-label">总耗时:</span>
+                <span className="trc-meta-value">{durationText(detailRecord.total_duration_ms)}</span>
+              </div>
+              <div className="trc-meta-item">
+                <span className="trc-meta-label">模型:</span>
+                <span className="trc-meta-value">{detailRecord.model || '—'}</span>
+              </div>
+              <div className="trc-meta-item" style={{ gridColumn: '1 / -1' }}>
+                <span className="trc-meta-label">Token:</span>
+                <span className="trc-meta-value">input={tokenText(detailRecord.span_analyze?.input_tokens ?? 0)} output={tokenText(detailRecord.span_analyze?.output_tokens ?? 0)}</span>
+              </div>
             </div>
 
             {/* 瀑布图 */}
             <WaterfallChart record={detailRecord} />
 
             {/* 步骤 Accordion */}
-            <div style={S.sectionTitle}>── 步骤详情（Accordion 展开）──</div>
-            <div style={S.stepsWrap}>
+            <div className="trc-section-title">步骤详情</div>
+            <div className="trc-steps">
               {SPAN_DEFS.map((def) => (
                 <StepAccordion
                   key={def.key}
@@ -747,27 +837,33 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
   return (
     <>
       {/* 筛选条 */}
-      <div style={S.filterBar}>
-        <select
-          style={S.select}
-          value={pool}
-          onChange={(e) => { applyFilter(e.target.value, cls) }}
-          aria-label="按池号筛选"
-        >
-          {POOL_OPTIONS.map((p) => <option key={p} value={p}>{p || '全部池号'}</option>)}
-        </select>
-        <select
-          style={S.select}
-          value={cls}
-          onChange={(e) => { applyFilter(pool, e.target.value) }}
-          aria-label="按状态筛选"
-        >
-          {CLS_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', alignSelf: 'center' }}>{total} 条记录</span>
+      <div className="trc-filterbar">
+        <span className="trc-select-wrap">
+          <select
+            className="trc-select"
+            value={pool}
+            onChange={(e) => { applyFilter(e.target.value, cls) }}
+            aria-label="按池号筛选"
+          >
+            {POOL_OPTIONS.map((p) => <option key={p} value={p}>{p || '全部池号'}</option>)}
+          </select>
+          <span className="trc-select-caret">▾</span>
+        </span>
+        <span className="trc-select-wrap">
+          <select
+            className="trc-select"
+            value={cls}
+            onChange={(e) => { applyFilter(pool, e.target.value) }}
+            aria-label="按状态筛选"
+          >
+            {CLS_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <span className="trc-select-caret">▾</span>
+        </span>
+        <span className="trc-count">{total} 条记录</span>
         <button
           type="button"
-          style={{ ...S.trendLink, marginTop: 0 }}
+          className="trc-trend-btn"
           onClick={() => {
             const targetPool = pool || '池1'
             onOpenTrend?.(targetPool)
@@ -778,21 +874,31 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
       </div>
 
       {/* 列表区 */}
-      <div style={S.list}>
+      <div className="trc-list">
         {error && (
-          <div style={S.err}>
+          <div className="trc-err">
             <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{error}</div>
-            <button type="button" style={{ ...S.moreBtn, marginTop: 8, width: 'auto', display: 'inline-block' }} onClick={() => { void fetchPage(true) }}>
+            <button type="button" className="trc-more-btn" style={{ marginTop: 8, width: 'auto', display: 'inline-block', padding: '6px 14px', fontSize: 13 }} onClick={() => { void fetchPage(true) }}>
               重试
             </button>
           </div>
         )}
-        {!error && records.length === 0 && !loading && <div style={S.empty}>暂无分析记录</div>}
-        {loading && records.length === 0 && <div style={S.empty}>加载中…</div>}
+        {!error && records.length === 0 && !loading && (
+          <div className="trc-empty">
+            <span className="trc-empty-icon">🐟</span>
+            <span>暂无分析记录</span>
+          </div>
+        )}
+        {loading && records.length === 0 && (
+          <div className="trc-empty">
+            <span className="trc-spin" />
+            <span>加载中…</span>
+          </div>
+        )}
 
         {groups.map((g) => (
           <div key={g.title}>
-            <div style={S.groupTitle}>{g.title}</div>
+            <div className="trc-group-title">{g.title}</div>
             {g.items.map((r) => {
               const clsName = CLS_LABEL[r.cls] || r.cls || '未知'
               const sym = r.symptoms?.length ? r.symptoms.join('、') : '无异常'
@@ -800,18 +906,21 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
                 <button
                   key={r.id}
                   type="button"
-                  style={S.row}
+                  className="trc-row"
                   onClick={() => { void openDetail(r.id) }}
                 >
-                  <div style={S.line1}>
-                    <span style={S.dot(r.cls)} />
-                    <span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>{r.id}</span>
+                  <div className="trc-line1">
+                    <span className="trc-dot" style={S.dot(r.cls)} />
+                    <span className="trc-idchip">{r.id}</span>
                     <span style={{ fontWeight: 600 }}>{r.pool}</span>
-                    <span style={{ fontWeight: 600, color: CLS_COLOR[r.cls] || '#9ca3af' }}>{clsName}</span>
-                    <span style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>{(r.confidence || 0).toFixed(2)}</span>
-                    <span style={{ ...S.symptom, color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)' }}>{sym}</span>
+                    <span className="trc-badge" style={S.badge(r.cls)}>
+                      <span className="trc-badge-dot" />
+                      {clsName}
+                    </span>
+                    <span style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{(r.confidence || 0).toFixed(2)}</span>
+                    <span className="trc-symptom" style={{ color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)' }}>{sym}</span>
                   </div>
-                  <div style={S.line2}>
+                  <div className="trc-line2">
                     <span>{timeText(r.created_at)}</span><span>·</span>
                     <span>{SOURCE_LABEL[r.source || ''] || r.source}</span><span>·</span>
                     <span>{r.alert_level ? 'AI视觉+知识库' : 'AI视觉'}</span><span>·</span>
@@ -826,12 +935,14 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
 
         {/* 加载更多 */}
         {hasMore && !loading && (
-          <button type="button" style={S.moreBtn} onClick={() => { void fetchPage(false) }}>
+          <button type="button" className="trc-more-btn" onClick={() => { void fetchPage(false) }}>
             加载更多
           </button>
         )}
         {loading && records.length > 0 && (
-          <div style={{ ...S.empty, padding: '20px 0' }}>加载中…</div>
+          <div className="trc-empty" style={{ padding: '20px 0' }}>
+            <span className="trc-spin" />
+          </div>
         )}
       </div>
     </>
@@ -893,7 +1004,14 @@ export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports',
       .finally(() => setLoading(false))
   }, [pool, days, apiBase])
 
-  if (loading) return <div style={{ padding: 20, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>加载中…</div>
+  if (loading) {
+    return (
+      <div className="trc-empty" style={{ flex: 1 }}>
+        <span className="trc-spin" />
+        <span>加载中…</span>
+      </div>
+    )
+  }
   if (error) return <div style={{ padding: 20, color: '#ff4d4f' }}>加载失败: {error}</div>
   if (!data) return <div style={{ padding: 20, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>无数据</div>
 
@@ -909,86 +1027,95 @@ export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports',
   return (
     <div style={{ flex: 1, overflow: 'auto' }}>
       {/* 标题栏 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' }}>
-        <button type="button" style={{ padding: '4px 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 13, cursor: 'pointer' }} onClick={onBack}>
+      <div className="trc-trend-top">
+        <button type="button" className="trc-back-link" onClick={onBack}>
           ← 返回列表
         </button>
         {/* 水池下拉框 */}
-        <select style={{ padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 13, fontWeight: 600, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)', cursor: 'pointer' }} value={pool} onChange={(e) => setPool(e.target.value)}>
-          {pools.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
+        <span className="trc-select-wrap">
+          <select className="trc-select" style={{ fontWeight: 600 }} value={pool} onChange={(e) => setPool(e.target.value)}>
+            {pools.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <span className="trc-select-caret">▾</span>
+        </span>
         <span style={{ fontSize: 14, fontWeight: 600 }}>趋势分析</span>
         <span style={{ marginLeft: 'auto' }}>
-          <select style={{ padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)' }} value={days} onChange={(e) => setDays(Number(e.target.value))}>
-            <option value={7}>近7天</option>
-            <option value={30}>近30天</option>
-            <option value={3650}>全部</option>
-          </select>
+          <span className="trc-select-wrap">
+            <select className="trc-select" style={{ fontSize: 12 }} value={days} onChange={(e) => setDays(Number(e.target.value))}>
+              <option value={7}>近7天</option>
+              <option value={30}>近30天</option>
+              <option value={3650}>全部</option>
+            </select>
+            <span className="trc-select-caret">▾</span>
+          </span>
         </span>
       </div>
 
-      <div style={{ padding: '12px 16px 32px' }}>
-        {/* 概览 */}
-        <div style={{ fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 16 }}>
-          近 {days} 天共 <b style={{ color: 'var(--dsw-alias-label-primary,#17191c)' }}>{total}</b> 条分析记录
+      <div className="trc-trend-body">
+        {/* KPI 概览卡 */}
+        <div className="trc-kpis">
+          <div className="trc-kpi">
+            <span className="trc-kpi-num" style={{ color: 'var(--dsw-alias-label-primary,#17191c)' }}>{total}</span>
+            <span className="trc-kpi-label">近 {days} 天分析记录</span>
+          </div>
+          {distOrder.slice(0, 3).map(([key, label, color]) => (
+            <div key={key} className="trc-kpi">
+              <span className="trc-kpi-num" style={{ color }}>{dist[key] || 0}</span>
+              <span className="trc-kpi-label">{label}</span>
+            </div>
+          ))}
         </div>
 
         {/* 状态分布 */}
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }}>── 状态分布 ──</div>
-          <div style={{ background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, padding: 12 }}>
-            {total > 0 ? distOrder.map(([key, label, color]) => {
-              const n = dist[key] || 0
-              const pct = Math.round(n / total * 100)
-              return (
-                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }}>
-                  <span style={{ width: 48, flexShrink: 0 }}>{label}</span>
-                  <div style={{ flex: 1, height: 16, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 4, transition: 'width 0.4s' }} />
-                  </div>
-                  <span style={{ width: 96, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }}>{pct}% ({n}次)</span>
+        <div className="trc-card">
+          <div className="trc-section-title" style={{ margin: '0 0 12px' }}>状态分布</div>
+          {total > 0 ? distOrder.map(([key, label, color]) => {
+            const n = dist[key] || 0
+            const pct = Math.round(n / total * 100)
+            return (
+              <div key={key} className="trc-bar-row">
+                <span style={{ width: 48, flexShrink: 0 }}>{label}</span>
+                <div className="trc-bar-track">
+                  <div className="trc-bar" style={S.bar(color, pct)} />
                 </div>
-              )
-            }) : <div style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }}>暂无数据</div>}
-          </div>
+                <span style={{ width: 96, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }}>{pct}% ({n}次)</span>
+              </div>
+            )
+          }) : <div style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }}>暂无数据</div>}
         </div>
 
         {/* 症状频次 */}
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }}>── 症状频次 TOP ──</div>
-          <div style={{ background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, padding: 12 }}>
-            {data.top_symptoms.length > 0 ? (() => {
-              const max = data.top_symptoms[0]?.count || 1
-              return data.top_symptoms.map((s) => (
-                <div key={s.symptom} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }}>
-                  <span style={{ width: 80, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.symptom}</span>
-                  <div style={{ flex: 1, height: 14, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${Math.round(s.count / max * 100)}%`, background: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', borderRadius: 4 }} />
-                  </div>
-                  <span style={{ width: 44, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }}>{s.count}次</span>
+        <div className="trc-card">
+          <div className="trc-section-title" style={{ margin: '0 0 12px' }}>症状频次 TOP</div>
+          {data.top_symptoms.length > 0 ? (() => {
+            const max = data.top_symptoms[0]?.count || 1
+            return data.top_symptoms.map((s) => (
+              <div key={s.symptom} className="trc-bar-row">
+                <span style={{ width: 80, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.symptom}</span>
+                <div className="trc-bar-track" style={{ height: 14 }}>
+                  <div className="trc-bar" style={S.barAccent(Math.round(s.count / max * 100))} />
                 </div>
-              ))
-            })() : <div style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }}>暂无异常症状记录</div>}
-          </div>
+                <span style={{ width: 44, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }}>{s.count}次</span>
+              </div>
+            ))
+          })() : <div style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }}>暂无异常症状记录</div>}
         </div>
 
         {/* 最近记录 */}
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }}>── 最近记录 ──</div>
-          <div style={{ background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, overflow: 'hidden' }}>
-            {data.recent_records.length > 0 ? data.recent_records.map((r) => {
-              const sym = r.symptoms?.length ? r.symptoms.join('、') : '无异常'
-              return (
-                <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e8eaed)', fontSize: 13 }}>
-                  <span style={{ width: 44, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{timeText(r.created_at)}</span>
-                  <span style={{ width: 44, flexShrink: 0, fontWeight: 600, color: CLS_COLOR[r.cls] || '#9ca3af' }}>{CLS_LABEL[r.cls] || r.cls}</span>
-                  <span style={{ width: 36, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{(r.confidence || 0).toFixed(2)}</span>
-                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>{sym}</span>
-                  <span style={{ flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{durationText(r.total_duration_ms)}</span>
-                </div>
-              )
-            }) : <div style={{ padding: 20, textAlign: 'center', color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>暂无记录</div>}
-          </div>
+        <div className="trc-card" style={{ marginBottom: 0 }}>
+          <div className="trc-section-title" style={{ margin: '0 0 4px' }}>最近记录</div>
+          {data.recent_records.length > 0 ? data.recent_records.map((r) => {
+            const sym = r.symptoms?.length ? r.symptoms.join('、') : '无异常'
+            return (
+              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--dsw-alias-border-l2,#e8eaed)', fontSize: 13 }}>
+                <span style={{ width: 44, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{timeText(r.created_at)}</span>
+                <span className="trc-badge" style={S.badge(r.cls)}>{CLS_LABEL[r.cls] || r.cls}</span>
+                <span style={{ width: 36, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{(r.confidence || 0).toFixed(2)}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>{sym}</span>
+                <span style={{ flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{durationText(r.total_duration_ms)}</span>
+              </div>
+            )
+          }) : <div style={{ padding: 20, textAlign: 'center', color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>暂无记录</div>}
         </div>
       </div>
     </div>
