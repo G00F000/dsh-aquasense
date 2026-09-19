@@ -113,10 +113,10 @@ export const recordLedger = defineTool({
             };
         }
         // 池号校验:缺失时返回追问(Agent 转述给工人),不落脏数据
-        const fields = args.fields;
-        // pool_id 与 fields.池号 冲突检测:两者都有值且不同时拒绝写入,防止静默覆盖
+        const frozenFields = args.fields;
+        // pool_id 与 frozenFields.池号 冲突检测:两者都有值且不同时拒绝写入,防止静默覆盖
         // 必须在 ?? 合并之前做,否则比较永远相等(死代码)
-        const fieldPoolId = fields?.['池号'] !== undefined ? String(fields['池号']).trim() : undefined;
+        const fieldPoolId = frozenFields?.['池号'] !== undefined ? String(frozenFields['池号']).trim() : undefined;
         const argPoolId = args.pool_id?.trim();
         if (fieldPoolId && argPoolId && fieldPoolId !== argPoolId) {
             return {
@@ -162,8 +162,8 @@ export const recordLedger = defineTool({
             reporterName = fallback;
         }
         // 非 inspection 场景必须提供 fields:缺失时返回列名提示(Agent 补全后重调)
-        // mutableFields:局部可变引用,dissection 回退 analysis.organs 时可能需要初始化
-        const mutableFields = fields ? { ...fields } : undefined;
+        // mutableFields:浅拷贝入参,DSH 宿主 deepFreeze 冻结入参后不可原地修改
+        let mutableFields = frozenFields ? { ...frozenFields } : undefined;
         if (scene !== 'inspection' && !(mutableFields && Object.keys(mutableFields).length > 0)) {
             return {
                 success: false,
@@ -172,15 +172,17 @@ export const recordLedger = defineTool({
         }
         // dissection 场景:「解剖器官」只允许下拉框选项,归一为多选数组,不写入自由文本
         // 优先级:Agent 显式提供的 fields["解剖器官"] > analysis.organs(视觉模型识别) > 追问
+        // resolvedFields:dissection 器官归一化的结果,传入 buildFields 以确保修改后的值被正确使用
+        let resolvedFields;
         if (scene === 'dissection') {
             const analysisOrgans = args.analysis?.organs;
-            if (fields && fields['解剖器官'] !== undefined) {
-                // Agent 显式提供:归一化校验
-                const { organs, unknown } = normalizeDissectionOrgans(fields['解剖器官']);
+            if (mutableFields && mutableFields['解剖器官'] !== undefined) {
+                // Agent 显式提供:归一化校验(mutableFields 是入参浅拷贝,可安全修改)
+                const { organs, unknown } = normalizeDissectionOrgans(mutableFields['解剖器官']);
                 if (organs.length === 0) {
                     return {
                         success: false,
-                        message: `「解剖器官」只能从下拉选项中选择(当前值 ${JSON.stringify(fields['解剖器官'])} 无法识别)。合法选项:${DISSECTION_ORGAN_OPTIONS.join('/')}`,
+                        message: `「解剖器官」只能从下拉选项中选择(当前值 ${JSON.stringify(mutableFields['解剖器官'])} 无法识别)。合法选项:${DISSECTION_ORGAN_OPTIONS.join('/')}`,
                         missing: ['解剖器官'],
                         questions: [`解剖器官请从以下选项中选(可多选):${DISSECTION_ORGAN_OPTIONS.join('/')}`]
                     };
@@ -188,18 +190,19 @@ export const recordLedger = defineTool({
                 if (unknown.length > 0) {
                     console.warn(`[aquasense] 解剖器官忽略无法识别的内容:${unknown.join('、')}`);
                 }
-                fields['解剖器官'] = organs;
+                mutableFields['解剖器官'] = organs;
+                resolvedFields = mutableFields;
             }
             else if (Array.isArray(analysisOrgans) && analysisOrgans.length > 0) {
                 // 回退到视觉模型识别的 organs(已归一化,可直接使用)
-                if (!mutableFields) {
-                    const newFields = { '解剖器官': analysisOrgans };
-                    args.fields = newFields;
+                // mutableFields 来自 frozenFields 浅拷贝:无 fields 时创建空对象承载 organs
+                // 注意:不要写回 args.fields(DSH deepFreeze 冻结了整个 args),仅在 mutableFields 中记录,
+                // buildFields 会通过 resolvedFields 参数读取
+                const target = mutableFields ?? (mutableFields = { '解剖器官': analysisOrgans });
+                if (!target['解剖器官']) {
+                    target['解剖器官'] = analysisOrgans;
                 }
-                else {
-                    mutableFields['解剖器官'] = analysisOrgans;
-                    args.fields = mutableFields;
-                }
+                resolvedFields = target;
                 console.log(`[aquasense] dissection 回退:使用 aquasense_analyze 识别的器官 [${analysisOrgans.join('/')}]`);
             }
             else {
@@ -215,7 +218,7 @@ export const recordLedger = defineTool({
         // 上报人仍无法确定(fields 也未显式提供人列):返回追问,不写"未知"等脏数据
         // 同时拦截占位符值(如 "未知")写入台账
         const reporterCol = REPORTER_COLUMN[scene];
-        const fieldReporter = reporterCol && fields ? String(fields[reporterCol] || '') : '';
+        const fieldReporter = reporterCol && mutableFields ? String(mutableFields[reporterCol] || '') : '';
         const isValidReporter = (name) => name.trim() && !REPORTER_BLOCKLIST.has(name.trim());
         if (!isValidReporter(reporterName) && !isValidReporter(fieldReporter)) {
             return {
@@ -227,7 +230,7 @@ export const recordLedger = defineTool({
         }
         let recordFields;
         try {
-            recordFields = await buildFields(scene, args, poolId, reporterName);
+            recordFields = await buildFields(scene, args, poolId, reporterName, resolvedFields);
         }
         catch (error) {
             return {
@@ -404,7 +407,7 @@ async function findRecentRecord(token, appToken, tableId, poolId, timeColumn) {
         return null;
     }
 }
-async function buildFields(scene, args, poolId, reporterName) {
+async function buildFields(scene, args, poolId, reporterName, resolvedFields) {
     const analysis = args.analysis;
     const advice = args.advice;
     const fields = {};
@@ -431,8 +434,10 @@ async function buildFields(scene, args, poolId, reporterName) {
             ? [analysis.symptoms]
             : [];
     // 显式 fields 优先(其他场景必须由 Agent 提供)
-    if (args.fields && Object.keys(args.fields).length > 0) {
-        Object.assign(fields, args.fields);
+    // resolvedFields:dissection 场景器官归一化后的可变副本,优先于 args.fields(DSH 冻结不可变)
+    const srcFields = resolvedFields ?? args.fields;
+    if (srcFields && Object.keys(srcFields).length > 0) {
+        Object.assign(fields, srcFields);
         fields['池号'] = poolId;
         // 「人」字段以发消息用户为准:open_id 解析成功时覆盖,防止字段里的记忆/猜测姓名顶替真实上报人
         const reporterCol = REPORTER_COLUMN[scene];
@@ -447,11 +452,29 @@ async function buildFields(scene, args, poolId, reporterName) {
         else if (timeCol && timeCol in fields) {
             // Agent 传入字符串日期(如 "2026-03-01 08:20")时自动解析为毫秒时间戳
             const timeVal = fields[timeCol];
+            let resolvedTime = null;
             if (typeof timeVal === 'string') {
                 const parsed = Date.parse(timeVal);
                 if (!Number.isNaN(parsed)) {
-                    fields[timeCol] = parsed;
+                    resolvedTime = parsed;
                 }
+            }
+            else if (typeof timeVal === 'number' && Number.isFinite(timeVal)) {
+                resolvedTime = timeVal;
+            }
+            // 时间戳合理性校验:拒绝超过 1 年前或未来超过 10 分钟的脏值(破坏 30 分钟去重窗口)
+            if (resolvedTime !== null) {
+                const now = Date.now();
+                const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+                const FUTURE_TOLERANCE_MS = 10 * 60 * 1000;
+                if (now - resolvedTime > ONE_YEAR_MS) {
+                    throw new Error(`时间列「${timeCol}」值 ${resolvedTime} 超出合理范围(超过 1 年前),请提供正确的日期时间`);
+                }
+                if (resolvedTime - now > FUTURE_TOLERANCE_MS) {
+                    console.warn(`[aquasense] 时间列「${timeCol}」值 ${resolvedTime} 在未来,使用当前时间`);
+                    resolvedTime = now;
+                }
+                fields[timeCol] = resolvedTime;
             }
         }
         // 自动填充「图片」字段(未显式提供时)

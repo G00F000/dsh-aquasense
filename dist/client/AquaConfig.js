@@ -21,7 +21,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { RemindForm, useRemindConfig } from './RemindForm.js';
-import { TraceRecordList } from './TraceRecordList.js';
+import { TraceRecordList, TraceTrendView } from './TraceRecordList.js';
 /** 非当前页签内容的隐藏样式(保留挂载:不丢表单草稿与列表页滚动/筛选状态) */
 const HIDDEN = { display: 'none' };
 const STYLE_ID = 'aquasense-config-style';
@@ -56,8 +56,8 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
 .aqs-body{flex:1;min-height:0;overflow:auto;padding:18px 20px 32px}
 /* 分析记录页签:内容区去掉内边距,React 组件铺满(自带筛选条与滚动) */
-.aqs-body.flush{display:flex;padding:0;overflow:hidden}
-.aqs-reports{display:flex;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
+.aqs-body.flush{display:flex;flex-direction:column;padding:0;overflow:hidden}
+.aqs-reports{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
 .aqs-form{max-width:760px}
 `;
 /** 注入入口/配置页样式(幂等;返回无操作清理器以适配 ctx.effect) */
@@ -120,6 +120,8 @@ function AquaConfigPage({ box, t, api, onClose }) {
     // v1.3:改用 TraceRecordList React 组件直接调 API(不再 iframe,规避跨域/代理路径不通)
     // 切换用 display 控制,保留表单草稿与列表页状态;首次切到 reports 时才挂载
     const [reportsOn, setReportsOn] = useState(false);
+    // 趋势分析状态：记录当前查看的池号
+    const [trendPool, setTrendPool] = useState('');
     useEffect(() => {
         const onKey = (event) => {
             if (event.key !== 'Escape')
@@ -137,7 +139,10 @@ function AquaConfigPage({ box, t, api, onClose }) {
                                 }, children: t('page.title') }), _jsxs("button", { type: "button", role: "tab", className: 'aqs-tab' + (tab === 'reports' ? ' on' : ''), "aria-selected": tab === 'reports', onClick: () => {
                                     setReportsOn(true);
                                     setTab('reports');
-                                }, children: ["\uD83D\uDCCA ", t('page.tab.reports')] })] }), _jsx("button", { type: "button", className: "aqs-close", onClick: onClose, "aria-label": t('page.close'), title: t('page.close'), children: "\u00D7" })] }), _jsxs("div", { className: 'aqs-body' + (tab === 'reports' ? ' flush' : ''), children: [_jsx("div", { className: "aqs-form", style: tab === 'remind' ? undefined : HIDDEN, children: _jsx(RemindForm, { model: model, t: t }) }), reportsOn ? (_jsx("div", { className: "aqs-reports", style: tab === 'reports' ? undefined : HIDDEN, children: _jsx(TraceRecordList, {}) })) : null] })] }));
+                                }, children: ["\uD83D\uDCCA ", t('page.tab.reports')] })] }), _jsx("button", { type: "button", className: "aqs-close", onClick: onClose, "aria-label": t('page.close'), title: t('page.close'), children: "\u00D7" })] }), _jsxs("div", { className: 'aqs-body' + (tab === 'reports' || tab === 'trend' ? ' flush' : ''), children: [_jsx("div", { className: "aqs-form", style: tab === 'remind' ? undefined : HIDDEN, children: _jsx(RemindForm, { model: model, t: t }) }), reportsOn ? (_jsx("div", { className: "aqs-reports", style: tab === 'reports' ? undefined : HIDDEN, children: _jsx(TraceRecordList, { onOpenTrend: (pool) => {
+                                setTrendPool(pool);
+                                setTab('trend');
+                            } }) })) : null, tab === 'trend' && trendPool ? (_jsx("div", { className: "aqs-reports", style: { width: '100%', height: '100%' }, children: _jsx(TraceTrendView, { pool: trendPool, onBack: () => { setTab('reports'); } }) })) : null] })] }));
 }
 /**
  * 入口图标:三道水波线性 SVG,规格与插件广场入口图标(PlazaIcon)同风格——

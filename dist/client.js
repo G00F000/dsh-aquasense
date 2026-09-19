@@ -607,7 +607,6 @@ function RemindForm({ model, t }) {
 
 //#endregion
 //#region src/client/TraceRecordList.tsx
-/** 详情接口信封 = 单条 TraceRecord */
 const PAGE_LIMIT = 20;
 const POOL_OPTIONS = [
 	"",
@@ -624,16 +623,60 @@ const CLS_OPTIONS = [
 	["unknown", "未知"]
 ];
 const CLS_LABEL = {
-	normal: "正常",
-	early: "前兆",
-	disease: "发病",
-	unknown: "未知"
+	normal: "normal",
+	early: "early",
+	disease: "disease",
+	unknown: "unknown"
+};
+const CLS_COLOR = {
+	normal: "#52c41a",
+	early: "#faad14",
+	disease: "#ff4d4f",
+	unknown: "#9ca3af"
 };
 const SOURCE_LABEL = {
 	h5_upload: "H5上传",
 	group_chat: "群聊发图",
 	api: "API"
 };
+/** 步骤配置 */
+const SPAN_DEFS = [
+	{
+		key: "upload",
+		label: "图片上传",
+		icon: "📷",
+		color: "#8c8c8c",
+		field: "span_upload"
+	},
+	{
+		key: "analyze",
+		label: "AI 视觉分析",
+		icon: "🧠",
+		color: "#1677ff",
+		field: "span_analyze"
+	},
+	{
+		key: "retrieve",
+		label: "知识库检索",
+		icon: "📚",
+		color: "#fa8c16",
+		field: "span_retrieve"
+	},
+	{
+		key: "advice",
+		label: "处置建议生成",
+		icon: "💡",
+		color: "#52c41a",
+		field: "span_advice"
+	},
+	{
+		key: "ledger",
+		label: "台账写入",
+		icon: "📝",
+		color: "#722ed1",
+		field: "span_ledger"
+	}
+];
 const S = {
 	filterBar: {
 		display: "flex",
@@ -689,13 +732,16 @@ const S = {
 		width: 8,
 		height: 8,
 		borderRadius: "50%",
-		background: {
-			normal: "#52c41a",
-			early: "#faad14",
-			disease: "#ff4d4f",
-			unknown: "#9ca3af"
-		}[cls] || "#9ca3af"
+		background: CLS_COLOR[cls] || "#9ca3af"
 	}),
+	symptom: {
+		flex: "1 1 0",
+		minWidth: 80,
+		overflow: "hidden",
+		textOverflow: "ellipsis",
+		whiteSpace: "nowrap",
+		fontSize: 13
+	},
 	line2: {
 		display: "flex",
 		flexWrap: "wrap",
@@ -704,11 +750,17 @@ const S = {
 		fontSize: 12,
 		color: "var(--dsw-alias-label-secondary,#7b8088)"
 	},
-	chip: {
-		padding: "1px 8px",
-		borderRadius: 999,
-		background: "var(--dsw-alias-bg-secondary,#eef2f7)",
-		fontSize: 12
+	trendLink: {
+		display: "inline-flex",
+		alignItems: "center",
+		gap: 4,
+		marginTop: 20,
+		fontSize: 14,
+		color: "var(--dsw-alias-button-primary-fill,#4d6bfe)",
+		cursor: "pointer",
+		border: 0,
+		background: "transparent",
+		padding: 0
 	},
 	moreBtn: {
 		display: "block",
@@ -745,19 +797,188 @@ const S = {
 		cursor: "pointer",
 		marginBottom: 12
 	},
-	detailGrid: {
+	detailTitle: {
+		display: "flex",
+		alignItems: "center",
+		gap: 10,
+		fontSize: 15,
+		fontWeight: 600,
+		marginBottom: 16
+	},
+	statusBadge: (cls) => ({
+		display: "inline-flex",
+		alignItems: "center",
+		gap: 4,
+		padding: "2px 10px",
+		borderRadius: 999,
+		background: (CLS_COLOR[cls] || "#9ca3af") + "18",
+		color: CLS_COLOR[cls] || "#9ca3af",
+		fontSize: 12,
+		fontWeight: 600,
+		flexShrink: 0
+	}),
+	metaGrid: {
 		display: "grid",
 		gridTemplateColumns: "auto 1fr",
-		gap: "8px 12px",
-		fontSize: 14
+		gap: "6px 16px",
+		fontSize: 13,
+		padding: "12px 16px",
+		borderRadius: 8,
+		background: "var(--dsw-alias-bg-secondary,#f4f5f7)",
+		marginBottom: 20
 	},
-	detailLabel: {
+	metaLabel: {
 		color: "var(--dsw-alias-label-secondary,#7b8088)",
 		whiteSpace: "nowrap"
 	},
-	detailValue: {
+	metaValue: { color: "var(--dsw-alias-label-primary,#17191c)" },
+	waterfallWrap: { marginBottom: 20 },
+	sectionTitle: {
+		fontSize: 13,
+		fontWeight: 600,
+		color: "var(--dsw-alias-label-secondary,#7b8088)",
+		marginBottom: 10,
+		paddingBottom: 6,
+		borderBottom: "1px solid var(--dsw-alias-border-l2,#e2e4e8)"
+	},
+	waterfall: {
+		display: "flex",
+		flexDirection: "column",
+		gap: 4
+	},
+	wfRow: {
+		display: "flex",
+		alignItems: "center",
+		gap: 8
+	},
+	wfIcon: {
+		width: 20,
+		textAlign: "center",
+		fontSize: 14,
+		flexShrink: 0
+	},
+	wfLabel: {
+		width: 110,
+		fontSize: 12,
 		color: "var(--dsw-alias-label-primary,#17191c)",
-		wordBreak: "break-all"
+		flexShrink: 0,
+		overflow: "hidden",
+		textOverflow: "ellipsis",
+		whiteSpace: "nowrap"
+	},
+	wfTrack: {
+		flex: "1 1 auto",
+		height: 18,
+		borderRadius: 4,
+		background: "var(--dsw-alias-bg-secondary,#f0f1f3)",
+		position: "relative",
+		overflow: "hidden"
+	},
+	wfBar: (color, pct) => ({
+		position: "absolute",
+		top: 0,
+		left: 0,
+		height: "100%",
+		width: `${Math.max(pct, 2)}%`,
+		background: color,
+		borderRadius: 4,
+		transition: "width 0.3s"
+	}),
+	wfDur: {
+		width: 44,
+		fontSize: 12,
+		color: "var(--dsw-alias-label-secondary,#7b8088)",
+		textAlign: "right",
+		flexShrink: 0
+	},
+	wfStatus: {
+		width: 20,
+		fontSize: 12,
+		textAlign: "center",
+		flexShrink: 0
+	},
+	stepsWrap: {
+		display: "flex",
+		flexDirection: "column",
+		gap: 8,
+		marginBottom: 20
+	},
+	stepItem: {
+		border: "1px solid var(--dsw-alias-border-l2,#e2e4e8)",
+		borderRadius: 8,
+		overflow: "hidden"
+	},
+	stepHeader: {
+		display: "flex",
+		alignItems: "center",
+		gap: 8,
+		padding: "10px 14px",
+		cursor: "pointer",
+		background: "var(--dsw-alias-bg-layer-3,#fff)",
+		border: 0,
+		width: "100%",
+		textAlign: "left",
+		fontSize: 13,
+		color: "var(--dsw-alias-label-primary,#17191c)"
+	},
+	stepArrow: (open) => ({
+		transition: "transform 0.2s",
+		fontSize: 10,
+		color: "var(--dsw-alias-label-secondary,#7b8088)",
+		transform: open ? "rotate(90deg)" : "rotate(0deg)",
+		flexShrink: 0
+	}),
+	stepHeaderRight: {
+		marginLeft: "auto",
+		display: "flex",
+		alignItems: "center",
+		gap: 8,
+		fontSize: 12,
+		color: "var(--dsw-alias-label-secondary,#7b8088)"
+	},
+	stepBody: {
+		padding: "10px 14px",
+		borderTop: "1px solid var(--dsw-alias-border-l2,#e2e4e8)",
+		fontSize: 13,
+		background: "var(--dsw-alias-bg-secondary,#f9fafb)"
+	},
+	stepField: {
+		display: "grid",
+		gridTemplateColumns: "auto 1fr",
+		gap: "4px 12px",
+		fontSize: 13
+	},
+	stepLabel: {
+		color: "var(--dsw-alias-label-secondary,#7b8088)",
+		whiteSpace: "nowrap"
+	},
+	stepValue: {
+		color: "var(--dsw-alias-label-primary,#17191c)",
+		wordBreak: "break-all",
+		whiteSpace: "pre-wrap"
+	},
+	excerptItem: {
+		padding: "6px 10px",
+		marginBottom: 4,
+		borderRadius: 6,
+		background: "var(--dsw-alias-bg-layer-3,#fff)",
+		border: "1px solid var(--dsw-alias-border-l2,#e8eaed)"
+	},
+	excerptTitle: {
+		fontSize: 12,
+		fontWeight: 600,
+		color: "var(--dsw-alias-label-primary,#17191c)",
+		marginBottom: 2
+	},
+	excerptMeta: {
+		fontSize: 11,
+		color: "var(--dsw-alias-label-secondary,#7b8088)",
+		marginBottom: 2
+	},
+	excerptText: {
+		fontSize: 12,
+		color: "var(--dsw-alias-label-secondary,#555)",
+		fontStyle: "italic"
 	}
 };
 function dayKey(iso) {
@@ -784,7 +1005,495 @@ function durationText(ms) {
 function tokenText(n) {
 	return n > 0 ? n.toLocaleString("en-US") : "—";
 }
-function TraceRecordList({ apiBase = "/aquasense-reports" }) {
+function formatDateTime(iso) {
+	const d = new Date(iso);
+	const p = (n) => (n < 10 ? "0" : "") + n;
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+/** 瀑布图：5 个 span 的时间轴可视化 */
+function WaterfallChart({ record }) {
+	const spans = SPAN_DEFS.map((def) => ({
+		...def,
+		data: record[def.field],
+		duration: record[def.field]?.duration_ms ?? 0
+	}));
+	const total = record.total_duration_ms || 1;
+	if (!spans.some((s) => s.duration > 0)) return null;
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: S.waterfallWrap,
+		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			style: S.sectionTitle,
+			children: "── 瀑布图（Trace Timeline）──"
+		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			style: S.waterfall,
+			children: spans.map((s) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: S.wfRow,
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						style: S.wfIcon,
+						children: s.icon
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						style: S.wfLabel,
+						children: s.label
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: S.wfTrack,
+						children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: S.wfBar(s.color, s.duration / total * 100) })
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						style: S.wfDur,
+						children: durationText(s.duration)
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						style: S.wfStatus,
+						children: s.data?.error ? "❌" : s.duration > 0 ? "✅" : "—"
+					})
+				]
+			}, s.key))
+		})]
+	});
+}
+/** 单个步骤 Accordion */
+function StepAccordion({ def, record, isOpen, onToggle }) {
+	const data = record[def.field];
+	const dur = data?.duration_ms ?? 0;
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: S.stepItem,
+		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+			type: "button",
+			style: S.stepHeader,
+			onClick: onToggle,
+			children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					style: S.stepArrow(isOpen),
+					children: "▶"
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [
+					def.icon,
+					" ",
+					def.label
+				] }),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					style: S.stepHeaderRight,
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: durationText(dur) }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: data?.error ? "❌" : dur > 0 ? "✅" : "—" })]
+				})
+			]
+		}), isOpen && data && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			style: S.stepBody,
+			children: renderStepContent(def.key, data, record)
+		})]
+	});
+}
+/** 根据步骤类型渲染不同内容 */
+function renderStepContent(key, data, record) {
+	switch (key) {
+		case "upload": return renderUploadStep(data);
+		case "analyze": return renderAnalyzeStep(data, record);
+		case "retrieve": return renderRetrieveStep(data);
+		case "advice": return renderAdviceStep(data);
+		case "ledger": return renderLedgerStep(data);
+		default: return null;
+	}
+}
+function renderUploadStep(data) {
+	const imageCount = data.image_count ?? 0;
+	const sizes = data.image_sizes ?? [];
+	const compressed = data.compressed_sizes ?? [];
+	const names = data.image_names ?? [];
+	const err = data.error;
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: S.stepField,
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "输入"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [imageCount, " 张图片"]
+			}),
+			sizes.map((size, i) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: " "
+			}, `k${i}`), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [
+					"🐟 ",
+					names[i] || `image_${String(i + 1).padStart(3, "0")}`,
+					" ",
+					"(",
+					formatBytes(size),
+					compressed[i] ? ` → ${formatBytes(compressed[i])}` : "",
+					")"
+				]
+			}, `v${i}`)] })),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "输出"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [imageCount, " 张图片已压缩并转为 base64"]
+			}),
+			err && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepLabel,
+					color: "#ff4d4f"
+				},
+				children: "错误"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepValue,
+					color: "#ff4d4f"
+				},
+				children: err
+			})] })
+		]
+	});
+}
+function renderAnalyzeStep(data, record) {
+	const cls = data.cls ?? "unknown";
+	const confidence = data.confidence ?? 0;
+	const symptoms = data.symptoms ?? [];
+	const severity = data.severity ?? "";
+	const organs = data.organs ?? [];
+	const promptLen = data.prompt_length ?? 0;
+	const inputTok = data.input_tokens ?? 0;
+	const outputTok = data.output_tokens ?? 0;
+	const raw = data.output_raw ?? "";
+	const err = data.error;
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: S.stepField,
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "模型"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [record?.model || "—", " (temperature=0.1)"]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "输入"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [
+					"system prompt (",
+					promptLen,
+					" chars) + 图片"
+				]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "输出"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [
+					"状态: ",
+					CLS_LABEL[cls] || cls,
+					"（",
+					cls,
+					"）",
+					"\n",
+					"置信度: ",
+					confidence.toFixed(2),
+					"\n",
+					"症状: ",
+					symptoms.length > 0 ? symptoms.join("、") : "无异常",
+					severity ? `\n严重度: ${severity}` : "",
+					organs.length > 0 ? `\n器官: ${organs.join("、")}` : ""
+				]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "Token"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [
+					"input=",
+					tokenText(inputTok),
+					" output=",
+					tokenText(outputTok)
+				]
+			}),
+			raw && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "原始输出"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: raw
+			})] }),
+			err && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepLabel,
+					color: "#ff4d4f"
+				},
+				children: "错误"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepValue,
+					color: "#ff4d4f"
+				},
+				children: err
+			})] })
+		]
+	});
+}
+function renderRetrieveStep(data) {
+	const query = data.query ?? "";
+	const chA = data.channel_a_wiki ?? 0;
+	const chB = data.channel_b_note ?? 0;
+	const chC = data.channel_c_pdf ?? 0;
+	const merged = data.merged_count ?? 0;
+	const excerpts = data.excerpts ?? [];
+	const err = data.error;
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: S.stepField,
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "查询"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [
+					"\"",
+					query,
+					"\""
+				]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "通道A (wiki)"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [
+					"命中 ",
+					chA,
+					" 条"
+				]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "通道B (note)"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [
+					"命中 ",
+					chB,
+					" 条"
+				]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "通道C (PDF)"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [
+					"命中 ",
+					chC,
+					" 条"
+				]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "合并去重"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [merged, " 条"]
+			}),
+			excerpts.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "命中条目"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: excerpts.map((ex, i) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: S.excerptItem,
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: S.excerptTitle,
+							children: [
+								"📄 《",
+								ex.title,
+								"》",
+								ex.from ? `[${fromLabel(ex.from)}]` : ""
+							]
+						}),
+						ex.locator && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: S.excerptMeta,
+							children: ex.locator
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: S.excerptText,
+							children: [
+								"「",
+								ex.excerpt_preview,
+								"」"
+							]
+						})
+					]
+				}, i))
+			})] }),
+			err && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepLabel,
+					color: "#ff4d4f"
+				},
+				children: "错误"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepValue,
+					color: "#ff4d4f"
+				},
+				children: err
+			})] })
+		]
+	});
+}
+function renderAdviceStep(data) {
+	const alertLevel = data.alert_level ?? "";
+	const refsCount = data.knowledge_refs_count ?? 0;
+	const diagnosis = data.diagnosis_summary ?? "";
+	const reasoning = data.reasoning_preview ?? "";
+	const err = data.error;
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: S.stepField,
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "预警级别"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: alertLevel || "—"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "知识来源"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				style: S.stepValue,
+				children: [refsCount, " 条"]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "诊断"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: diagnosis || "—"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "推理"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: reasoning || "—"
+			}),
+			err && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepLabel,
+					color: "#ff4d4f"
+				},
+				children: "错误"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepValue,
+					color: "#ff4d4f"
+				},
+				children: err
+			})] })
+		]
+	});
+}
+function renderLedgerStep(data) {
+	const table = data.target_table ?? "";
+	const op = data.operation ?? "";
+	const recId = data.record_id ?? "";
+	const success = data.success;
+	const message = data.message ?? "";
+	const err = data.error;
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: S.stepField,
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "目标表"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: table || "—"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "操作"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: op === "create" ? "新增" : op === "update" ? "更新" : op || "—"
+			}),
+			recId && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "记录ID"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: recId
+			})] }),
+			success !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "结果"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: success ? "✅ 成功" : "❌ 失败"
+			})] }),
+			message && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepLabel,
+				children: "信息"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: S.stepValue,
+				children: message
+			})] }),
+			err && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepLabel,
+					color: "#ff4d4f"
+				},
+				children: "错误"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				style: {
+					...S.stepValue,
+					color: "#ff4d4f"
+				},
+				children: err
+			})] })
+		]
+	});
+}
+/** 知识来源通道名翻译 */
+function fromLabel(from) {
+	return {
+		pdf_content: "PDF",
+		note: "笔记",
+		wiki: "wiki"
+	}[from] || from;
+}
+/** 字节格式化 */
+function formatBytes(bytes) {
+	if (bytes < 1024) return bytes + "B";
+	if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + "KB";
+	return (bytes / (1024 * 1024)).toFixed(1) + "MB";
+}
+function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 	const [records, setRecords] = (0, react.useState)([]);
 	const [total, setTotal] = (0, react.useState)(0);
 	const [hasMore, setHasMore] = (0, react.useState)(false);
@@ -797,7 +1506,7 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 	const [detailRecord, setDetailRecord] = (0, react.useState)(null);
 	const [detailLoading, setDetailLoading] = (0, react.useState)(false);
 	const [detailError, setDetailError] = (0, react.useState)(null);
-	/** 获取记录列表;错误信息区分网络/HTTP/信封三类 */
+	const [openSteps, setOpenSteps] = (0, react.useState)(/* @__PURE__ */ new Set());
 	const fetchPage = (0, react.useCallback)(async (reset) => {
 		if (loading) return;
 		setLoading(true);
@@ -810,14 +1519,11 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 			try {
 				resp = await fetch(url);
 			} catch (netErr) {
-				throw new Error(`网络错误(${netErr instanceof Error ? netErr.message : String(netErr)})
-请求: ${url}`);
+				throw new Error(`网络错误(${netErr instanceof Error ? netErr.message : String(netErr)})\n请求: ${url}`);
 			}
-			if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}
-请求: ${url}`);
+			if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}\n请求: ${url}`);
 			const body = await resp.json();
-			if (!body?.ok) throw new Error(body?.error?.message || `接口返回失败
-请求: ${url}`);
+			if (!body?.ok) throw new Error(body?.error?.message || `接口返回失败\n请求: ${url}`);
 			const page = body.value;
 			setRecords(reset ? page.records : [...records, ...page.records]);
 			setTotal(page.total);
@@ -837,7 +1543,6 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 		records,
 		apiBase
 	]);
-	/** 筛选变更 → 重置列表 */
 	const applyFilter = (0, react.useCallback)((newPool, newCls) => {
 		setPool(newPool);
 		setCls(newCls);
@@ -848,34 +1553,29 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 		setDetailId(null);
 		setDetailRecord(null);
 	}, []);
-	/** pool/cls 变化后自动加载重置列表 */
 	(0, react.useEffect)(() => {
 		if (records.length === 0 && offset === 0 && !loading) fetchPage(true);
 	}, [pool, cls]);
-	/** 首次挂载加载 */
 	(0, react.useEffect)(() => {
 		fetchPage(true);
 	}, []);
-	/** 获取详情;错误信息区分网络/HTTP/信封三类 */
 	const openDetail = (0, react.useCallback)(async (id) => {
 		setDetailId(id);
 		setDetailRecord(null);
 		setDetailLoading(true);
 		setDetailError(null);
+		setOpenSteps(/* @__PURE__ */ new Set());
 		try {
 			const url = `${apiBase}/api/records/${encodeURIComponent(id)}`;
 			let resp;
 			try {
 				resp = await fetch(url);
 			} catch (netErr) {
-				throw new Error(`网络错误(${netErr instanceof Error ? netErr.message : String(netErr)})
-请求: ${url}`);
+				throw new Error(`网络错误(${netErr instanceof Error ? netErr.message : String(netErr)})\n请求: ${url}`);
 			}
-			if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}
-请求: ${url}`);
+			if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}\n请求: ${url}`);
 			const body = await resp.json();
-			if (!body?.ok) throw new Error(body?.error?.message || `接口返回失败
-请求: ${url}`);
+			if (!body?.ok) throw new Error(body?.error?.message || `接口返回失败\n请求: ${url}`);
 			setDetailRecord(body.value);
 		} catch (err) {
 			setDetailError(`加载失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -888,15 +1588,17 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 		setDetailRecord(null);
 		setDetailError(null);
 	}, []);
+	const toggleStep = (0, react.useCallback)((key) => {
+		setOpenSteps((prev) => {
+			const next = new Set(prev);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	}, []);
 	if (detailId) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		style: S.detailWrap,
 		children: [
-			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
-				type: "button",
-				style: S.detailBack,
-				onClick: backToList,
-				children: "← 返回列表"
-			}),
 			detailLoading && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 				style: S.empty,
 				children: "加载中…"
@@ -921,91 +1623,129 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 					children: "返回列表"
 				})]
 			}),
-			detailRecord && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-				style: S.detailGrid,
-				children: [
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "记录 ID"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: detailRecord.id
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "池号"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: detailRecord.pool
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "状态"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: CLS_LABEL[detailRecord.cls] || detailRecord.cls
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "置信度"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: (detailRecord.confidence || 0).toFixed(2)
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "症状"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: detailRecord.symptoms?.join("、") || "无异常"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "来源"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: SOURCE_LABEL[detailRecord.source || ""] || detailRecord.source
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "知识库增强"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: detailRecord.alert_level ? "是" : "否"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "耗时"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: durationText(detailRecord.total_duration_ms)
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "Token"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: tokenText(detailRecord.total_tokens)
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailLabel,
-						children: "创建时间"
-					}),
-					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-						style: S.detailValue,
-						children: new Date(detailRecord.created_at).toLocaleString("zh-CN")
-					})
-				]
-			}) })
+			detailRecord && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: S.detailTitle,
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: S.detailBack,
+							onClick: backToList,
+							children: "← 返回"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: {
+								fontFamily: "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+								fontSize: 13,
+								color: "var(--dsw-alias-label-secondary,#7b8088)"
+							},
+							children: detailRecord.id
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: { fontWeight: 600 },
+							children: detailRecord.pool
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: { fontWeight: 600 },
+							children: "巡检分析"
+						}),
+						(() => {
+							const cls$1 = detailRecord.span_analyze?.cls ?? "unknown";
+							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+								style: S.statusBadge(cls$1),
+								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: {
+									width: 6,
+									height: 6,
+									borderRadius: "50%",
+									background: CLS_COLOR[cls$1] || "#9ca3af"
+								} }), CLS_LABEL[cls$1] || cls$1]
+							});
+						})()
+					]
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: S.metaGrid,
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaLabel,
+							children: "池号:"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaValue,
+							children: detailRecord.pool
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaLabel,
+							children: "上报人:"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaValue,
+							children: detailRecord.reporter || "—"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaLabel,
+							children: "来源:"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaValue,
+							children: SOURCE_LABEL[detailRecord.source] || detailRecord.source
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaLabel,
+							children: "时间:"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaValue,
+							children: formatDateTime(detailRecord.created_at)
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaLabel,
+							children: "总耗时:"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaValue,
+							children: durationText(detailRecord.total_duration_ms)
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaLabel,
+							children: "模型:"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaValue,
+							children: detailRecord.model || "—"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							style: S.metaLabel,
+							children: "Token:"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+							style: S.metaValue,
+							children: [
+								"input=",
+								tokenText(detailRecord.span_analyze?.input_tokens ?? 0),
+								" output=",
+								tokenText(detailRecord.span_analyze?.output_tokens ?? 0)
+							]
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)(WaterfallChart, { record: detailRecord }),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: S.sectionTitle,
+					children: "── 步骤详情（Accordion 展开）──"
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: S.stepsWrap,
+					children: SPAN_DEFS.map((def) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)(StepAccordion, {
+						def,
+						record: detailRecord,
+						isOpen: openSteps.has(def.key),
+						onToggle: () => {
+							toggleStep(def.key);
+						}
+					}, def.key))
+				})
+			] })
 		]
 	});
 	const groups = [];
@@ -1056,6 +1796,17 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 					alignSelf: "center"
 				},
 				children: [total, " 条记录"]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				style: {
+					...S.trendLink,
+					marginTop: 0
+				},
+				onClick: () => {
+					onOpenTrend?.(pool || "池1");
+				},
+				children: "📈 池号趋势分析 →"
 			})
 		]
 	}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1122,12 +1873,7 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 								style: {
 									fontWeight: 600,
-									color: {
-										normal: "#52c41a",
-										early: "#faad14",
-										disease: "#ff4d4f",
-										unknown: "#9ca3af"
-									}[r.cls] || "#9ca3af"
+									color: CLS_COLOR[r.cls] || "#9ca3af"
 								},
 								children: clsName
 							}),
@@ -1137,11 +1883,8 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 								style: {
-									flex: "1 1 100%",
-									color: r.cls === "disease" ? "#ff4d4f" : "var(--dsw-alias-label-secondary,#7b8088)",
-									overflow: "hidden",
-									textOverflow: "ellipsis",
-									whiteSpace: "nowrap"
+									...S.symptom,
+									color: r.cls === "disease" ? "#ff4d4f" : "var(--dsw-alias-label-secondary,#7b8088)"
 								},
 								children: sym
 							})
@@ -1180,6 +1923,395 @@ function TraceRecordList({ apiBase = "/aquasense-reports" }) {
 		]
 	})] });
 }
+function TraceTrendView({ pool, apiBase = "/aquasense-reports", onBack }) {
+	const [data, setData] = (0, react.useState)(null);
+	const [loading, setLoading] = (0, react.useState)(true);
+	const [error, setError] = (0, react.useState)(null);
+	const [days, setDays] = (0, react.useState)(7);
+	(0, react.useEffect)(() => {
+		setLoading(true);
+		setError(null);
+		fetch(`${apiBase}/api/trend/${encodeURIComponent(pool)}?days=${days}`).then((resp) => {
+			if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+			return resp.json();
+		}).then((body) => {
+			if (!body?.ok) throw new Error(body?.error?.message || "请求失败");
+			setData(body.value);
+		}).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setLoading(false));
+	}, [
+		pool,
+		days,
+		apiBase
+	]);
+	if (loading) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+		style: {
+			padding: 20,
+			color: "var(--dsw-alias-label-secondary,#7b8088)"
+		},
+		children: "加载中…"
+	});
+	if (error) return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: {
+			padding: 20,
+			color: "#ff4d4f"
+		},
+		children: ["加载失败: ", error]
+	});
+	if (!data) return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+		style: {
+			padding: 20,
+			color: "var(--dsw-alias-label-secondary,#7b8088)"
+		},
+		children: "无数据"
+	});
+	const dist = data.distribution || {};
+	const total = data.total || 0;
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: {
+			flex: 1,
+			overflow: "auto"
+		},
+		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+			style: {
+				display: "flex",
+				alignItems: "center",
+				gap: 8,
+				padding: "12px 16px",
+				borderBottom: "1px solid var(--dsw-alias-border-l2,#e2e4e8)"
+			},
+			children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					style: {
+						padding: "4px 8px",
+						border: 0,
+						borderRadius: 6,
+						background: "transparent",
+						color: "var(--dsw-alias-button-primary-fill,#4d6bfe)",
+						fontSize: 13,
+						cursor: "pointer"
+					},
+					onClick: onBack,
+					children: "← 返回列表"
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					style: {
+						fontSize: 14,
+						fontWeight: 600
+					},
+					children: [pool, " 趋势分析"]
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					style: { marginLeft: "auto" },
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("select", {
+						style: {
+							padding: "4px 8px",
+							border: "1px solid var(--dsw-alias-border-l2,#d1d5db)",
+							borderRadius: 6,
+							fontSize: 12,
+							background: "var(--dsw-alias-bg-layer-3,#fff)",
+							color: "var(--dsw-alias-label-primary,#17191c)"
+						},
+						value: days,
+						onChange: (e) => setDays(Number(e.target.value)),
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+								value: 7,
+								children: "近7天"
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+								value: 30,
+								children: "近30天"
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+								value: 3650,
+								children: "全部"
+							})
+						]
+					})
+				})
+			]
+		}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+			style: { padding: "12px 16px 32px" },
+			children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: {
+						fontSize: 13,
+						color: "var(--dsw-alias-label-secondary,#7b8088)",
+						marginBottom: 16
+					},
+					children: [
+						"近 ",
+						days,
+						" 天共 ",
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("b", {
+							style: { color: "var(--dsw-alias-label-primary,#17191c)" },
+							children: total
+						}),
+						" 条分析记录"
+					]
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: { marginBottom: 20 },
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							fontSize: 13,
+							fontWeight: 600,
+							color: "var(--dsw-alias-label-secondary,#7b8088)",
+							marginBottom: 8
+						},
+						children: "── 状态分布 ──"
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							background: "var(--dsw-alias-bg-layer-3,#fff)",
+							border: "1px solid var(--dsw-alias-border-l2,#e2e4e8)",
+							borderRadius: 8,
+							padding: 12
+						},
+						children: total > 0 ? [
+							[
+								"normal",
+								"正常",
+								"#52c41a"
+							],
+							[
+								"early",
+								"前兆",
+								"#faad14"
+							],
+							[
+								"disease",
+								"发病",
+								"#ff4d4f"
+							],
+							[
+								"unknown",
+								"未知",
+								"#9ca3af"
+							]
+						].map(([key, label, color]) => {
+							const n = dist[key] || 0;
+							const pct = Math.round(n / total * 100);
+							return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "flex",
+									alignItems: "center",
+									gap: 8,
+									padding: "4px 0",
+									fontSize: 13
+								},
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: {
+											width: 48,
+											flexShrink: 0
+										},
+										children: label
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+										style: {
+											flex: 1,
+											height: 16,
+											background: "var(--dsw-alias-bg-secondary,#f0f1f3)",
+											borderRadius: 4,
+											overflow: "hidden"
+										},
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: {
+											height: "100%",
+											width: `${pct}%`,
+											background: color,
+											borderRadius: 4,
+											transition: "width 0.4s"
+										} })
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+										style: {
+											width: 96,
+											textAlign: "right",
+											fontSize: 12,
+											color: "var(--dsw-alias-label-secondary,#7b8088)",
+											flexShrink: 0
+										},
+										children: [
+											pct,
+											"% (",
+											n,
+											"次)"
+										]
+									})
+								]
+							}, key);
+						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: {
+								color: "var(--dsw-alias-label-secondary,#7b8088)",
+								fontSize: 13
+							},
+							children: "暂无数据"
+						})
+					})]
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: { marginBottom: 20 },
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							fontSize: 13,
+							fontWeight: 600,
+							color: "var(--dsw-alias-label-secondary,#7b8088)",
+							marginBottom: 8
+						},
+						children: "── 症状频次 TOP ──"
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							background: "var(--dsw-alias-bg-layer-3,#fff)",
+							border: "1px solid var(--dsw-alias-border-l2,#e2e4e8)",
+							borderRadius: 8,
+							padding: 12
+						},
+						children: data.top_symptoms.length > 0 ? (() => {
+							const max = data.top_symptoms[0]?.count || 1;
+							return data.top_symptoms.map((s) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+								style: {
+									display: "flex",
+									alignItems: "center",
+									gap: 8,
+									padding: "4px 0",
+									fontSize: 13
+								},
+								children: [
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+										style: {
+											width: 80,
+											flexShrink: 0,
+											overflow: "hidden",
+											textOverflow: "ellipsis",
+											whiteSpace: "nowrap"
+										},
+										children: s.symptom
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+										style: {
+											flex: 1,
+											height: 14,
+											background: "var(--dsw-alias-bg-secondary,#f0f1f3)",
+											borderRadius: 4,
+											overflow: "hidden"
+										},
+										children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: {
+											height: "100%",
+											width: `${Math.round(s.count / max * 100)}%`,
+											background: "var(--dsw-alias-button-primary-fill,#4d6bfe)",
+											borderRadius: 4
+										} })
+									}),
+									/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+										style: {
+											width: 44,
+											textAlign: "right",
+											fontSize: 12,
+											color: "var(--dsw-alias-label-secondary,#7b8088)",
+											flexShrink: 0
+										},
+										children: [s.count, "次"]
+									})
+								]
+							}, s.symptom));
+						})() : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							style: {
+								color: "var(--dsw-alias-label-secondary,#7b8088)",
+								fontSize: 13
+							},
+							children: "暂无异常症状记录"
+						})
+					})]
+				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: {
+						fontSize: 13,
+						fontWeight: 600,
+						color: "var(--dsw-alias-label-secondary,#7b8088)",
+						marginBottom: 8
+					},
+					children: "── 最近记录 ──"
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: {
+						background: "var(--dsw-alias-bg-layer-3,#fff)",
+						border: "1px solid var(--dsw-alias-border-l2,#e2e4e8)",
+						borderRadius: 8,
+						overflow: "hidden"
+					},
+					children: data.recent_records.length > 0 ? data.recent_records.map((r) => {
+						const sym = r.symptoms?.length ? r.symptoms.join("、") : "无异常";
+						return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							style: {
+								display: "flex",
+								alignItems: "center",
+								gap: 8,
+								padding: "8px 12px",
+								borderBottom: "1px solid var(--dsw-alias-border-l2,#e8eaed)",
+								fontSize: 13
+							},
+							children: [
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									style: {
+										width: 44,
+										flexShrink: 0,
+										color: "var(--dsw-alias-label-secondary,#7b8088)",
+										fontSize: 12
+									},
+									children: timeText(r.created_at)
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									style: {
+										width: 44,
+										flexShrink: 0,
+										fontWeight: 600,
+										color: CLS_COLOR[r.cls] || "#9ca3af"
+									},
+									children: CLS_LABEL[r.cls] || r.cls
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									style: {
+										width: 36,
+										flexShrink: 0,
+										color: "var(--dsw-alias-label-secondary,#7b8088)",
+										fontSize: 12
+									},
+									children: (r.confidence || 0).toFixed(2)
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									style: {
+										flex: 1,
+										minWidth: 0,
+										overflow: "hidden",
+										textOverflow: "ellipsis",
+										whiteSpace: "nowrap",
+										color: "var(--dsw-alias-label-secondary,#7b8088)"
+									},
+									children: sym
+								}),
+								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									style: {
+										flexShrink: 0,
+										color: "var(--dsw-alias-label-secondary,#7b8088)",
+										fontSize: 12
+									},
+									children: durationText(r.total_duration_ms)
+								})
+							]
+						}, r.id);
+					}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						style: {
+							padding: 20,
+							textAlign: "center",
+							color: "var(--dsw-alias-label-secondary,#7b8088)"
+						},
+						children: "暂无记录"
+					})
+				})] })
+			]
+		})]
+	});
+}
 
 //#endregion
 //#region src/client/AquaConfig.tsx
@@ -1217,8 +2349,8 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
 .aqs-body{flex:1;min-height:0;overflow:auto;padding:18px 20px 32px}
 /* 分析记录页签:内容区去掉内边距,React 组件铺满(自带筛选条与滚动) */
-.aqs-body.flush{display:flex;padding:0;overflow:hidden}
-.aqs-reports{display:flex;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
+.aqs-body.flush{display:flex;flex-direction:column;padding:0;overflow:hidden}
+.aqs-reports{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
 .aqs-form{max-width:760px}
 `;
 /** 注入入口/配置页样式(幂等;返回无操作清理器以适配 ctx.effect) */
@@ -1286,6 +2418,7 @@ function AquaConfigPage({ box, t, api, onClose }) {
 	const model = useRemindConfig(api, t);
 	const [tab, setTab] = (0, react.useState)("remind");
 	const [reportsOn, setReportsOn] = (0, react.useState)(false);
+	const [trendPool, setTrendPool] = (0, react.useState)("");
 	(0, react.useEffect)(() => {
 		const onKey = (event) => {
 			if (event.key !== "Escape") return;
@@ -1343,19 +2476,38 @@ function AquaConfigPage({ box, t, api, onClose }) {
 				children: "×"
 			})]
 		}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-			className: "aqs-body" + (tab === "reports" ? " flush" : ""),
-			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				className: "aqs-form",
-				style: tab === "remind" ? void 0 : HIDDEN,
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(RemindForm, {
-					model,
-					t
-				})
-			}), reportsOn ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-				className: "aqs-reports",
-				style: tab === "reports" ? void 0 : HIDDEN,
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TraceRecordList, {})
-			}) : null]
+			className: "aqs-body" + (tab === "reports" || tab === "trend" ? " flush" : ""),
+			children: [
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					className: "aqs-form",
+					style: tab === "remind" ? void 0 : HIDDEN,
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(RemindForm, {
+						model,
+						t
+					})
+				}),
+				reportsOn ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					className: "aqs-reports",
+					style: tab === "reports" ? void 0 : HIDDEN,
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TraceRecordList, { onOpenTrend: (pool) => {
+						setTrendPool(pool);
+						setTab("trend");
+					} })
+				}) : null,
+				tab === "trend" && trendPool ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					className: "aqs-reports",
+					style: {
+						width: "100%",
+						height: "100%"
+					},
+					children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TraceTrendView, {
+						pool: trendPool,
+						onBack: () => {
+							setTab("reports");
+						}
+					})
+				}) : null
+			]
 		})]
 	});
 }

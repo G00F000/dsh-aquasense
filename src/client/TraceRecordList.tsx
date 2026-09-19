@@ -837,3 +837,140 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
     </>
   )
 }
+
+// ========== 趋势分析组件（面板内嵌，替代 iframe） ==========
+
+interface TrendData {
+  pool: string
+  days: number
+  total: number
+  distribution: Record<string, number>
+  top_symptoms: Array<{ symptom: string; count: number }>
+  recent_records: RecordSummary[]
+}
+
+interface TraceTrendViewProps {
+  pool: string
+  apiBase?: string
+  onBack?: () => void
+}
+
+export function TraceTrendView({ pool, apiBase = '/aquasense-reports', onBack }: TraceTrendViewProps): ReactNode {
+  const [data, setData] = useState<TrendData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [days, setDays] = useState(7)
+
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    fetch(`${apiBase}/api/trend/${encodeURIComponent(pool)}?days=${days}`)
+      .then((resp) => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        return resp.json()
+      })
+      .then((body) => {
+        if (!body?.ok) throw new Error(body?.error?.message || '请求失败')
+        setData(body.value as TrendData)
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoading(false))
+  }, [pool, days, apiBase])
+
+  if (loading) return <div style={{ padding: 20, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>加载中…</div>
+  if (error) return <div style={{ padding: 20, color: '#ff4d4f' }}>加载失败: {error}</div>
+  if (!data) return <div style={{ padding: 20, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>无数据</div>
+
+  const dist = data.distribution || {}
+  const total = data.total || 0
+  const distOrder: Array<[string, string, string]> = [
+    ['normal', '正常', '#52c41a'],
+    ['early', '前兆', '#faad14'],
+    ['disease', '发病', '#ff4d4f'],
+    ['unknown', '未知', '#9ca3af']
+  ]
+
+  return (
+    <div style={{ flex: 1, overflow: 'auto' }}>
+      {/* 标题栏 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' }}>
+        <button type="button" style={{ padding: '4px 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 13, cursor: 'pointer' }} onClick={onBack}>
+          ← 返回列表
+        </button>
+        <span style={{ fontSize: 14, fontWeight: 600 }}>{pool} 趋势分析</span>
+        <span style={{ marginLeft: 'auto' }}>
+          <select style={{ padding: '4px 8px', border: '1px solid var(--dsw-alias-border-l2,#d1d5db)', borderRadius: 6, fontSize: 12, background: 'var(--dsw-alias-bg-layer-3,#fff)', color: 'var(--dsw-alias-label-primary,#17191c)' }} value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            <option value={7}>近7天</option>
+            <option value={30}>近30天</option>
+            <option value={3650}>全部</option>
+          </select>
+        </span>
+      </div>
+
+      <div style={{ padding: '12px 16px 32px' }}>
+        {/* 概览 */}
+        <div style={{ fontSize: 13, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 16 }}>
+          近 {days} 天共 <b style={{ color: 'var(--dsw-alias-label-primary,#17191c)' }}>{total}</b> 条分析记录
+        </div>
+
+        {/* 状态分布 */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }}>── 状态分布 ──</div>
+          <div style={{ background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, padding: 12 }}>
+            {total > 0 ? distOrder.map(([key, label, color]) => {
+              const n = dist[key] || 0
+              const pct = Math.round(n / total * 100)
+              return (
+                <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }}>
+                  <span style={{ width: 48, flexShrink: 0 }}>{label}</span>
+                  <div style={{ flex: 1, height: 16, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 4, transition: 'width 0.4s' }} />
+                  </div>
+                  <span style={{ width: 96, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }}>{pct}% ({n}次)</span>
+                </div>
+              )
+            }) : <div style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }}>暂无数据</div>}
+          </div>
+        </div>
+
+        {/* 症状频次 */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }}>── 症状频次 TOP ──</div>
+          <div style={{ background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, padding: 12 }}>
+            {data.top_symptoms.length > 0 ? (() => {
+              const max = data.top_symptoms[0]?.count || 1
+              return data.top_symptoms.map((s) => (
+                <div key={s.symptom} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 13 }}>
+                  <span style={{ width: 80, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.symptom}</span>
+                  <div style={{ flex: 1, height: 14, background: 'var(--dsw-alias-bg-secondary,#f0f1f3)', borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${Math.round(s.count / max * 100)}%`, background: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', borderRadius: 4 }} />
+                  </div>
+                  <span style={{ width: 44, textAlign: 'right', fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)', flexShrink: 0 }}>{s.count}次</span>
+                </div>
+              ))
+            })() : <div style={{ color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 13 }}>暂无异常症状记录</div>}
+          </div>
+        </div>
+
+        {/* 最近记录 */}
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-secondary,#7b8088)', marginBottom: 8 }}>── 最近记录 ──</div>
+          <div style={{ background: 'var(--dsw-alias-bg-layer-3,#fff)', border: '1px solid var(--dsw-alias-border-l2,#e2e4e8)', borderRadius: 8, overflow: 'hidden' }}>
+            {data.recent_records.length > 0 ? data.recent_records.map((r) => {
+              const sym = r.symptoms?.length ? r.symptoms.join('、') : '无异常'
+              return (
+                <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e8eaed)', fontSize: 13 }}>
+                  <span style={{ width: 44, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{timeText(r.created_at)}</span>
+                  <span style={{ width: 44, flexShrink: 0, fontWeight: 600, color: CLS_COLOR[r.cls] || '#9ca3af' }}>{CLS_LABEL[r.cls] || r.cls}</span>
+                  <span style={{ width: 36, flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{(r.confidence || 0).toFixed(2)}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>{sym}</span>
+                  <span style={{ flexShrink: 0, color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }}>{durationText(r.total_duration_ms)}</span>
+                </div>
+              )
+            }) : <div style={{ padding: 20, textAlign: 'center', color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>暂无记录</div>}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

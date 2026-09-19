@@ -24,7 +24,7 @@ import { createPortal } from 'react-dom'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemindApi } from './api.js'
 import { RemindForm, useRemindConfig, type RemindTranslate } from './RemindForm.js'
-import { TraceRecordList } from './TraceRecordList.js'
+import { TraceRecordList, TraceTrendView } from './TraceRecordList.js'
 
 /**
  * 槽位契约:宿主侧由 @deepseek-ai/dsh-client-ui-sidebar 声明(侧栏页脚动作,
@@ -103,8 +103,8 @@ div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}
 .aqs-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}
 .aqs-body{flex:1;min-height:0;overflow:auto;padding:18px 20px 32px}
 /* 分析记录页签:内容区去掉内边距,React 组件铺满(自带筛选条与滚动) */
-.aqs-body.flush{display:flex;padding:0;overflow:hidden}
-.aqs-reports{display:flex;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
+.aqs-body.flush{display:flex;flex-direction:column;padding:0;overflow:hidden}
+.aqs-reports{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;min-width:0;overflow:hidden}
 .aqs-form{max-width:760px}
 `
 
@@ -256,20 +256,9 @@ function AquaConfigPage({
         ) : null}
         {tab === 'trend' && trendPool ? (
           <div className="aqs-reports" style={{ width: '100%', height: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--dsw-alias-border-l2,#e2e4e8)' }}>
-              <button
-                type="button"
-                style={{ padding: '4px 8px', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--dsw-alias-button-primary-fill,#4d6bfe)', fontSize: 13, cursor: 'pointer' }}
-                onClick={() => { setTab('reports') }}
-              >
-                ← 返回列表
-              </button>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>{trendPool} 趋势分析</span>
-            </div>
-            <iframe
-              src={`/aquasense-reports/trend?pool=${encodeURIComponent(trendPool)}`}
-              style={{ flex: 1, width: '100%', border: 'none' }}
-              title={`${trendPool} 趋势分析`}
+            <TraceTrendView
+              pool={trendPool}
+              onBack={() => { setTab('reports') }}
             />
           </div>
         ) : null}

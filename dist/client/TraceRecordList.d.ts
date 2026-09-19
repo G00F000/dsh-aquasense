@@ -1,20 +1,24 @@
 /**
- * TraceRecordList —— 配置页面板内「📊 分析记录」列表(v1.3,去 iframe 化)
+ * TraceRecordList v2.0 — 配置页面板内「📊 分析记录」(列表态 ⇄ 详情态)
  *
- * 直接调用 /aquasense-reports/api/records JSON 接口,
- * 在面板内容区渲染记录列表;不再依赖 iframe 加载独立 HTML 页面,
- * 从根本上规避跨域/反向代理路径不通等问题。
+ * 列表态：调用 /aquasense-reports/api/records(JSON index 摘要)；
+ * 详情态：调用 /aquasense-reports/api/records/:id(完整 AnalysisRecord)，
+ *   展示元信息 + 瀑布图(Trace Timeline) + 5 步骤 Accordion 展开。
  *
- * 设计:
- *  - 状态: 'list'(列表) / 'detail'(单条详情)
- *  - 筛选: 池号 / 状态,即时生效;分页用「加载更多」
- *  - 样式复用面板 CSS 变量体系,与 每日任务提醒 表单视觉一致
- *  - API 失败时显示友好提示(非 iframe 崩溃页面)
+ * 原型依据：docs/r8-traceability-requirements.md §4.1 原型 A
+ * 样式复用面板 CSS 变量体系，与每日任务提醒表单视觉一致。
  */
 import type { ReactNode } from 'react';
 interface TraceRecordListProps {
-    /** API 前缀(默认 /aquasense-reports) */
     apiBase?: string;
+    /** 点击趋势分析时的回调（面板内切换） */
+    onOpenTrend?: (pool: string) => void;
 }
-export declare function TraceRecordList({ apiBase }: TraceRecordListProps): ReactNode;
+export declare function TraceRecordList({ apiBase, onOpenTrend }: TraceRecordListProps): ReactNode;
+interface TraceTrendViewProps {
+    pool: string;
+    apiBase?: string;
+    onBack?: () => void;
+}
+export declare function TraceTrendView({ pool, apiBase, onBack }: TraceTrendViewProps): ReactNode;
 export {};

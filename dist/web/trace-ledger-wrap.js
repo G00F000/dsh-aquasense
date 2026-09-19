@@ -84,11 +84,15 @@ export async function recordChatTrace(args, result, ledgerDurationMs) {
     try {
         const input = pickTraceInput(args);
         const output = pickTraceResult(result);
-        if (!input || !output)
+        if (!input || !output) {
+            console.warn('[aquasense-trace] 群聊 trace 跳过:缺少必要字段(pool_id/analysis/advice)或返回值无效');
             return;
+        }
         // 追问类失败(缺池号/缺 open_id 等)不记录:高频且无分析价值
-        if (!output.success && output.missing && output.missing.length > 0)
+        if (!output.success && output.missing && output.missing.length > 0) {
+            console.warn(`[aquasense-trace] 群聊 trace 跳过:追问类失败(missing=${output.missing.join(',')})`);
             return;
+        }
         // 上报人:优先 open_id 解析(与 recordLedger 同源),失败降级 args.reporter
         let reporter = input.reporter;
         if (input.openId) {
@@ -158,10 +162,23 @@ export function wrapLedgerWithTrace(tool) {
         ...tool,
         async execute(args, exec) {
             const started = performance.now();
-            const result = await tool.execute(args, exec);
-            const durationMs = Math.round(performance.now() - started);
-            void recordChatTrace(args, result, durationMs);
-            return result;
+            try {
+                const result = await tool.execute(args, exec);
+                const durationMs = Math.round(performance.now() - started);
+                void recordChatTrace(args, result, durationMs);
+                return result;
+            }
+            catch (error) {
+                // 异常路径:仍记录 trace(含 error 信息),不中断上层错误处理
+                // 必须传结构化 result 而非 null——pickTraceResult(null) 会返回 null 导致 trace 被跳过
+                const durationMs = Math.round(performance.now() - started);
+                const errorResult = {
+                    success: false,
+                    message: `工具异常:${error instanceof Error ? error.message : String(error)}`
+                };
+                void recordChatTrace(args, errorResult, durationMs);
+                throw error;
+            }
         }
     };
 }
