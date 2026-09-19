@@ -1,9 +1,9 @@
 # R8：AI 分析结果可追溯 — 需求分析文档
 
-> **版本**: v1.6（入口 A 精简：H5 提交成功后仅展示「提交成功」反馈，不跳转、不展示分析结果与进度；分析记录与详情查看统一到入口 C（PC 端配置页面板，屏幕大、便于浏览）。v1.5 结论不变：列表态 ⇄ 详情态同页切换，详情不独立成页）
-> **基线日期**: 2026-09-17
+> **版本**: v1.7（详情态新增「现场照片」——工人发送的原图随记录落盘并展示（缩略图网格 + 灯箱）；v1.6 入口精简结论不变：H5 提交后仅「提交成功」反馈，查看统一到入口 C）
+> **基线日期**: 2026-09-17（v1.7 补充：2026-09-19）
 > **总文档**: [requirements.md](./requirements.md)（本文为 R8 专题分文档）
-> **状态**: 🔲 待实现
+> **状态**: ✅ 已实现（实现细节见 [r8-traceability-architecture.md](./r8-traceability-architecture.md)）
 > **设计参考**: Langfuse Trace/Span 模型、Arize Phoenix 嵌入可视化、MedgeClaw Dashboard 分步骤展开、SkillHub 插件广场页签式二级标题
 
 ---
@@ -202,6 +202,9 @@ AquaSense 的 AI 分析管线（图片 → 视觉分析 → 知识库检索 → 
 │          │  时间: 2026-09-17 10:05:32    总耗时: 2.8s                         │
 │          │  模型: deepseek-flash    Token: input=1,200 output=300             │
 │          │                                                                    │
+│          │  ── 现场照片（3 张）──                                             │
+│          │  [🖼 1] [🖼 2] [🖼 3]  ← 点击缩略图打开灯箱（←/→ 切换/点击关闭）    │
+│          │                                                                    │
 │          │  ── 瀑布图（Trace Timeline）──                                      │
 │          │  ├─ 📷 图片上传         ████░░░░░░░░░░░░░░  0.3s  ✅              │
 │          │  ├─ 🧠 AI 视觉分析      ████████████████░░  1.2s  ✅              │
@@ -361,7 +364,8 @@ interface AnalysisRecord {
   /** ---- Span: 图片上传 ---- */
   span_upload: {
     image_count: number        // 图片数量
-    image_sizes: number[]      // 原始大小(bytes)
+    image_names?: string[]     // 图片文件名(H5:提交采集;群聊:下载/落盘名)
+    image_sizes: number[]      // 服务端收到的图片字节数(H5 为客户端压缩后)
     compressed_sizes: number[] // 压缩后大小(bytes)
     duration_ms: number        // 耗时
     error?: string             // 错误信息(如有)
@@ -466,7 +470,8 @@ interface AnalysisIndex {
 | 方法 | 路由 | 参数 | 说明 |
 |------|------|------|------|
 | GET | `/aquasense-reports/api/records` | `?pool=&cls=&date=&limit=&offset=` | 列表查询 |
-| GET | `/aquasense-reports/api/records/:id` | — | 单条详情 |
+| GET | `/aquasense-reports/api/records/:id` | — | 单条详情（附 images 图片元数据） |
+| GET | `/aquasense-reports/api/records/:id/images/:index` | — | 现场照片原图（二进制，immutable 缓存） |
 | GET | `/aquasense-reports/api/trend/:pool` | `?days=7` | 池号趋势统计 |
 
 **列表查询响应**：
@@ -482,12 +487,18 @@ interface AnalysisIndex {
 }
 ```
 
-**详情查询响应**：
+**详情查询响应**（附加 `images` 元数据，供详情态「现场照片」渲染）：
 
 ```json
 {
   "ok": true,
-  "value": { /* 完整 AnalysisRecord */ }
+  "value": {
+    /* 完整 AnalysisRecord */
+    "images": [
+      { "index": 0, "fileName": "img-000.jpg", "mimeType": "image/jpeg", "size": 312345,
+        "url": "/aquasense-reports/api/records/RPT-20260917-100532/images/0" }
+    ]
+  }
 }
 ```
 
@@ -560,9 +571,10 @@ GET /aquasense-reports/api/records?limit=50
     │
     ▼
 GET /aquasense-reports/api/records/RPT-20260917-1005
-    │ → 返回完整 AnalysisRecord
+    │ → 返回完整 AnalysisRecord + images 元数据
     ▼
-渲染 Trace 视图（瀑布图 + 步骤 Accordion）
+渲染 Trace 视图（现场照片 + 瀑布图 + 步骤 Accordion）
+    │ → 现场照片经 /images/:index 懒加载缩略图，点击打开灯箱（←/→ 切换）
     │ → 知识库检索步骤展示命中条目详情
     ▼
 底部「查看趋势」→ 跳转池号趋势页
@@ -578,7 +590,10 @@ GET /aquasense-reports/api/records/RPT-20260917-1005
 | 单条记录 JSON 损坏 | 列表态跳过该条，日志 warn |
 | index.json 损坏 | 从 reports/ 目录扫描重建 |
 | 查询参数非法 | 返回 400 + 错误描述 |
-| 图片缩略图文件丢失 | 显示占位图 |
+| 图片文件缺失（未落盘/已清理） | 缩略图显示占位背景，不阻断详情渲染 |
+| 群聊图片下载失败（超时/URL 失效） | 跳过该张 + warn；其余图片与 trace 照常写入 |
+| 图片落盘失败（群聊/H5） | 仅 warn，不阻断分析主链路（详情页无图） |
+| 图片序号非法（越界/非数字） | 返回 400（白名单校验） |
 | 记录数超过 1000 条 | index.json 仍可承载（~300KB），不阻断 |
 | 趋势页数据不足 | 显示"数据不足，至少需要 3 条记录" |
 
@@ -596,6 +611,7 @@ GET /aquasense-reports/api/records/RPT-20260917-1005
 | M6 | 池号趋势页（原型 C，语义聚类） | M3 | 2 天 |
 | M7 | H5 提交成功反馈（精简：不跳转、不展示明细） | M1, M3 | 1 天 |
 | M8 | 集成测试 + 部署验证 | M4-M7 | 1 天 |
+| M9 | 详情态现场照片展示（图片落盘/接口/缩略图+灯箱） | M5, M7 | 1 天 |
 
 **验收要点**：
 
@@ -604,6 +620,7 @@ GET /aquasense-reports/api/records/RPT-20260917-1005
 - [ ] 列表态按日期倒序展示，支持池号/状态筛选
 - [ ] 配置页顶栏二级标题区含「📊 分析记录」页签（位于「每日任务提醒」右侧），点击进入分析记录页（列表态）
 - [ ] 详情态展示完整 5 步 Trace 瀑布图 + 步骤 Accordion
+- [ ] 详情态展示工人发送的原始照片（缩略图网格 + 灯箱预览，覆盖 H5 与群聊两种来源）
 - [ ] 知识库检索步骤展示命中条目详情（标题/通道/页码/摘录）
 - [ ] 池号趋势页展示状态分布 + 症状频次 + 语义聚类
 - [ ] H5 提交后仅展示「提交成功」反馈（不跳转、不展示进度/结果明细）

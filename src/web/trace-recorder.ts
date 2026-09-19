@@ -23,9 +23,9 @@ export type RecordSource = 'h5_upload' | 'group_chat' | 'api'
 /** Span: 图片上传 */
 export interface SpanUpload {
   image_count: number
-  /** 图片文件名(H5 提交时采集;群聊场景为空) */
+  /** 图片文件名(H5:提交采集;群聊:下载/落盘名) */
   image_names?: string[]
-  /** 服务端收到的图片字节数(客户端已压缩) */
+  /** 服务端收到的图片字节数(H5 为客户端压缩后) */
   image_sizes: number[]
   compressed_sizes?: number[]
   duration_ms?: number

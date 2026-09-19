@@ -1,8 +1,8 @@
 # R8：AI 分析结果可追溯 — 功能架构设计文档
 
 > - 总文档：[architecture.md](./architecture.md)（本文为其 R8 专题**分文档**，展开模块级/接口级设计）
-> - 需求依据：[r8-traceability-requirements.md](./r8-traceability-requirements.md)（R8 专题需求分文档，现行 v1.6）
-> - 状态：✅ 已实现（M1-M9 全部完成，含单元测试与构建验证）；**v1.6 展示归并调整待代码对齐**（见 M10）
+> - 需求依据：[r8-traceability-requirements.md](./r8-traceability-requirements.md)（R8 专题需求分文档，现行 v1.7）
+> - 状态：✅ 已实现（M1-M9、M11、M12 完成，含单元测试与构建验证）；**v1.6 展示归并调整待代码对齐**（见 M10）
 > - 设计参考：Langfuse Trace/Span 模型、Arize Phoenix 嵌入可视化、MedgeClaw Dashboard 分步骤展开
 > - **v1.6 展示归并（同步自需求）**：入口 A（H5）提交后仅「提交成功」反馈——不跳转、不展示进度与结果明细；分析记录查看统一到入口 C（PC 端面板，列表态 ⇄ 详情态同页切换）；独立列表/详情页路由停用（仅保留趋势页 + API），移动端不再承载查看界面
 
@@ -233,6 +233,7 @@ export async function handleH5Report(params: H5ReportParams): Promise<{ record_i
   // Span 1: 图片上传
   tracer.startSpan('upload')
   const images = await processUploadedImages(params.files)
+  await saveReportImages(tracer.id, images)  // 落盘供详情态「现场照片」展示（失败仅 warn）
   tracer.endSpan('upload', {
     image_count: images.length,
     image_sizes: images.map(i => i.original_size),
@@ -413,6 +414,11 @@ $AQUASENSE_CACHE_DIR/
     index.json                      # 轻量索引（~500KB/年）
     RPT-20260917-100532.json        # 单条完整记录（~2KB）
     RPT-20260917-093015.json
+    images/                         # 工人发送的原图（详情态「现场照片」）
+      RPT-20260917-100532/
+        img-000.jpg                 # img-NNN.<ext>（三位补零；扩展名按 MIME，未知降级 .jpg）
+        img-001.jpg
+      RPT-20260917-093015/
     ...
   remind/                           # S9 运行状态（已有）
     config.json
@@ -422,10 +428,36 @@ $AQUASENSE_CACHE_DIR/
   note/                             # 笔记缓存（已有）
 ```
 
+**图片存储（详情态展示）**：工人发送的原图按记录落盘（`reports/images/<RPT-id>/`），详情接口以元数据返回、经图片接口读取二进制：
+
+```typescript
+// src/web/trace-store.ts（图片存储部分）
+
+export interface ReportImageMeta {
+  index: number      // 图片序号（0 起，与图片接口路径对应）
+  fileName: string   // img-NNN.<ext>
+  mimeType: string
+  size: number       // 字节数
+}
+
+/** 批量落盘图片（H5：base64 直存；群聊：下载后转 base64）；返回落盘清单 */
+export async function saveReportImages(id: string, images: Array<{ data: string; mimeType: string }>): Promise<ReportImageMeta[]>
+
+/** 列出记录的图片清单（按 index 升序；目录不存在返回空数组） */
+export async function listReportImages(id: string): Promise<ReportImageMeta[]>
+
+/** 读取单张图片（按扩展名 .jpg/.png/.webp/.gif 依次探测） */
+export async function readReportImage(id: string, index: number): Promise<{ buffer: Buffer; mimeType: string } | null>
+
+/** 删除记录的图片目录（随记录清理） */
+export async function removeReportImages(id: string): Promise<void>
+```
+
 **清理策略**：
 - 保留最近 90 天的记录（约 6000 条，~12MB）
 - 超过 90 天的记录归档或删除（可通过 cron 脚本）
 - index.json 自动裁剪旧记录
+- 图片随记录同步清理：`cleanupOldReports` 删除 RPT-*.json 时调用 `removeReportImages(id)` 一并删除图片目录
 
 ### 3.4 Trace 网关（trace-gateway.ts）
 
@@ -449,6 +481,7 @@ export function installTraceWeb(ctx: Context): void {
   // API 路由
   webServer.router.get('/aquasense-reports/api/records', handleRecordsList)
   webServer.router.get('/aquasense-reports/api/records/:id', handleRecordDetail)
+  webServer.router.get('/aquasense-reports/api/records/:id/images/:index', handleRecordImage)
   webServer.router.get('/aquasense-reports/api/trend/:pool', handleTrendData)
   // + /aquasense-reports/api/pools 池号枚举（2026-09 随设置页「AquaSense 设置」新增，供筛选/趋势页选项）
 
@@ -461,7 +494,8 @@ export function installTraceWeb(ctx: Context): void {
 | 方法 | 路由 | 参数 | 响应 | 说明 |
 |------|------|------|------|------|
 | GET | `/aquasense-reports/api/records` | `pool`, `cls`, `date`, `limit`, `offset` | `{ ok, value: { records, total, has_more } }` | 列表查询 |
-| GET | `/aquasense-reports/api/records/:id` | — | `{ ok, value: AnalysisRecord }` | 单条详情 |
+| GET | `/aquasense-reports/api/records/:id` | — | `{ ok, value: AnalysisRecord & { images } }` | 单条详情（附图片元数据，每项含 `url`） |
+| GET | `/aquasense-reports/api/records/:id/images/:index` | — | 原图二进制（`content-type` 按 MIME） | 现场照片原图（`cache-control: immutable` + `nosniff`） |
 | GET | `/aquasense-reports/api/trend/:pool` | `days` | `{ ok, value: TrendData }` | 趋势统计 |
 | GET | `/aquasense-reports/api/pools` | — | `{ ok, value: { pools } }` | 池号枚举（设置页「AquaSense 设置」配置；列表筛选/趋势页选项来源） |
 
@@ -470,6 +504,7 @@ export function installTraceWeb(ctx: Context): void {
 - 同源校验（403）
 - 路径解析（404）
 - 兜底 500
+- 防路径穿越：记录 ID 走 `REPORT_ID_RE` 白名单（`RPT-YYYYMMDD-HHmmss` 及带序号变体），图片序号为 `0~99` 数字白名单（`MAX_IMAGE_INDEX`），非法一律 400
 
 ### 3.5 H5 上传页集成
 
@@ -483,6 +518,7 @@ report-handler.ts:
   创建 AnalysisTracer
     │
     ├─ Span 1: 图片处理 → tracer.startSpan('upload') / endSpan
+    │    └─ 图片落盘 → saveReportImages(tracer.id, 图片)（失败仅 warn，不阻断管线）
     ├─ Span 2: 视觉分析 → tracer.startSpan('analyze') / endSpan
     ├─ Span 3: 知识检索 → tracer.startSpan('retrieve') / endSpan (仅 early/disease)
     ├─ Span 4: 建议生成 → tracer.startSpan('advice') / endSpan (仅 early/disease)
@@ -538,9 +574,10 @@ Agent 调用 aquasense_ledger:
   → trace-recorder: endSpan('ledger', { record_id, ... })
     │
     ▼
-管线完成 → trace-recorder.flush()
-  → writeReport(record) → reports/RPT-*.json
-  → updateIndex(record) → index.json
+管线完成 → trace-ledger-wrap: 下载工人图片并落盘（saveChatImages，逐张容错）→ 补记 Span upload
+  → trace-recorder.flush()
+    → writeReport(record) → reports/RPT-*.json
+    → updateIndex(record) → index.json
 ```
 
 **集成方式（群聊场景）**：
@@ -555,6 +592,8 @@ Agent 调用 aquasense_ledger:
 **推荐方案 A**（后置收集）：群聊场景优先保证稳定性，不侵入现有 Tool。通过飞书 Bitable API 读取刚写入的记录，组装简化的 AnalysisRecord（缺少 Token/耗时，但包含核心分析结果）。
 
 **实际实现**：群聊场景用「注册期包装（后置收集）」的 `trace-ledger-wrap.ts`——透传台账工具定义、仅在 execute 后追加简化记录（零修改 record-ledger.ts；耗时取包装器实测、无 Token 数据）；H5 场景由 `report-handler.ts` 直调底层导出函数（`callVisionModelWithUsage`/`retrieveKnowledge`/`generateAdviceInternal`/`recordLedger.execute`），精确收集每个 Span 的耗时与 Token。
+
+**图片素材落盘（两路）**：群聊侧 `saveChatImages` 下载工人图片（data URL 直解析／http(s) URL 走网络，30s 超时，逐张容错）→ `saveReportImages` 落盘并补记 upload Span（image_count/image_names/image_sizes）；H5 侧管线收到 base64 后直接 `saveReportImages` 落盘。落盘失败仅 warn，不影响 trace 与主链路。
 
 ### 4.2 索引查询流程
 
@@ -577,10 +616,24 @@ GET /aquasense-reports/api/records/RPT-20260917-100532
     │
     ▼
 trace-gateway:
-  1. 提取 record ID
+  1. 提取 record ID（REPORT_ID_RE 白名单校验，非法 → 400）
   2. readReport(id) → 读取 reports/RPT-*.json
   3. 文件不存在 → 404
-  4. 返回完整 AnalysisRecord
+  4. listReportImages(id) → 附加图片元数据（每项含图片接口 url）
+  5. 返回 { ...AnalysisRecord, images }
+```
+
+**图片读取流程**（详情态每张缩略图独立请求）：
+
+```
+GET /aquasense-reports/api/records/RPT-20260917-100532/images/0
+    │
+    ▼
+trace-gateway:
+  1. 记录 ID 与序号（0~99）白名单校验，非法 → 400
+  2. readReportImage(id, index) → 读取 reports/images/<id>/img-NNN.<ext>
+  3. 文件不存在 → 404
+  4. 返回原图二进制（content-type 按 MIME；cache-control immutable + nosniff）
 ```
 
 ### 4.4 趋势统计流程
@@ -721,19 +774,19 @@ function renderCluster(records, canvas) {
 | 文件路径 | 实际行数 | 说明 |
 |----------|---------|------|
 | `src/web/trace-recorder.ts` | ~314 行 | Trace 记录器：Span 收集 + AnalysisRecord 组装 + RPT ID 生成 |
-| `src/web/trace-store.ts` | ~278 行 | 存储层：index.json 读写 + reports/ 重建/清理/查询 |
-| `src/web/trace-gateway.ts` | ~334 行 | 趋势页路由 + 查询 API（v1.6：列表/详情页路由停用） |
-| `src/web/report-handler.ts` | ~745 行 | H5 提交/进度接口 + 5 Span 管线 + job 表（内存 30min TTL） |
-| `src/web/trace-ledger-wrap.ts` | ~202 行 | 群聊场景 recordLedger 注册包装器（后置收集简化记录） |
-| `src/client/TraceRecordList.tsx` | ~390 行 | 入口 C 面板内分析记录视图：列表态 ⇄ 详情态同页切换（直调 JSON API；v1.3 起替代 iframe 内嵌） |
+| `src/web/trace-store.ts` | ~379 行 | 存储层：index.json 读写 + reports/ 重建/清理/查询 + 图片落盘/读取/清理 |
+| `src/web/trace-gateway.ts` | ~393 行 | 趋势页路由 + 查询 API + 图片二进制接口（v1.6：列表/详情页路由停用） |
+| `src/web/report-handler.ts` | ~753 行 | H5 提交/进度接口 + 5 Span 管线 + 图片落盘 + job 表（内存 30min TTL） |
+| `src/web/trace-ledger-wrap.ts` | ~291 行 | 群聊场景 recordLedger 注册包装器（后置收集简化记录 + 图片下载落盘） |
+| `src/client/TraceRecordList.tsx` | ~1252 行 | 入口 C 面板内分析记录视图：列表态 ⇄ 详情态同页切换 + 现场照片/灯箱（直调 JSON API；v1.3 起替代 iframe 内嵌） |
 | `src/web/trace-list.html` | 列表页 | 分析记录列表页（v1.6：展示归并入口 C 面板，页面路由停用 ⏳ 待清理） |
 | `src/web/trace-detail.html` | 详情页 | 分析详情页 Trace 视图（v1.6：同上停用 ⏳ 待清理） |
 | `src/web/trace-trend.html` | 趋势页 | 池号趋势页（状态分布 + 症状频次 + 语义聚类图） |
 | `src/web/report-upload.html` | ~479 行 | H5 拍照汇报页（客户端压缩/提交；v1.6：仅「提交成功」反馈，进度轮询/跳详情停用 ⏳ 待对齐） |
 | `src/web/trace-recorder.test.ts` | ~138 行 | 记录器单元测试 |
-| `src/web/trace-store.test.ts` | ~217 行 | 存储层单元测试（含损坏重建/清理/趋势） |
-| `src/web/trace-gateway.test.ts` | ~297 行 | 网关单元测试（路由/参数/协议层） |
-| `src/web/report-handler.test.ts` | ~549 行 | H5 管线与协议层单元测试 |
+| `src/web/trace-store.test.ts` | ~273 行 | 存储层单元测试（含损坏重建/清理/趋势/图片存取） |
+| `src/web/trace-gateway.test.ts` | ~361 行 | 网关单元测试（路由/参数/协议层/图片接口） |
+| `src/web/report-handler.test.ts` | ~554 行 | H5 管线与协议层单元测试（含图片落盘断言） |
 
 ### 6.2 修改文件（已实现）
 
@@ -749,6 +802,12 @@ function renderCluster(records, canvas) {
 | `src/web/report-handler.ts` | 动态化 | H5 提交池号白名单校验改读设置页配置枚举（`getValidPoolIds`） |
 | `src/web/report-upload.html` | 动态化 | 池号按钮由服务端注入 `__AQUA_POOLS__`（设置页配置枚举，缺失时兜底默认 4 池） |
 | `src/client/TraceRecordList.tsx` | 动态化 | 列表态池号筛选下拉改由 `/api/pools` 加载（接口不可用时兜底默认 4 池） |
+| `src/web/trace-store.ts` | 图片存储 | 新增 `saveReportImages`/`listReportImages`/`readReportImage`/`removeReportImages`；`cleanupOldReports` 联动删除图片目录 |
+| `src/web/trace-gateway.ts` | 图片接口 | 新增 `GET /api/records/:id/images/:index`（原图二进制 + immutable 缓存头）；详情接口附带 `images` 元数据；`REPORT_ID_RE` + 序号白名单防护 |
+| `src/web/trace-ledger-wrap.ts` | 图片落盘 | 群聊链路下载工人图片（data URL/http(s)、30s 超时、逐张容错）→ `saveReportImages`，并补记 upload Span |
+| `src/web/report-handler.ts` | 图片落盘 | H5 管线 upload Span 后落盘 base64 图片（失败仅 warn，不阻断管线） |
+| `src/client/TraceRecordList.tsx` | 图片展示 | 详情态「现场照片」缩略图网格 + 灯箱（左右切换/计数/点击关闭） |
+| `src/web/trace-detail.html` | 图片展示 | 停用页面同步对齐现场照片区 + 灯箱（与面板行为一致） |
 | `package.json` | 构建 | build 脚本追加 `mkdir -p dist/web && cp src/web/*.html dist/web/`（页面随包发布） |
 | `docs/architecture.md` | 引用 | R8 概述为摘要 + 指向本文（分-总关系） |
 | `docs/requirements.md` | 引用 | R8 需求指向专题需求分文档 |
@@ -775,6 +834,8 @@ $AQUASENSE_CACHE_DIR/
     index.json                      # 轻量索引
     RPT-20260917-100532.json        # 单条完整记录
     RPT-20260917-093015.json
+    images/                         # 工人发送的原图（详情态展示；随记录清理）
+      RPT-20260917-100532/img-NNN.<ext>
     ...
   remind/                           # S9 运行状态（已有，不变更）
   pdf/                              # 知识库缓存（已有，不变更）
@@ -792,8 +853,11 @@ $AQUASENSE_CACHE_DIR/
 | 每年 JSON 总大小 | ~14.4MB |
 | index.json 大小（1 年） | ~500KB（仅摘要字段） |
 | index.json 大小（3 年） | ~1.5MB |
+| 每张图片（H5 客户端压缩后 ≤1024px JPEG 0.8） | ~100~400KB（群聊原图未压缩，可能更大） |
+| 每日图片大小（~20 条 × 平均 2 张 × ~300KB） | ~12MB |
+| 90 天图片大小 | ~1GB |
 
-**结论**：JSON 文件存储在 4G 服务器上完全可承载，无需引入数据库。
+**结论**：JSON 文件存储在 4G 服务器上完全可承载，无需引入数据库；图片为主要磁盘占用（90 天量级 ~1GB），随记录按 90 天清理策略同步释放。
 
 ### 7.3 清理策略
 
@@ -806,6 +870,7 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 
   for (const record of toRemove) {
     await fs.unlink(path.join(REPORTS_DIR, `${record.id}.json`)).catch(() => {})
+    await removeReportImages(record.id)  // 图片目录随记录同步删除
   }
 
   index.records = index.records.filter(r => r.created_at >= cutoff)
@@ -826,7 +891,10 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 | index.json 损坏 | readIndex 解析失败 | 自动从 reports/ 目录重建 |
 | index.json 与 reports/ 不一致 | readIndex 后发现记录缺失 | 静默不处理（下次写入时自动修复） |
 | 查询参数非法 | 参数校验 | 返回 400 + 错误描述 |
-| 图片缩略图文件丢失 | 详情态加载时 | 显示占位图 |
+| 图片文件缺失（原图未落盘/已清理） | 详情态加载时 | 缩略图显示占位背景，不阻断详情渲染 |
+| 群聊图片下载失败（网络超时/URL 失效） | 单张下载异常 | 跳过该张 + warn；其余图片与 trace 照常写入 |
+| 图片落盘失败（群聊/H5） | saveReportImages 异常 | 仅 warn，主链路与 trace 不受影响（详情页无图） |
+| 图片序号非法（越界/非数字） | 路由解析 + 白名单校验 | 返回 400（invalid-param / invalid-id） |
 | 记录数超过 1000 条 | 不拦截 | index.json 仍可承载（~300KB） |
 | webServer 不存在 | 启动时检查 | 静默跳过路由注册 + warn |
 | H5 上传 trace 埋点失败 | try-catch | 主流程不受影响（分析结果照常返回） |
@@ -841,11 +909,14 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 [aquasense-trace] 索引已更新: 当前 42 条记录
 [aquasense-trace] H5 汇报 trace: RPT-20260917-100532, 5 spans, 2.8s total
 [aquasense-trace] 群聊 trace: RPT-20260917-093015, 简化模式(无 Token)
+[aquasense-trace] 群聊图片已落盘: RPT-20260917-093015, 2 张
+[aquasense-trace] 群聊图片下载失败(跳过): https://... (超时/HTTP 错误)
+[aquasense-trace] H5 图片落盘失败(详情页将无图): ...
 [aquasense-trace] 趋势查询: 池3, 近7天, 20 条记录
 [aquasense-trace] index.json 损坏,正在重建... 重建完成: 41 条
 ```
 
-关键事件：记录写入、索引更新、查询请求、索引重建、清理执行。
+关键事件：记录写入、索引更新、查询请求、索引重建、清理执行、图片落盘/下载失败。
 
 ---
 
@@ -864,6 +935,7 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 | M9 | 集成测试 + 构建验证 | M4-M8 | ✅ 已完成（新增 59 用例，全套 111 用例通过；typecheck + build 验证） |
 | M10 | v1.6 展示归并对齐：H5 仅「提交成功」反馈；列表/详情统一入口 C 面板承载；列表/详情页路由停用 | M5, M7 | ⏳ 待实施 |
 | M11 | 池号枚举动态化（/api/pools + 筛选/趋势选项） | M3 | ✅ 已完成（随设置页「AquaSense 设置」交付；全套 139 用例通过） |
+| M12 | 详情态工人图片展示：群聊/H5 图片落盘 + 图片二进制接口 + 现场照片缩略图/灯箱 | M3, M7, M8 | ✅ 已完成（2026-09-19；全套 147 用例通过） |
 
 **验收要点**（对应需求 R8.10）：
 
@@ -871,6 +943,7 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 - [x] index.json 与 reports/ 目录保持一致
 - [x] 列表态按日期倒序展示，支持池号/状态筛选
 - [x] 详情态展示完整 5 步 Trace 瀑布图 + 步骤 Accordion（独立详情页已实现；v1.6 归并入口 C 面板，待对齐）
+- [x] 详情态展示工人发送的原始照片（「现场照片」缩略图网格 + 灯箱预览，覆盖 H5 与群聊两种来源）
 - [x] 知识库检索步骤展示命中条目详情（标题/通道/页码/摘录）
 - [x] 池号趋势页展示状态分布 + 症状频次 + 语义聚类
 - [x] H5 提交后展示实时进度（5 步骤百分比）（v1.6 起改为仅「提交成功」反馈，见末项）

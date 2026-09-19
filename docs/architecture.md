@@ -852,7 +852,7 @@ dsh-aquasense/
 │   │   ├── remind-gateway.ts          # S9 配置页 API 网关(/aquasense-remind/api)
 │   │   ├── aqua-settings-gateway.ts   # AquaSense 设置网关(settings 配对 + /aquasense-settings/api)
 │   │   ├── aqua-settings-gateway.test.ts  # 设置网关单元测试
-│   │   ├── trace-gateway.ts           # R8 分析记录网关(/aquasense-reports;含 /api/pools)
+│   │   ├── trace-gateway.ts           # R8 分析记录网关(/aquasense-reports;含 /api/pools 与图片接口)
 │   │   ├── report-handler.ts          # R8 H5 拍照汇报页 + 提交/进度接口
 │   │   └── *.html                     # H5 汇报页/趋势页等静态资源(构建时拷贝至 dist/web/)
 │   └── client/
