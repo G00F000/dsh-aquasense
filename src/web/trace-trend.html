@@ -74,9 +74,7 @@ canvas{display:block;width:100%;height:240px;border-radius:8px}
 <header class="top">
   <a class="back" href="/aquasense-reports">← 返回</a>
   <span class="sp"></span>
-  <select id="f-pool" aria-label="池号">
-    <option>池1</option><option>池2</option><option>池3</option><option>池4</option>
-  </select>
+  <select id="f-pool" aria-label="池号"></select>
   <select id="f-days" aria-label="时间范围">
     <option value="7">近7天</option>
     <option value="30">近30天</option>
@@ -91,9 +89,18 @@ canvas{display:block;width:100%;height:240px;border-radius:8px}
   var poolSel = document.getElementById('f-pool');
   var daysSel = document.getElementById('f-days');
   var params = new URLSearchParams(location.search);
-  var pool = params.get('pool') || '池1';
+  // 池号枚举由服务端按设置页「AquaSense 设置」注入,缺失时兜底默认 4 池
+  var AQUA_POOLS = __AQUA_POOLS__;
+  if (!Array.isArray(AQUA_POOLS) || !AQUA_POOLS.length) AQUA_POOLS = ['池1', '池2', '池3', '池4'];
+  AQUA_POOLS.forEach(function (p) {
+    var opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p;
+    poolSel.appendChild(opt);
+  });
+  var pool = params.get('pool') || AQUA_POOLS[0] || '池1';
   var days = params.get('days') || '7';
-  if (['池1', '池2', '池3', '池4'].indexOf(pool) < 0) pool = '池1';
+  if (AQUA_POOLS.indexOf(pool) < 0) pool = AQUA_POOLS[0] || '池1';
   if (['7', '30', '3650'].indexOf(days) < 0) days = '7';
   poolSel.value = pool;
   daysSel.value = days;

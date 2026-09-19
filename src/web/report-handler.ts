@@ -19,6 +19,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { HttpError, type ApiEnvelope } from './remind-gateway.js'
+import { formatPoolIds, getPoolIds, getValidPoolIds } from '../config/aqua-settings.js'
 import { AnalysisTracer, MAX_OUTPUT_RAW, type TracerParams } from './trace-recorder.js'
 import { pushAbnormalAlert } from '../scheduler/s9-reminder.js'
 import {
@@ -56,8 +57,6 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_BODY_BYTES = MAX_IMAGES * MAX_IMAGE_BYTES + 1024 * 1024
 /** 允许的图片 MIME(飞书内嵌浏览器相机输出 JPEG;相册可能 PNG/WebP) */
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp'])
-/** 池号白名单(与 record-ledger 一致) */
-const VALID_POOLS = new Set(['池1', '池2', '池3', '池4'])
 /** 文字字段长度上限 */
 const MAX_DESCRIPTION_LENGTH = 500
 const MAX_TASK_LENGTH = 200
@@ -215,8 +214,9 @@ function textField(form: FormData, name: string): string | undefined {
  */
 export async function validateReportForm(form: FormData): Promise<ReportFormInput> {
   const pool = textField(form, 'pool_id') ?? ''
-  if (!VALID_POOLS.has(pool)) {
-    throw new HttpError(400, 'invalid-pool', `池号必须为池1/池2/池3/池4,收到「${pool || '(空)'}」`)
+  // 池号白名单:设置页「AquaSense 设置」配置的枚举,每次提交取最新
+  if (!getValidPoolIds().has(pool)) {
+    throw new HttpError(400, 'invalid-pool', `池号必须为${formatPoolIds()},收到「${pool || '(空)'}」`)
   }
 
   const reporter = textField(form, 'reporter') ?? ''
@@ -679,6 +679,8 @@ export async function handleReportPage(req: IncomingMessage, res: ServerResponse
     let html: string
     try {
       html = await readReportPage()
+      // 池号枚举按设置页「AquaSense 设置」配置注入(占位符替换;JSON 即 JS 字面量)
+      html = html.replace('__AQUA_POOLS__', JSON.stringify(getPoolIds()))
     } catch (error) {
       console.error('[aquasense-trace] H5 页面读取失败:', messageOf(error))
       res.writeHead(500, { 'content-type': 'text/html; charset=utf-8' })

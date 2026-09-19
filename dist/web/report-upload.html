@@ -285,9 +285,12 @@ input[type=text]:focus,textarea:focus{outline:none;border-color:var(--accent)}
     });
   }
 
-  // ---- 池号选择 ----
+  // ---- 池号选择(枚举由服务端按设置页「AquaSense 设置」注入,缺失时兜底默认 4 池) ----
   (function initPools() {
-    ['池1', '池2', '池3', '池4'].forEach(function (p) {
+    var pools = __AQUA_POOLS__;
+    if (!Array.isArray(pools) || !pools.length) pools = ['池1', '池2', '池3', '池4'];
+    pool = pools[0];
+    pools.forEach(function (p) {
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'pool' + (p === pool ? ' on' : '');

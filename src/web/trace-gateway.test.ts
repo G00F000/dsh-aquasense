@@ -69,6 +69,7 @@ function createDeps(overrides: Partial<TraceServerDeps> = {}): TraceServerDeps {
       top_symptoms: [],
       recent_records: []
     }),
+    getPools: () => ['池1', '池2', '池3', '池4'],
     readPage: async () => '<!doctype html><html><body>page</body></html>',
     ...overrides
   }

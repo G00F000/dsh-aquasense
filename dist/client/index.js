@@ -1,17 +1,22 @@
 /**
  * aquasense-remind —— 浏览器半侧入口(需求 R6.5 原型 3)
  *
- * 注册两项(v1.8 起单入口:设置页卡片已移除):
- *  - locale 字典(zh/en):配置页文案;
+ * 注册三项:
+ *  - locale 字典(zh/en):配置页/设置卡片文案;
+ *  - settings.plugin.item 键位槽卡片(key = settings 命名空间 'aquasense-settings'):
+ *    设置页「插件配置」tab 扫描到同名 Host 命名空间后自动派发
+ *    「AquaSense 设置」卡片(池号枚举配置);
  *  - sidebar.footer.action 列表槽入口(与设置按钮同级):侧栏页脚渲染
  *    「智慧渔业」,点击在会话列上打开独立配置页(见 AquaConfig.tsx)。
  *
  * 构建产物由 tsdown 打成 DSH module-loader 包裹的 dist/client.js
  * (package.json dsh.client.platform = 'web')。
  */
-import { remindApi } from './api.js';
+import { aquaSettingsApi, remindApi } from './api.js';
 import { AquaConfigEntry, ensureAquaConfigStyle } from './AquaConfig.js';
 import { en, NS, zh } from './locales.js';
+import { AquaSettingsCard } from './AquaSettingsCard.js';
+import { en as settingsEn, SETTINGS_NS, zh as settingsZh } from './settings-locales.js';
 /** 所需服务:槽位注册 + 字典面 */
 export const inject = ['slots', 'locale'];
 /** 侧栏入口标识(列表槽读 id;键控槽读 key,双携带以兼容两侧宿主形态) */
@@ -30,11 +35,19 @@ const sidebarEntryOptions = {
     inject: () => ({ api: remindApi })
 };
 /**
- * 客户端插件体:注册字典与侧栏配置入口。
+ * 客户端插件体:注册字典、设置卡片与侧栏配置入口。
  * @param ctx - 浏览器侧根上下文。
  */
 export function apply(ctx) {
     ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'aquasense-remind: dictionaries');
+    ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh: settingsZh, en: settingsEn }), 'aquasense-settings: dictionaries');
+    const settingsCardInjected = () => ({ api: aquaSettingsApi });
+    ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+        name: 'settings.plugin.item',
+        key: SETTINGS_NS,
+        locale: SETTINGS_NS,
+        inject: settingsCardInjected
+    }, AquaSettingsCard));
     ctx.effect(ensureAquaConfigStyle, 'aquasense-remind: config style');
     ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(sidebarEntryOptions, AquaConfigEntry));
 }

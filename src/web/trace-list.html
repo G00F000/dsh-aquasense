@@ -73,7 +73,6 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
   <div class="filters">
     <select id="f-pool" aria-label="按池号筛选">
       <option value="">全部池号</option>
-      <option>池1</option><option>池2</option><option>池3</option><option>池4</option>
     </select>
     <select id="f-cls" aria-label="按状态筛选">
       <option value="">全部状态</option>
@@ -97,6 +96,16 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
   var poolSel = document.getElementById('f-pool');
   var clsSel = document.getElementById('f-cls');
   var trendLink = document.getElementById('trend-link');
+
+  // 池号枚举由服务端按设置页「AquaSense 设置」注入,缺失时兜底默认 4 池
+  var AQUA_POOLS = __AQUA_POOLS__;
+  if (!Array.isArray(AQUA_POOLS) || !AQUA_POOLS.length) AQUA_POOLS = ['池1', '池2', '池3', '池4'];
+  AQUA_POOLS.forEach(function (p) {
+    var opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p;
+    poolSel.appendChild(opt);
+  });
 
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
@@ -221,7 +230,7 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
   // 趋势入口携带当前筛选池号
   trendLink.addEventListener('click', function (ev) {
     ev.preventDefault();
-    var pool = state.pool || '池1';
+    var pool = state.pool || AQUA_POOLS[0] || '池1';
     location.href = '/aquasense-reports/trend?pool=' + encodeURIComponent(pool);
   });
 

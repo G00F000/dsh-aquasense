@@ -8,6 +8,7 @@
  *  - GET /aquasense-reports/api/records    → 列表 JSON(?pool=&cls=&date=&limit=&offset=)
  *  - GET /aquasense-reports/api/records/:id → 详情 JSON
  *  - GET /aquasense-reports/api/trend/:pool → 趋势 JSON(?days=7)
+ *  - GET /aquasense-reports/api/pools       → 池号枚举 JSON(设置页配置,筛选/趋势用)
  *
  * 协议层防护(与 remind-gateway.ts 一致):仅 GET(405)、同源校验(403)、
  * 路径解析(404)、参数校验(400)、兜底 500。
@@ -36,6 +37,8 @@ export type TraceRoute = {
     kind: 'api-trend';
     pool: string;
 } | {
+    kind: 'api-pools';
+} | {
     kind: 'unknown';
 };
 /** 网关数据依赖(注入以便独立测试) */
@@ -43,6 +46,8 @@ export interface TraceServerDeps {
     queryIndex(query: RecordQuery): Promise<RecordQueryResult>;
     readReport(id: string): Promise<AnalysisRecord | null>;
     computeTrend(pool: string, days: number): Promise<TrendData>;
+    /** 池号枚举(设置页「AquaSense 设置」配置,供列表筛选/趋势页选项) */
+    getPools(): string[];
     /** 读取页面 HTML(生产环境从 dist/web/ 同目录读取) */
     readPage(page: TracePage): Promise<string>;
 }

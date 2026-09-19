@@ -15,7 +15,10 @@
  *    列表页经配置页页签 React 组件直调 API 展示(v1.3 去 iframe 化),不新开标签页);
  *  - H5 拍照汇报页由 web/report-handler 提供(/aquasense-remind/report 页面 +
  *    /aquasense-remind/api/report/{submit,progress} 提交与进度接口);
- *  - 群聊场景经 recordLedger 包装器后置收集简化记录(方案 A)。
+ *  - 群聊场景经 recordLedger 包装器后置收集简化记录(方案 A);
+ *  - 设置页「AquaSense 设置」卡片由 web/aqua-settings-gateway 提供
+ *    (settings 命名空间配对 + /aquasense-settings/api 路由),池号枚举配置
+ *    供台账白名单/H5 校验/列表筛选全局生效。
  */
 import { analyzeImage } from './tools/analyze-image.js';
 import { generateAdvice } from './tools/generate-advice.js';
@@ -24,6 +27,7 @@ import { setupS9Reminder } from './scheduler/s9-reminder.js';
 import { installRemindWeb } from './web/remind-gateway.js';
 import { installTraceWeb } from './web/trace-gateway.js';
 import { installReportWeb } from './web/report-handler.js';
+import { installAquaSettingsWeb } from './web/aqua-settings-gateway.js';
 import { wrapLedgerWithTrace } from './web/trace-ledger-wrap.js';
 export const name = 'aquasense-plugin';
 export const inject = ['tools'];
@@ -42,6 +46,8 @@ export function apply(ctx) {
     installReportWeb(ctx);
     // R8 分析记录 Web 面:列表/详情/趋势页 + 查询 API(/aquasense-reports)
     installTraceWeb(ctx);
+    // 设置页「AquaSense 设置」:池号枚举配置(settings 命名空间 + /aquasense-settings/api)
+    installAquaSettingsWeb(ctx);
     console.log('[aquasense] 工具加载完成');
     console.log('[aquasense] 知识库查询:generate-advice 内置 IMA API 自动查询');
 }

@@ -105,7 +105,8 @@ interface RecordsPage {
 
 const PAGE_LIMIT = 20
 
-const POOL_OPTIONS = ['', '池1', '池2', '池3', '池4']
+/** 池号兜底枚举(/api/pools 不可用时,与设置页默认一致) */
+const FALLBACK_POOLS = ['池1', '池2', '池3', '池4']
 const CLS_OPTIONS: [string, string][] = [
   ['', '全部状态'],
   ['normal', '正常'],
@@ -624,6 +625,8 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
   const [error, setError] = useState<string | null>(null)
   const [pool, setPool] = useState('')
   const [cls, setCls] = useState('')
+  /** 池号枚举(设置页「AquaSense 设置」配置;/api/pools 拉取失败时兜底默认 4 池) */
+  const [pools, setPools] = useState<string[]>(FALLBACK_POOLS)
 
   // --- 详情状态 ---
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -686,6 +689,27 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
     void fetchPage(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 挂载时拉取池号枚举(失败静默保持默认,筛选器仍可用)
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const resp = await fetch(`${apiBase}/api/pools`)
+        if (!resp.ok) return
+        const body = await resp.json()
+        const value = Array.isArray(body?.value?.pools) ? (body.value.pools as unknown[]) : []
+        if (!cancelled && value.length > 0) {
+          setPools(value.filter((item): item is string => typeof item === 'string'))
+        }
+      } catch {
+        /* 保持默认枚举 */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [apiBase])
 
   // ---------- 详情 ----------
 
@@ -845,7 +869,7 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
             onChange={(e) => { applyFilter(e.target.value, cls) }}
             aria-label="按池号筛选"
           >
-            {POOL_OPTIONS.map((p) => <option key={p} value={p}>{p || '全部池号'}</option>)}
+            {['', ...pools].map((p) => <option key={p} value={p}>{p || '全部池号'}</option>)}
           </select>
           <span className="trc-select-caret">▾</span>
         </span>
@@ -865,7 +889,7 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
           type="button"
           className="trc-trend-btn"
           onClick={() => {
-            const targetPool = pool || '池1'
+            const targetPool = pool || pools[0] || '池1'
             onOpenTrend?.(targetPool)
           }}
         >
@@ -974,19 +998,37 @@ export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports',
   const [error, setError] = useState<string | null>(null)
   const [days, setDays] = useState(7)
 
-  // 加载所有记录以提取可用池号列表
+  // 加载池号选项:优先设置页「AquaSense 设置」配置(/api/pools),
+  // 不可用时回退从历史记录提取;始终保证当前查看池号在选项中
   useEffect(() => {
-    fetch(`${apiBase}/api/records`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((b) => {
-        if (!b?.ok) return
-        const recs = (b.value as RecordSummary[]) || []
-        const poolSet = new Set<string>()
-        recs.forEach((r) => poolSet.add(r.pool))
-        if (poolSet.size > 0) setPools(Array.from(poolSet).sort())
+    const apply = (list: string[]): void => {
+      if (list.length === 0) return
+      setPools((current) => {
+        const next = [...list]
+        if (!next.includes(initPool)) next.unshift(initPool)
+        return next.length > 0 ? next : current
       })
-      .catch(() => {})  // 静默失败
-  }, [apiBase])
+    }
+    fetch(`${apiBase}/api/pools`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        if (b?.ok && Array.isArray(b.value?.pools) && b.value.pools.length > 0) {
+          apply(b.value.pools.filter((p: unknown) => typeof p === 'string'))
+          return null
+        }
+        // 回退:历史记录提取池号
+        return fetch(`${apiBase}/api/records`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((b2) => {
+            if (!b2?.ok) return
+            const recs = (b2.value as RecordSummary[]) || []
+            const poolSet = new Set<string>()
+            recs.forEach((r) => poolSet.add(r.pool))
+            if (poolSet.size > 0) apply(Array.from(poolSet).sort())
+          })
+      })
+      .catch(() => {}) // 静默失败
+  }, [apiBase, initPool])
 
   useEffect(() => {
     setLoading(true)

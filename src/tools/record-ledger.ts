@@ -13,6 +13,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { getFeishuToken, getFeishuUserName, uploadImageToFeishu } from '../feishu/token.js'
 import { type Scene } from '../router/intent-router.js'
+import { formatPoolIds, getValidPoolIds } from '../config/aqua-settings.js'
 
 /** 台账场景 = S1-S8 中所有落表场景(排除 S3 知识询问) */
 export type LedgerScene = Exclude<Scene, 'knowledge'>
@@ -63,9 +64,6 @@ const AI_ANALYSIS_COLUMN: Partial<Record<LedgerScene, string>> = {
 /** dissection 场景「解剖器官」下拉框选项(多选;须与飞书表格选项一致,写入值只能是其中之一) */
 const DISSECTION_ORGAN_OPTIONS = ['体表', '鳃', '肝', '胆囊', '肠', '脾', '鳔', '肾', '腹腔']
 
-/** 池号白名单:与清徐基地循环水池编号一致,防止任意文本写入台账 */
-const VALID_POOL_IDS = new Set(['池1', '池2', '池3', '池4'])
-
 /** 上报人占位符/猜测值黑名单:这些值不允许写入台账,必须通过 open_id 解析或追问获得真实姓名 */
 const REPORTER_BLOCKLIST = new Set(['未知', 'unknown', '未知用户', '模型猜的名字', '未知上报人', '不确定', '暂无'])
 
@@ -80,7 +78,7 @@ export const recordLedger = defineTool({
     },
     pool_id: {
       type: 'string',
-      description: '池号(池1/池2/池3/池4),必须与 fields 中的"池号"一致'
+      description: `池号(${formatPoolIds()}),必须与 fields 中的"池号"一致(池号枚举可在设置页「AquaSense 设置」配置)`
     },
     fields: {
       type: 'object',
@@ -143,23 +141,25 @@ export const recordLedger = defineTool({
       }
     }
     const rawPoolId = fieldPoolId ?? argPoolId
+    // 池号白名单(设置页「AquaSense 设置」配置的枚举,运行时每次取最新)
+    const poolList = formatPoolIds()
     if (!rawPoolId) {
       return {
         success: false,
         message: '信息不完整,请补充:',
         missing: ['pool_id'],
-        questions: ['请问是哪个池子?(池1/池2/池3/池4)']
+        questions: [`请问是哪个池子?(${poolList})`]
       }
     }
     const poolId = String(rawPoolId)
 
     // 池号白名单校验:防止 "1号池" 等非标文本写入(与去重精确匹配冲突)
-    if (!VALID_POOL_IDS.has(poolId)) {
+    if (!getValidPoolIds().has(poolId)) {
       return {
         success: false,
-        message: `池号「${poolId}」不在允许范围内,合法值为:池1/池2/池3/池4`,
+        message: `池号「${poolId}」不在允许范围内,合法值为:${poolList}`,
         missing: ['pool_id'],
-        questions: ['池号有误,请问是池1、池2、池3还是池4?']
+        questions: [`池号有误,请问是${poolList}中的哪一个?`]
       }
     }
 

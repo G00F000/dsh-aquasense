@@ -8,6 +8,7 @@
  *  - GET /aquasense-reports/api/records    → 列表 JSON(?pool=&cls=&date=&limit=&offset=)
  *  - GET /aquasense-reports/api/records/:id → 详情 JSON
  *  - GET /aquasense-reports/api/trend/:pool → 趋势 JSON(?days=7)
+ *  - GET /aquasense-reports/api/pools       → 池号枚举 JSON(设置页配置,筛选/趋势用)
  *
  * 协议层防护(与 remind-gateway.ts 一致):仅 GET(405)、同源校验(403)、
  * 路径解析(404)、参数校验(400)、兜底 500。
@@ -20,6 +21,7 @@ import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { HttpError, type ApiEnvelope, type ApiResult } from './remind-gateway.js'
+import { getPoolIds } from '../config/aqua-settings.js'
 import {
   computeTrend,
   queryIndex,
@@ -58,6 +60,7 @@ export type TraceRoute =
   | { kind: 'api-records' }
   | { kind: 'api-record'; id: string }
   | { kind: 'api-trend'; pool: string }
+  | { kind: 'api-pools' }
   | { kind: 'unknown' }
 
 /** 网关数据依赖(注入以便独立测试) */
@@ -65,6 +68,8 @@ export interface TraceServerDeps {
   queryIndex(query: RecordQuery): Promise<RecordQueryResult>
   readReport(id: string): Promise<AnalysisRecord | null>
   computeTrend(pool: string, days: number): Promise<TrendData>
+  /** 池号枚举(设置页「AquaSense 设置」配置,供列表筛选/趋势页选项) */
+  getPools(): string[]
   /** 读取页面 HTML(生产环境从 dist/web/ 同目录读取) */
   readPage(page: TracePage): Promise<string>
 }
@@ -99,6 +104,7 @@ export function resolveTraceRoute(pathname: string): TraceRoute {
   if (rest === 'report') return { kind: 'page', page: 'detail' }
   if (rest === 'trend') return { kind: 'page', page: 'trend' }
   if (rest === 'api/records') return { kind: 'api-records' }
+  if (rest === 'api/pools') return { kind: 'api-pools' }
 
   if (rest.startsWith('api/records/')) {
     const id = safeDecode(rest.slice('api/records/'.length))
@@ -246,6 +252,10 @@ export function createTraceHandler(deps: TraceServerDeps): (req: IncomingMessage
           writeEnvelope(res, 200, ok(value).body)
           return
         }
+        case 'api-pools': {
+          writeEnvelope(res, 200, ok({ pools: deps.getPools() }).body)
+          return
+        }
         default:
           writeEnvelope(res, 404, fail(404, 'not-found', `未知路径: ${url.pathname}`).body)
       }
@@ -264,6 +274,8 @@ async function servePage(deps: TraceServerDeps, page: TracePage, res: ServerResp
   let html: string
   try {
     html = await deps.readPage(page)
+    // 池号枚举按设置页「AquaSense 设置」配置注入(占位符替换;JSON 即 JS 字面量)
+    html = html.replace('__AQUA_POOLS__', JSON.stringify(deps.getPools()))
   } catch (error) {
     console.error(`[aquasense-trace] 页面读取失败(${page}):`, messageOf(error))
     res.writeHead(500, { 'content-type': 'text/html; charset=utf-8' })
@@ -310,6 +322,7 @@ export function installTraceWeb(ctx: Context): void {
     queryIndex,
     readReport,
     computeTrend,
+    getPools: getPoolIds,
     readPage: readTracePage
   }
   const handler = createTraceHandler(deps)

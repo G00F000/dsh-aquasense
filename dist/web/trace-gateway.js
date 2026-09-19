@@ -8,6 +8,7 @@
  *  - GET /aquasense-reports/api/records    → 列表 JSON(?pool=&cls=&date=&limit=&offset=)
  *  - GET /aquasense-reports/api/records/:id → 详情 JSON
  *  - GET /aquasense-reports/api/trend/:pool → 趋势 JSON(?days=7)
+ *  - GET /aquasense-reports/api/pools       → 池号枚举 JSON(设置页配置,筛选/趋势用)
  *
  * 协议层防护(与 remind-gateway.ts 一致):仅 GET(405)、同源校验(403)、
  * 路径解析(404)、参数校验(400)、兜底 500。
@@ -17,6 +18,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { HttpError } from './remind-gateway.js';
+import { getPoolIds } from '../config/aqua-settings.js';
 import { computeTrend, queryIndex, readReport } from './trace-store.js';
 // ========== 常量 ==========
 /** 分析记录路由前缀 */
@@ -47,6 +49,8 @@ export function resolveTraceRoute(pathname) {
         return { kind: 'page', page: 'trend' };
     if (rest === 'api/records')
         return { kind: 'api-records' };
+    if (rest === 'api/pools')
+        return { kind: 'api-pools' };
     if (rest.startsWith('api/records/')) {
         const id = safeDecode(rest.slice('api/records/'.length));
         return { kind: 'api-record', id };
@@ -185,6 +189,10 @@ export function createTraceHandler(deps) {
                     writeEnvelope(res, 200, ok(value).body);
                     return;
                 }
+                case 'api-pools': {
+                    writeEnvelope(res, 200, ok({ pools: deps.getPools() }).body);
+                    return;
+                }
                 default:
                     writeEnvelope(res, 404, fail(404, 'not-found', `未知路径: ${url.pathname}`).body);
             }
@@ -203,6 +211,8 @@ async function servePage(deps, page, res) {
     let html;
     try {
         html = await deps.readPage(page);
+        // 池号枚举按设置页「AquaSense 设置」配置注入(占位符替换;JSON 即 JS 字面量)
+        html = html.replace('__AQUA_POOLS__', JSON.stringify(deps.getPools()));
     }
     catch (error) {
         console.error(`[aquasense-trace] 页面读取失败(${page}):`, messageOf(error));
@@ -244,6 +254,7 @@ export function installTraceWeb(ctx) {
         queryIndex,
         readReport,
         computeTrend,
+        getPools: getPoolIds,
         readPage: readTracePage
     };
     const handler = createTraceHandler(deps);

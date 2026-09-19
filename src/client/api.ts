@@ -6,11 +6,17 @@
  *   save   → { config, status }(body: { config })
  *   test   → { sent: true }
  *   groups → { groups, error? }
+ * 与 Host 侧 src/web/aqua-settings-gateway.ts 的 /aquasense-settings/api 路由对应:
+ *   get    → { settings }
+ *   save   → { settings }(body: { settings })
  * 信封协议 { ok, value } / { ok, error: { code, message } }。
  */
 
 /** 配置页 API 前缀(与 Host 侧常量一致) */
 const API_PREFIX = '/aquasense-remind/api'
+
+/** AquaSense 设置页 API 前缀(与 Host 侧常量一致) */
+const AQUA_SETTINGS_API_PREFIX = '/aquasense-settings/api'
 
 /** 飞书群条目(下拉选项) */
 export interface FeishuGroup {
@@ -60,10 +66,10 @@ export interface RemindApi {
 export class RemindApiError extends Error {}
 
 /** 调用一次 API 并解包信封 */
-async function call<T>(method: string, body?: unknown): Promise<T> {
+async function call<T>(prefix: string, method: string, body?: unknown): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${API_PREFIX}/${method}`, {
+    response = await fetch(`${prefix}/${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body ?? {})
@@ -86,8 +92,27 @@ async function call<T>(method: string, body?: unknown): Promise<T> {
 
 /** 配置页 API 客户端 */
 export const remindApi: RemindApi = {
-  get: () => call('get'),
-  save: (input) => call('save', { config: input }),
-  test: () => call('test'),
-  groups: () => call('groups')
+  get: () => call(API_PREFIX, 'get'),
+  save: (input) => call(API_PREFIX, 'save', { config: input }),
+  test: () => call(API_PREFIX, 'test'),
+  groups: () => call(API_PREFIX, 'groups')
+}
+
+// ========== AquaSense 设置 API ==========
+
+/** 池号设置(settings.json 快照) */
+export interface AquaSettings {
+  pools: string[]
+}
+
+/** 设置页 API 合同(设置 → 插件 → 插件配置 中的「AquaSense 设置」卡片) */
+export interface AquaSettingsApi {
+  get(): Promise<{ settings: AquaSettings }>
+  save(input: AquaSettings): Promise<{ settings: AquaSettings }>
+}
+
+/** 设置页 API 客户端 */
+export const aquaSettingsApi: AquaSettingsApi = {
+  get: () => call(AQUA_SETTINGS_API_PREFIX, 'get'),
+  save: (input) => call(AQUA_SETTINGS_API_PREFIX, 'save', { settings: input })
 }

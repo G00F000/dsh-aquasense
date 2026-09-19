@@ -6,6 +6,9 @@
  *   save   → { config, status }(body: { config })
  *   test   → { sent: true }
  *   groups → { groups, error? }
+ * 与 Host 侧 src/web/aqua-settings-gateway.ts 的 /aquasense-settings/api 路由对应:
+ *   get    → { settings }
+ *   save   → { settings }(body: { settings })
  * 信封协议 { ok, value } / { ok, error: { code, message } }。
  */
 /** 飞书群条目(下拉选项) */
@@ -62,3 +65,18 @@ export declare class RemindApiError extends Error {
 }
 /** 配置页 API 客户端 */
 export declare const remindApi: RemindApi;
+/** 池号设置(settings.json 快照) */
+export interface AquaSettings {
+    pools: string[];
+}
+/** 设置页 API 合同(设置 → 插件 → 插件配置 中的「AquaSense 设置」卡片) */
+export interface AquaSettingsApi {
+    get(): Promise<{
+        settings: AquaSettings;
+    }>;
+    save(input: AquaSettings): Promise<{
+        settings: AquaSettings;
+    }>;
+}
+/** 设置页 API 客户端 */
+export declare const aquaSettingsApi: AquaSettingsApi;

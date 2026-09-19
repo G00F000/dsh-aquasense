@@ -39,17 +39,22 @@ react_jsx_runtime = __toESM(react_jsx_runtime);
 *   save   → { config, status }(body: { config })
 *   test   → { sent: true }
 *   groups → { groups, error? }
+* 与 Host 侧 src/web/aqua-settings-gateway.ts 的 /aquasense-settings/api 路由对应:
+*   get    → { settings }
+*   save   → { settings }(body: { settings })
 * 信封协议 { ok, value } / { ok, error: { code, message } }。
 */
 /** 配置页 API 前缀(与 Host 侧常量一致) */
 const API_PREFIX = "/aquasense-remind/api";
+/** AquaSense 设置页 API 前缀(与 Host 侧常量一致) */
+const AQUA_SETTINGS_API_PREFIX = "/aquasense-settings/api";
 /** 请求失败(信封 error.message 或 HTTP 状态) */
 var RemindApiError = class extends Error {};
 /** 调用一次 API 并解包信封 */
-async function call(method, body) {
+async function call(prefix, method, body) {
 	let response;
 	try {
-		response = await fetch(`${API_PREFIX}/${method}`, {
+		response = await fetch(`${prefix}/${method}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(body ?? {})
@@ -68,17 +73,22 @@ async function call(method, body) {
 }
 /** 配置页 API 客户端 */
 const remindApi = {
-	get: () => call("get"),
-	save: (input) => call("save", { config: input }),
-	test: () => call("test"),
-	groups: () => call("groups")
+	get: () => call(API_PREFIX, "get"),
+	save: (input) => call(API_PREFIX, "save", { config: input }),
+	test: () => call(API_PREFIX, "test"),
+	groups: () => call(API_PREFIX, "groups")
+};
+/** 设置页 API 客户端 */
+const aquaSettingsApi = {
+	get: () => call(AQUA_SETTINGS_API_PREFIX, "get"),
+	save: (input) => call(AQUA_SETTINGS_API_PREFIX, "save", { settings: input })
 };
 
 //#endregion
 //#region src/client/RemindForm.tsx
 /** 任务数上限(与 Host 侧 remind-gateway.ts 保持一致) */
 const MAX_TASKS = 50;
-const formStyle = {
+const formStyle$1 = {
 	display: "flex",
 	flexDirection: "column"
 };
@@ -94,7 +104,7 @@ const fieldFirstStyle = {
 	...fieldStyle,
 	borderTop: "none"
 };
-const labelStyle = {
+const labelStyle$1 = {
 	display: "block",
 	fontSize: 13,
 	fontWeight: 500,
@@ -109,7 +119,7 @@ const switchRowStyle = {
 	fontWeight: 500,
 	color: "var(--dsw-alias-label-primary, inherit)"
 };
-const inputStyle = {
+const inputStyle$1 = {
 	width: "100%",
 	height: 34,
 	padding: "0 12px",
@@ -127,17 +137,17 @@ const taskRowStyle = {
 	gap: 8
 };
 const timeInputStyle = {
-	...inputStyle,
+	...inputStyle$1,
 	width: 104,
 	flex: "none"
 };
-const hintStyle = {
+const hintStyle$1 = {
 	fontSize: 12,
 	color: "var(--dsw-alias-label-caption, #6b7280)",
 	margin: 0,
 	lineHeight: 1.5
 };
-const footerStyle = {
+const footerStyle$1 = {
 	borderTop: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
 	justifyContent: "flex-end",
 	alignItems: "center",
@@ -146,7 +156,7 @@ const footerStyle = {
 	display: "flex"
 };
 /** 按钮基础(对齐 .sh-cfg-ft button) */
-const btnBase = {
+const btnBase$1 = {
 	appearance: "none",
 	font: "inherit",
 	cursor: "pointer",
@@ -157,35 +167,35 @@ const btnBase = {
 	transition: "background .16s, opacity .16s"
 };
 /** 次级按钮:透明底 + 描边(对齐 .sh-cfg-disc) */
-const ghostBtnStyle = {
-	...btnBase,
+const ghostBtnStyle$1 = {
+	...btnBase$1,
 	background: "transparent",
 	border: "1px solid var(--dsw-alias-border-l2, #d1d5db)",
 	color: "var(--dsw-alias-label-secondary, #4b5563)"
 };
 /** 主按钮(对齐 .sh-cfg-save) */
-const primaryBtnStyle = {
-	...btnBase,
+const primaryBtnStyle$1 = {
+	...btnBase$1,
 	background: "var(--dsw-alias-button-primary-fill, #111827)",
 	border: "1px solid var(--dsw-alias-button-primary-fill, #111827)",
 	color: "var(--dsw-alias-label-primary-foreground, #fff)"
 };
 /** 禁用态透明度(对齐 .sh-cfg-ft button:disabled) */
-const DISABLED_OPACITY = .4;
+const DISABLED_OPACITY$1 = .4;
 const noticeStyle = {
 	color: "var(--dsw-alias-label-caption, #6b7280)",
 	margin: "0 0 8px",
 	fontSize: 12,
 	lineHeight: 1.5
 };
-const savedStyle = {
+const savedStyle$1 = {
 	color: "var(--dsw-alias-state-success-primary, #047857)",
 	margin: "0 0 8px",
 	fontSize: 12,
 	lineHeight: 1.5
 };
 /** 错误文本(对齐 .sh-cfg-err,位于操作行左侧) */
-const errorStyle = {
+const errorStyle$1 = {
 	color: "var(--dsw-alias-state-error-primary, #b91c1c)",
 	flex: 1,
 	margin: 0,
@@ -210,7 +220,7 @@ function findInvalidTask(tasks) {
 	return null;
 }
 /** 错误信息提取 */
-function messageOf(error) {
+function messageOf$1(error) {
 	return error instanceof Error ? error.message : String(error);
 }
 /**
@@ -243,7 +253,7 @@ function useRemindConfig(api, t) {
 		if (groupsResult.status === "fulfilled") {
 			setGroups(groupsResult.value.groups);
 			setGroupsError(groupsResult.value.error ?? null);
-		} else setGroupsError(messageOf(groupsResult.reason));
+		} else setGroupsError(messageOf$1(groupsResult.reason));
 	}, [api]);
 	(0, react.useEffect)(() => {
 		load();
@@ -311,7 +321,7 @@ function useRemindConfig(api, t) {
 		} catch (error) {
 			setApplyState({
 				kind: "error",
-				message: messageOf(error)
+				message: messageOf$1(error)
 			});
 		}
 	};
@@ -329,7 +339,7 @@ function useRemindConfig(api, t) {
 		} catch (error) {
 			setApplyState({
 				kind: "error",
-				message: messageOf(error)
+				message: messageOf$1(error)
 			});
 		}
 	};
@@ -368,10 +378,10 @@ function RemindForm({ model, t }) {
 		role: "status",
 		children: t("card.unavailable")
 	}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-		style: footerStyle,
+		style: footerStyle$1,
 		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 			type: "button",
-			style: ghostBtnStyle,
+			style: ghostBtnStyle$1,
 			onClick: () => {
 				model.reload();
 			},
@@ -395,12 +405,12 @@ function RemindForm({ model, t }) {
 	};
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
 		applyState.kind === "saved" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-			style: savedStyle,
+			style: savedStyle$1,
 			role: "status",
 			children: t("card.saved")
 		}) : null,
 		applyState.kind === "testSent" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-			style: savedStyle,
+			style: savedStyle$1,
 			role: "status",
 			children: t("card.testSent")
 		}) : null,
@@ -409,7 +419,7 @@ function RemindForm({ model, t }) {
 			children: t("card.unsavedHint")
 		}) : null,
 		/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-			style: formStyle,
+			style: formStyle$1,
 			children: [
 				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: fieldFirstStyle,
@@ -424,7 +434,7 @@ function RemindForm({ model, t }) {
 							}
 						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("field.enabled.label") })]
 					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-						style: hintStyle,
+						style: hintStyle$1,
 						children: t("field.enabled.hint")
 					})]
 				}),
@@ -432,13 +442,13 @@ function RemindForm({ model, t }) {
 					style: fieldStyle,
 					children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
-							style: labelStyle,
+							style: labelStyle$1,
 							htmlFor: groupInputId,
 							children: t("field.group.label")
 						}),
 						groups.length > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("select", {
 							id: groupInputId,
-							style: inputStyle,
+							style: inputStyle$1,
 							value: draft.group,
 							disabled: busy,
 							onChange: (event) => {
@@ -461,7 +471,7 @@ function RemindForm({ model, t }) {
 						}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 							id: groupInputId,
 							type: "text",
-							style: inputStyle,
+							style: inputStyle$1,
 							value: draft.group,
 							disabled: busy,
 							placeholder: "oc_xxxxxxxx",
@@ -470,11 +480,11 @@ function RemindForm({ model, t }) {
 							}
 						}),
 						groupsError ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-							style: hintStyle,
+							style: hintStyle$1,
 							children: t("field.group.listFailed", { message: groupsError })
 						}) : null,
 						groups.length === 0 && !groupsError ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-							style: hintStyle,
+							style: hintStyle$1,
 							children: t("field.group.manualHint")
 						}) : null
 					]
@@ -483,11 +493,11 @@ function RemindForm({ model, t }) {
 					style: fieldStyle,
 					children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("label", {
-							style: labelStyle,
+							style: labelStyle$1,
 							children: t("field.tasks.label")
 						}),
 						draft.tasks.length === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-							style: hintStyle,
+							style: hintStyle$1,
 							children: t("field.tasks.empty")
 						}) : null,
 						draft.tasks.map((task, index) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -505,7 +515,7 @@ function RemindForm({ model, t }) {
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 									type: "text",
 									style: {
-										...inputStyle,
+										...inputStyle$1,
 										flex: 1
 									},
 									value: task.task,
@@ -518,9 +528,9 @@ function RemindForm({ model, t }) {
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 									type: "button",
 									style: {
-										...ghostBtnStyle,
+										...ghostBtnStyle$1,
 										flex: "none",
-										opacity: busy ? DISABLED_OPACITY : 1
+										opacity: busy ? DISABLED_OPACITY$1 : 1
 									},
 									disabled: busy,
 									onClick: () => {
@@ -535,8 +545,8 @@ function RemindForm({ model, t }) {
 							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
 								style: {
-									...ghostBtnStyle,
-									opacity: busy || draft.tasks.length >= MAX_TASKS ? DISABLED_OPACITY : 1
+									...ghostBtnStyle$1,
+									opacity: busy || draft.tasks.length >= MAX_TASKS ? DISABLED_OPACITY$1 : 1
 								},
 								disabled: busy || draft.tasks.length >= MAX_TASKS,
 								onClick: model.addTask,
@@ -544,7 +554,7 @@ function RemindForm({ model, t }) {
 							})
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-							style: hintStyle,
+							style: hintStyle$1,
 							children: t("field.tasks.hint", { max: MAX_TASKS })
 						})
 					]
@@ -553,24 +563,24 @@ function RemindForm({ model, t }) {
 		}),
 		status ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 			style: {
-				...hintStyle,
+				...hintStyle$1,
 				marginTop: 12
 			},
 			children: summarize(status)
 		}) : null,
 		/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
-			style: footerStyle,
+			style: footerStyle$1,
 			children: [
 				applyState.kind === "error" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
-					style: errorStyle,
+					style: errorStyle$1,
 					role: "status",
 					children: applyState.message
 				}) : null,
 				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 					type: "button",
 					style: {
-						...ghostBtnStyle,
-						opacity: dirty || busy ? DISABLED_OPACITY : 1
+						...ghostBtnStyle$1,
+						opacity: dirty || busy ? DISABLED_OPACITY$1 : 1
 					},
 					disabled: dirty || busy,
 					onClick: () => {
@@ -581,8 +591,8 @@ function RemindForm({ model, t }) {
 				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 					type: "button",
 					style: {
-						...ghostBtnStyle,
-						opacity: !dirty || busy ? DISABLED_OPACITY : 1
+						...ghostBtnStyle$1,
+						opacity: !dirty || busy ? DISABLED_OPACITY$1 : 1
 					},
 					disabled: !dirty || busy,
 					onClick: model.discard,
@@ -591,8 +601,8 @@ function RemindForm({ model, t }) {
 				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 					type: "button",
 					style: {
-						...primaryBtnStyle,
-						opacity: !dirty || busy ? DISABLED_OPACITY : 1
+						...primaryBtnStyle$1,
+						opacity: !dirty || busy ? DISABLED_OPACITY$1 : 1
 					},
 					disabled: !dirty || busy,
 					onClick: () => {
@@ -608,8 +618,8 @@ function RemindForm({ model, t }) {
 //#endregion
 //#region src/client/TraceRecordList.tsx
 const PAGE_LIMIT = 20;
-const POOL_OPTIONS = [
-	"",
+/** 池号兜底枚举(/api/pools 不可用时,与设置页默认一致) */
+const FALLBACK_POOLS = [
 	"池1",
 	"池2",
 	"池3",
@@ -1330,6 +1340,8 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 	const [error, setError] = (0, react.useState)(null);
 	const [pool, setPool] = (0, react.useState)("");
 	const [cls, setCls] = (0, react.useState)("");
+	/** 池号枚举(设置页「AquaSense 设置」配置;/api/pools 拉取失败时兜底默认 4 池) */
+	const [pools, setPools] = (0, react.useState)(FALLBACK_POOLS);
 	const [detailId, setDetailId] = (0, react.useState)(null);
 	const [detailRecord, setDetailRecord] = (0, react.useState)(null);
 	const [detailLoading, setDetailLoading] = (0, react.useState)(false);
@@ -1387,6 +1399,21 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 	(0, react.useEffect)(() => {
 		fetchPage(true);
 	}, []);
+	(0, react.useEffect)(() => {
+		let cancelled = false;
+		(async () => {
+			try {
+				const resp = await fetch(`${apiBase}/api/pools`);
+				if (!resp.ok) return;
+				const body = await resp.json();
+				const value = Array.isArray(body?.value?.pools) ? body.value.pools : [];
+				if (!cancelled && value.length > 0) setPools(value.filter((item) => typeof item === "string"));
+			} catch {}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [apiBase]);
 	const openDetail = (0, react.useCallback)(async (id) => {
 		setDetailId(id);
 		setDetailRecord(null);
@@ -1610,7 +1637,7 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 						applyFilter(e.target.value, cls);
 					},
 					"aria-label": "按池号筛选",
-					children: POOL_OPTIONS.map((p) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
+					children: ["", ...pools].map((p) => /* @__PURE__ */ (0, react_jsx_runtime.jsx)("option", {
 						value: p,
 						children: p || "全部池号"
 					}, p))
@@ -1645,7 +1672,8 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 				type: "button",
 				className: "trc-trend-btn",
 				onClick: () => {
-					onOpenTrend?.(pool || "池1");
+					const targetPool = pool || pools[0] || "池1";
+					onOpenTrend?.(targetPool);
 				},
 				children: "📈 池号趋势分析 →"
 			})
@@ -1773,14 +1801,28 @@ function TraceTrendView({ pool: initPool, apiBase = "/aquasense-reports", onBack
 	const [error, setError] = (0, react.useState)(null);
 	const [days, setDays] = (0, react.useState)(7);
 	(0, react.useEffect)(() => {
-		fetch(`${apiBase}/api/records`).then((r) => r.ok ? r.json() : null).then((b) => {
-			if (!b?.ok) return;
-			const recs = b.value || [];
-			const poolSet = /* @__PURE__ */ new Set();
-			recs.forEach((r) => poolSet.add(r.pool));
-			if (poolSet.size > 0) setPools(Array.from(poolSet).sort());
+		const apply$1 = (list) => {
+			if (list.length === 0) return;
+			setPools((current) => {
+				const next = [...list];
+				if (!next.includes(initPool)) next.unshift(initPool);
+				return next.length > 0 ? next : current;
+			});
+		};
+		fetch(`${apiBase}/api/pools`).then((r) => r.ok ? r.json() : null).then((b) => {
+			if (b?.ok && Array.isArray(b.value?.pools) && b.value.pools.length > 0) {
+				apply$1(b.value.pools.filter((p) => typeof p === "string"));
+				return null;
+			}
+			return fetch(`${apiBase}/api/records`).then((r) => r.ok ? r.json() : null).then((b2) => {
+				if (!b2?.ok) return;
+				const recs = b2.value || [];
+				const poolSet = /* @__PURE__ */ new Set();
+				recs.forEach((r) => poolSet.add(r.pool));
+				if (poolSet.size > 0) apply$1(Array.from(poolSet).sort());
+			});
 		}).catch(() => {});
-	}, [apiBase]);
+	}, [apiBase, initPool]);
 	(0, react.useEffect)(() => {
 		setLoading(true);
 		setError(null);
@@ -2478,6 +2520,541 @@ const en = {
 };
 
 //#endregion
+//#region src/client/AquaSettingsCard.tsx
+/** 池号数量/长度上限(与 Host 侧 aqua-settings.ts 保持一致) */
+const MAX_POOLS = 20;
+const MAX_POOL_LENGTH = 16;
+const cardStyle = {
+	border: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
+	background: "var(--dsw-alias-bg-layer-3, #fff)",
+	borderRadius: 12,
+	boxSizing: "border-box",
+	listStyle: "none",
+	transition: "border-color .16s, background .16s"
+};
+/** 展开态卡底色(对齐 .sh-cfg.open) */
+const cardOpenStyle = { background: "var(--dsw-alias-bg-layer-2, #fafafa)" };
+const headerStyle = {
+	boxSizing: "border-box",
+	width: "100%",
+	alignItems: "center",
+	gap: 12,
+	padding: "14px 16px",
+	display: "flex"
+};
+/** 展开区按钮:标题 + 描述 + 未保存徽标(对齐 .sh-cfg-expand) */
+const expandStyle = {
+	appearance: "none",
+	flex: 1,
+	minWidth: 0,
+	font: "inherit",
+	color: "inherit",
+	textAlign: "left",
+	cursor: "pointer",
+	background: "transparent",
+	border: 0,
+	alignItems: "center",
+	gap: 12,
+	padding: 0,
+	display: "flex"
+};
+/** 收起/展开按钮:28×28 独立热区(对齐 .sh-cfg-toggle) */
+const toggleStyle = {
+	appearance: "none",
+	flex: "none",
+	width: 28,
+	height: 28,
+	padding: 0,
+	border: 0,
+	background: "transparent",
+	color: "inherit",
+	cursor: "pointer",
+	display: "grid",
+	placeItems: "center"
+};
+const headTextStyle = {
+	flexDirection: "column",
+	flex: 1,
+	gap: 4,
+	minWidth: 0,
+	display: "flex"
+};
+const nameStyle = {
+	color: "var(--dsw-alias-label-primary, inherit)",
+	fontSize: 15,
+	fontWeight: 600,
+	lineHeight: 1.4
+};
+const descStyle = {
+	color: "var(--dsw-alias-label-tertiary, #6b7280)",
+	fontSize: 13,
+	lineHeight: 1.5
+};
+/** 未保存徽标(对齐 .sh-tag.orange) */
+const unsavedStyle = {
+	flex: "none",
+	whiteSpace: "nowrap",
+	background: "var(--dsw-alias-state-warn-tertiary, #fff7ed)",
+	color: "var(--dsw-alias-state-warn-label, #c2410c)",
+	borderRadius: 6,
+	padding: "2px 6px",
+	fontSize: 11,
+	lineHeight: "16px"
+};
+/** 收起箭头:展开态旋转 180°(对齐 .sh-cfg-ch) */
+const chevronStyle = (open) => ({
+	color: "var(--dsw-alias-label-tertiary, #6b7280)",
+	flex: "none",
+	width: 14,
+	height: 14,
+	transition: "transform .16s",
+	display: "inline-flex",
+	alignItems: "center",
+	justifyContent: "center",
+	transform: open ? "rotate(180deg)" : "none"
+});
+/** 卡体(对齐 .sh-cfg-b) */
+const bodyStyle = {
+	borderTop: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
+	margin: "0 16px",
+	padding: "8px 0 12px"
+};
+/** 收起态仅隐藏卡体(表单保持挂载,展开不重新拉取) */
+const HIDDEN_STYLE = { display: "none" };
+const CHEVRON_SVG = /* @__PURE__ */ (0, react_jsx_runtime.jsx)("svg", {
+	width: "14",
+	height: "14",
+	viewBox: "0 0 24 24",
+	fill: "none",
+	stroke: "currentColor",
+	strokeWidth: 2,
+	strokeLinecap: "round",
+	strokeLinejoin: "round",
+	children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M6 9l6 6 6-6" })
+});
+const formStyle = {
+	display: "flex",
+	flexDirection: "column"
+};
+const labelStyle = {
+	display: "block",
+	fontSize: 13,
+	fontWeight: 500,
+	color: "var(--dsw-alias-label-primary, inherit)"
+};
+const inputStyle = {
+	width: "100%",
+	height: 34,
+	padding: "0 12px",
+	fontSize: 13,
+	borderRadius: 8,
+	border: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
+	background: "var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-3, #fff))",
+	color: "var(--dsw-alias-label-primary, inherit)",
+	boxSizing: "border-box",
+	fontFamily: "inherit"
+};
+const rowStyle = {
+	display: "flex",
+	alignItems: "center",
+	gap: 8
+};
+/** 行内删除按钮(对齐 .sh-cfg-disc 语义,精简为 28×34 图标钮) */
+const removeBtnStyle = {
+	appearance: "none",
+	flex: "none",
+	width: 34,
+	height: 34,
+	padding: 0,
+	font: "inherit",
+	fontSize: 14,
+	cursor: "pointer",
+	borderRadius: 8,
+	background: "transparent",
+	border: "1px solid transparent",
+	color: "var(--dsw-alias-label-tertiary, #6b7280)",
+	transition: "color .16s, border-color .16s"
+};
+const addBtnStyle = {
+	appearance: "none",
+	alignSelf: "flex-start",
+	font: "inherit",
+	cursor: "pointer",
+	borderRadius: 8,
+	padding: "5px 14px",
+	fontSize: 13,
+	lineHeight: "20px",
+	background: "transparent",
+	border: "1px solid var(--dsw-alias-border-l2, #d1d5db)",
+	color: "var(--dsw-alias-label-secondary, #4b5563)",
+	transition: "background .16s, opacity .16s"
+};
+const hintStyle = {
+	fontSize: 12,
+	color: "var(--dsw-alias-label-caption, #6b7280)",
+	margin: 0,
+	lineHeight: 1.5
+};
+const errorStyle = {
+	...hintStyle,
+	color: "var(--dsw-alias-state-danger-label, #dc2626)",
+	flex: 1
+};
+const footerStyle = {
+	borderTop: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
+	justifyContent: "flex-end",
+	alignItems: "center",
+	gap: 8,
+	padding: "12px 0 4px",
+	display: "flex"
+};
+/** 按钮基础(对齐 .sh-cfg-ft button) */
+const btnBase = {
+	appearance: "none",
+	font: "inherit",
+	cursor: "pointer",
+	borderRadius: 8,
+	padding: "5px 14px",
+	fontSize: 13,
+	lineHeight: "20px",
+	transition: "background .16s, opacity .16s"
+};
+/** 次级按钮:透明底 + 描边(对齐 .sh-cfg-disc) */
+const ghostBtnStyle = {
+	...btnBase,
+	background: "transparent",
+	border: "1px solid var(--dsw-alias-border-l2, #d1d5db)",
+	color: "var(--dsw-alias-label-secondary, #4b5563)"
+};
+/** 主按钮(对齐 .sh-cfg-save) */
+const primaryBtnStyle = {
+	...btnBase,
+	background: "var(--dsw-alias-button-primary-fill, #111827)",
+	border: "1px solid var(--dsw-alias-button-primary-fill, #111827)",
+	color: "var(--dsw-alias-label-primary-foreground, #fff)"
+};
+/** 禁用态透明度(对齐 .sh-cfg-ft button:disabled) */
+const DISABLED_OPACITY = .4;
+/** 已保存提示(对齐 .sh-cfg-ok) */
+const savedStyle = {
+	...hintStyle,
+	color: "var(--dsw-alias-state-success-label, #16a34a)",
+	flex: 1
+};
+/** 错误信息提取 */
+function messageOf(error) {
+	return error instanceof Error ? error.message : String(error);
+}
+/** 池号配置加载/编辑/保存(与 useRemindConfig 同构) */
+function useAquaSettings(api, t) {
+	const [phase, setPhase] = (0, react.useState)("loading");
+	const [saved, setSaved] = (0, react.useState)(null);
+	const [draft, setDraft] = (0, react.useState)(null);
+	const [applyState, setApplyState] = (0, react.useState)({ kind: "idle" });
+	const load = (0, react.useCallback)(async () => {
+		setPhase("loading");
+		try {
+			const pools = [...(await api.get()).settings.pools];
+			setSaved(pools);
+			setDraft(pools);
+			setApplyState({ kind: "idle" });
+			setPhase("ready");
+		} catch {
+			setPhase("unavailable");
+		}
+	}, [api]);
+	(0, react.useEffect)(() => {
+		load();
+	}, [load]);
+	const dirty = draft !== null && saved !== null && JSON.stringify(draft) !== JSON.stringify(saved);
+	const saving = applyState.kind === "saving";
+	/** 编辑后回到 idle(清除「已保存」提示,由 dirty 徽标接管) */
+	const markEdited = () => {
+		setApplyState((state) => state.kind === "idle" ? state : { kind: "idle" });
+	};
+	const editPool = (index, value) => {
+		setDraft((current) => current ? current.map((item, i) => i === index ? value : item) : current);
+		markEdited();
+	};
+	const addPool = () => {
+		setDraft((current) => current && current.length < MAX_POOLS ? [...current, ""] : current);
+		markEdited();
+	};
+	const removePool = (index) => {
+		setDraft((current) => current ? current.filter((_, i) => i !== index) : current);
+		markEdited();
+	};
+	const save = async () => {
+		if (!draft || saving) return;
+		const trimmed = draft.map((item) => item.trim());
+		const invalidIndex = trimmed.findIndex((item) => !item || item.length > MAX_POOL_LENGTH);
+		if (invalidIndex !== -1) {
+			setApplyState({
+				kind: "error",
+				message: t("field.pools.invalid", {
+					index: invalidIndex + 1,
+					len: MAX_POOL_LENGTH
+				})
+			});
+			return;
+		}
+		if (trimmed.length === 0) {
+			setApplyState({
+				kind: "error",
+				message: t("field.pools.empty")
+			});
+			return;
+		}
+		setApplyState({ kind: "saving" });
+		try {
+			const pools = [...(await api.save({ pools: trimmed })).settings.pools];
+			setSaved(pools);
+			setDraft(pools);
+			setApplyState({ kind: "saved" });
+		} catch (error) {
+			setApplyState({
+				kind: "error",
+				message: messageOf(error)
+			});
+		}
+	};
+	const discard = () => {
+		setDraft(saved ? [...saved] : null);
+		setApplyState({ kind: "idle" });
+	};
+	return {
+		phase,
+		saved,
+		draft,
+		dirty,
+		applyState,
+		load,
+		editPool,
+		addPool,
+		removePool,
+		save,
+		discard
+	};
+}
+/** 展开区表单:池号列表编辑 + 底部操作区 */
+function PoolsForm({ model, t }) {
+	const draft = model.draft ?? [];
+	const busy = model.applyState.kind === "saving";
+	if (model.phase === "unavailable") return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: formStyle,
+		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+			style: errorStyle,
+			children: t("card.unavailable")
+		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			style: footerStyle,
+			children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				style: ghostBtnStyle,
+				onClick: () => void model.load(),
+				children: t("card.retry")
+			})
+		})]
+	});
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: formStyle,
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: labelStyle,
+				children: t("field.pools.label")
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: hintStyle,
+				children: t("field.pools.hint", {
+					max: MAX_POOLS,
+					len: MAX_POOL_LENGTH
+				})
+			})] }),
+			draft.map((value, index) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: {
+					...rowStyle,
+					marginTop: 8
+				},
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+					style: inputStyle,
+					value,
+					maxLength: MAX_POOL_LENGTH,
+					placeholder: t("field.pools.placeholder"),
+					"aria-label": `${t("field.pools.label")} ${index + 1}`,
+					onChange: (e) => model.editPool(index, e.target.value)
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					style: removeBtnStyle,
+					"aria-label": t("field.pools.remove"),
+					title: t("field.pools.remove"),
+					disabled: draft.length <= 1,
+					onClick: () => model.removePool(index),
+					children: "✕"
+				})]
+			}, index)),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				style: { marginTop: 8 },
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+					type: "button",
+					style: addBtnStyle,
+					disabled: draft.length >= MAX_POOLS,
+					onClick: model.addPool,
+					children: ["＋ ", t("field.pools.add")]
+				})
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: footerStyle,
+				children: [
+					model.applyState.kind === "error" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						style: errorStyle,
+						role: "status",
+						children: model.applyState.message
+					}) : null,
+					model.applyState.kind === "saved" ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						style: savedStyle,
+						role: "status",
+						children: t("card.saved")
+					}) : null,
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: ghostBtnStyle,
+						disabled: !model.dirty || busy,
+						onClick: model.discard,
+						children: t("card.discard")
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+						type: "button",
+						style: {
+							...primaryBtnStyle,
+							opacity: !model.dirty || busy ? DISABLED_OPACITY : 1,
+							cursor: !model.dirty || busy ? "default" : "pointer"
+						},
+						disabled: !model.dirty || busy,
+						onClick: () => void model.save(),
+						children: busy ? t("card.saving") : t("card.save")
+					})
+				]
+			})
+		]
+	});
+}
+/**
+* 渲染「AquaSense 设置」卡片。
+* @param props - locale 座位(t)+ 注入面(api)。
+* @returns `<li>` 卡片元素。
+*/
+function AquaSettingsCard({ t, api }) {
+	const [open, setOpen] = (0, react.useState)(false);
+	const model = useAquaSettings(api, t);
+	/** 接口不可用时强制展开(展示重试入口) */
+	const expanded = open || model.phase === "unavailable";
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("li", {
+		style: expanded ? {
+			...cardStyle,
+			...cardOpenStyle
+		} : cardStyle,
+		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+			style: headerStyle,
+			children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+				type: "button",
+				style: expandStyle,
+				"aria-expanded": expanded,
+				onClick: () => {
+					setOpen((value) => !value);
+				},
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					style: headTextStyle,
+					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						style: nameStyle,
+						children: t("card.title")
+					}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+						style: descStyle,
+						children: t("card.intro")
+					})]
+				}), model.dirty ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					style: unsavedStyle,
+					children: t("card.unsaved")
+				}) : null]
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				style: toggleStyle,
+				"aria-label": expanded ? t("card.collapse") : t("card.expand"),
+				onClick: () => {
+					setOpen((value) => !value);
+				},
+				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					style: chevronStyle(expanded),
+					children: CHEVRON_SVG
+				})
+			})]
+		}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			style: expanded ? bodyStyle : HIDDEN_STYLE,
+			children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(PoolsForm, {
+				model,
+				t
+			})
+		})]
+	});
+}
+
+//#endregion
+//#region src/client/settings-locales.ts
+/**
+* AquaSense 设置卡片文案(命名空间 aquasense-settings,zh/en 双语词典)
+*
+* 与 Host 侧 settings 命名空间、settings.plugin.item 卡片 key 三者一致;
+* 设置 → 插件 → 插件配置 tab 扫描到命名空间后派发 AquaSettingsCard。
+*/
+/** 字典命名空间(与 Host 侧 settings 命名空间、卡片 key 三者一致) */
+const SETTINGS_NS = "aquasense-settings";
+/** 中文字典 */
+const zh$1 = {
+	"card.title": "AquaSense 设置",
+	"card.intro": "池号枚举配置:台账白名单、H5 拍照汇报、分析记录筛选统一按此池号生效",
+	"card.unsaved": "未保存",
+	"card.expand": "展开",
+	"card.collapse": "收起",
+	"card.loading": "加载中…",
+	"card.unavailable": "设置接口不可用,请确认插件已随 Web 界面加载后重试",
+	"card.retry": "重试",
+	"card.saved": "已保存,整个插件系统池号已更新",
+	"card.saving": "保存中…",
+	"card.save": "保存配置",
+	"card.discard": "放弃修改",
+	"card.unsavedHint": "有未保存的修改",
+	"field.pools.label": "池号枚举",
+	"field.pools.hint": "按实际养殖池编号填写,最多 {max} 个,每项不超过 {len} 字",
+	"field.pools.add": "添加池号",
+	"field.pools.remove": "删除",
+	"field.pools.placeholder": "如:池1",
+	"field.pools.empty": "至少需要 1 个池号",
+	"field.pools.invalid": "第 {index} 项池号非法:不能为空、不能超过 {len} 字",
+	"field.pools.duplicate": "池号「{name}」重复,已自动去重"
+};
+/** 英文字典(与中文 key 一一对应) */
+const en$1 = {
+	"card.title": "AquaSense Settings",
+	"card.intro": "Pool ID enumeration — the ledger whitelist, H5 photo reports and analysis-record filters all follow these pools",
+	"card.unsaved": "Unsaved",
+	"card.expand": "Expand",
+	"card.collapse": "Collapse",
+	"card.loading": "Loading…",
+	"card.unavailable": "Settings API unavailable — make sure the plugin is loaded in the web UI",
+	"card.retry": "Retry",
+	"card.saved": "Saved — the pool IDs for the whole plugin system were updated",
+	"card.saving": "Saving…",
+	"card.save": "Save",
+	"card.discard": "Discard",
+	"card.unsavedHint": "Unsaved changes",
+	"field.pools.label": "Pool ID enumeration",
+	"field.pools.hint": "Enter the actual pond IDs, up to {max} entries and {len} characters each",
+	"field.pools.add": "Add pool",
+	"field.pools.remove": "Remove",
+	"field.pools.placeholder": "e.g. Pond 1",
+	"field.pools.empty": "At least 1 pool ID is required",
+	"field.pools.invalid": "Pool {index} is invalid — must be non-empty and at most {len} characters",
+	"field.pools.duplicate": "Pool \"{name}\" is duplicated and was deduplicated"
+};
+
+//#endregion
 //#region src/client/index.ts
 /** 所需服务:槽位注册 + 字典面 */
 const inject = ["slots", "locale"];
@@ -2497,7 +3074,7 @@ const sidebarEntryOptions = {
 	inject: () => ({ api: remindApi })
 };
 /**
-* 客户端插件体:注册字典与侧栏配置入口。
+* 客户端插件体:注册字典、设置卡片与侧栏配置入口。
 * @param ctx - 浏览器侧根上下文。
 */
 function apply(ctx) {
@@ -2505,6 +3082,17 @@ function apply(ctx) {
 		zh,
 		en
 	}), "aquasense-remind: dictionaries");
+	ctx.effect(() => ctx.locale.register(SETTINGS_NS, {
+		zh: zh$1,
+		en: en$1
+	}), "aquasense-settings: dictionaries");
+	const settingsCardInjected = () => ({ api: aquaSettingsApi });
+	ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
+		name: "settings.plugin.item",
+		key: SETTINGS_NS,
+		locale: SETTINGS_NS,
+		inject: settingsCardInjected
+	}, AquaSettingsCard));
 	ctx.effect(ensureAquaConfigStyle, "aquasense-remind: config style");
 	ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register(sidebarEntryOptions, AquaConfigEntry));
 }

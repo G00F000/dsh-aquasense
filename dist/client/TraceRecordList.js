@@ -12,7 +12,8 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import { useCallback, useEffect, useState } from 'react';
 // ========== 常量 ==========
 const PAGE_LIMIT = 20;
-const POOL_OPTIONS = ['', '池1', '池2', '池3', '池4'];
+/** 池号兜底枚举(/api/pools 不可用时,与设置页默认一致) */
+const FALLBACK_POOLS = ['池1', '池2', '池3', '池4'];
 const CLS_OPTIONS = [
     ['', '全部状态'],
     ['normal', '正常'],
@@ -311,6 +312,8 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
     const [error, setError] = useState(null);
     const [pool, setPool] = useState('');
     const [cls, setCls] = useState('');
+    /** 池号枚举(设置页「AquaSense 设置」配置;/api/pools 拉取失败时兜底默认 4 池) */
+    const [pools, setPools] = useState(FALLBACK_POOLS);
     // --- 详情状态 ---
     const [detailId, setDetailId] = useState(null);
     const [detailRecord, setDetailRecord] = useState(null);
@@ -375,6 +378,28 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
         void fetchPage(true);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+    // 挂载时拉取池号枚举(失败静默保持默认,筛选器仍可用)
+    useEffect(() => {
+        let cancelled = false;
+        void (async () => {
+            try {
+                const resp = await fetch(`${apiBase}/api/pools`);
+                if (!resp.ok)
+                    return;
+                const body = await resp.json();
+                const value = Array.isArray(body?.value?.pools) ? body.value.pools : [];
+                if (!cancelled && value.length > 0) {
+                    setPools(value.filter((item) => typeof item === 'string'));
+                }
+            }
+            catch {
+                /* 保持默认枚举 */
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [apiBase]);
     // ---------- 详情 ----------
     const openDetail = useCallback(async (id) => {
         setDetailId(id);
@@ -438,8 +463,8 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
         }
         groups[groups.length - 1].items.push(r);
     }
-    return (_jsxs(_Fragment, { children: [_jsxs("div", { className: "trc-filterbar", children: [_jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: pool, onChange: (e) => { applyFilter(e.target.value, cls); }, "aria-label": "\u6309\u6C60\u53F7\u7B5B\u9009", children: POOL_OPTIONS.map((p) => _jsx("option", { value: p, children: p || '全部池号' }, p)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: cls, onChange: (e) => { applyFilter(pool, e.target.value); }, "aria-label": "\u6309\u72B6\u6001\u7B5B\u9009", children: CLS_OPTIONS.map(([v, l]) => _jsx("option", { value: v, children: l }, v)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-count", children: [total, " \u6761\u8BB0\u5F55"] }), _jsx("button", { type: "button", className: "trc-trend-btn", onClick: () => {
-                            const targetPool = pool || '池1';
+    return (_jsxs(_Fragment, { children: [_jsxs("div", { className: "trc-filterbar", children: [_jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: pool, onChange: (e) => { applyFilter(e.target.value, cls); }, "aria-label": "\u6309\u6C60\u53F7\u7B5B\u9009", children: ['', ...pools].map((p) => _jsx("option", { value: p, children: p || '全部池号' }, p)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: cls, onChange: (e) => { applyFilter(pool, e.target.value); }, "aria-label": "\u6309\u72B6\u6001\u7B5B\u9009", children: CLS_OPTIONS.map(([v, l]) => _jsx("option", { value: v, children: l }, v)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-count", children: [total, " \u6761\u8BB0\u5F55"] }), _jsx("button", { type: "button", className: "trc-trend-btn", onClick: () => {
+                            const targetPool = pool || pools[0] || '池1';
                             onOpenTrend?.(targetPool);
                         }, children: "\uD83D\uDCC8 \u6C60\u53F7\u8D8B\u52BF\u5206\u6790 \u2192" })] }), _jsxs("div", { className: "trc-list", children: [error && (_jsxs("div", { className: "trc-err", children: [_jsx("div", { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' }, children: error }), _jsx("button", { type: "button", className: "trc-more-btn", style: { marginTop: 8, width: 'auto', display: 'inline-block', padding: '6px 14px', fontSize: 13 }, onClick: () => { void fetchPage(true); }, children: "\u91CD\u8BD5" })] })), !error && records.length === 0 && !loading && (_jsxs("div", { className: "trc-empty", children: [_jsx("span", { className: "trc-empty-icon", children: "\uD83D\uDC1F" }), _jsx("span", { children: "\u6682\u65E0\u5206\u6790\u8BB0\u5F55" })] })), loading && records.length === 0 && (_jsxs("div", { className: "trc-empty", children: [_jsx("span", { className: "trc-spin" }), _jsx("span", { children: "\u52A0\u8F7D\u4E2D\u2026" })] })), groups.map((g) => (_jsxs("div", { children: [_jsx("div", { className: "trc-group-title", children: g.title }), g.items.map((r) => {
                                 const clsName = CLS_LABEL[r.cls] || r.cls || '未知';
@@ -454,21 +479,41 @@ export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports',
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [days, setDays] = useState(7);
-    // 加载所有记录以提取可用池号列表
+    // 加载池号选项:优先设置页「AquaSense 设置」配置(/api/pools),
+    // 不可用时回退从历史记录提取;始终保证当前查看池号在选项中
     useEffect(() => {
-        fetch(`${apiBase}/api/records`)
-            .then((r) => r.ok ? r.json() : null)
-            .then((b) => {
-            if (!b?.ok)
+        const apply = (list) => {
+            if (list.length === 0)
                 return;
-            const recs = b.value || [];
-            const poolSet = new Set();
-            recs.forEach((r) => poolSet.add(r.pool));
-            if (poolSet.size > 0)
-                setPools(Array.from(poolSet).sort());
+            setPools((current) => {
+                const next = [...list];
+                if (!next.includes(initPool))
+                    next.unshift(initPool);
+                return next.length > 0 ? next : current;
+            });
+        };
+        fetch(`${apiBase}/api/pools`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((b) => {
+            if (b?.ok && Array.isArray(b.value?.pools) && b.value.pools.length > 0) {
+                apply(b.value.pools.filter((p) => typeof p === 'string'));
+                return null;
+            }
+            // 回退:历史记录提取池号
+            return fetch(`${apiBase}/api/records`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((b2) => {
+                if (!b2?.ok)
+                    return;
+                const recs = b2.value || [];
+                const poolSet = new Set();
+                recs.forEach((r) => poolSet.add(r.pool));
+                if (poolSet.size > 0)
+                    apply(Array.from(poolSet).sort());
+            });
         })
             .catch(() => { }); // 静默失败
-    }, [apiBase]);
+    }, [apiBase, initPool]);
     useEffect(() => {
         setLoading(true);
         setError(null);
