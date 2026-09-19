@@ -393,9 +393,10 @@ scene 确定 + 参数传入
 ┌──────────────────────────────────────────────────┐
 │ 2. 池号校验                                        │
 │    从 fields['池号'] 或 args.pool_id 取值           │
-│    缺失 → 返回追问 ["请问是哪个池子?(池1/池2/池3/池4)"]│
+│    缺失 → 返回追问(附当前池号枚举)                   │
 │    pool_id 与 fields.池号 冲突 → 拒绝写入           │
-│    池号白名单校验(池1-池4),非法值拒绝写入            │
+│    池号白名单校验(设置页「AquaSense 设置」配置,       │
+│    默认池1-池4),非法值拒绝写入                       │
 │    不写无池号脏数据                                  │
 └──────────────────┬───────────────────────────────┘
                    │
@@ -446,7 +447,7 @@ scene 确定 + 参数传入
 
 | 列名 | 说明 | 来源 |
 |------|------|------|
-| 池号 | 池1/池2/池3/池4 | 必填校验 |
+| 池号 | 设置页配置的池号枚举（默认池1-池4） | 必填校验 |
 | 巡检时间 | 写入时间戳 | 自动生成 |
 | 巡检人 | 发消息工人姓名 | open_id → 飞书通讯录 |
 | 鱼群状态 | normal/early/disease | analyze.cls |
@@ -462,7 +463,7 @@ scene 确定 + 参数传入
 
 | 列名 | 说明 |
 |------|------|
-| 池号 | 池1-池4 |
+| 池号 | 设置页配置的池号枚举（默认池1-池4） |
 | 检测时间 | 写入时间戳 |
 | 检测人 | open_id → 飞书通讯录 |
 | 溶氧(mg/L) | Agent 提供 |
@@ -480,7 +481,7 @@ scene 确定 + 参数传入
 
 | 列名 | 说明 |
 |------|------|
-| 池号 | 池1-池4 |
+| 池号 | 设置页配置的池号枚举（默认池1-池4） |
 | 汇报时间 | 写入时间戳 |
 | 汇报人 | open_id → 飞书通讯录 |
 | 死亡数量 | Agent 提供（工人上报） |
@@ -495,7 +496,7 @@ scene 确定 + 参数传入
 
 | 列名 | 说明 |
 |------|------|
-| 池号 | 池1-池4 |
+| 池号 | 设置页配置的池号枚举（默认池1-池4） |
 | 用药时间 | 写入时间戳 |
 | 用药人 | open_id → 飞书通讯录 |
 | 药品名称 | Agent 提供 |
@@ -509,7 +510,7 @@ scene 确定 + 参数传入
 
 | 列名 | 说明 |
 |------|------|
-| 池号 | 池1-池4 |
+| 池号 | 设置页配置的池号枚举（默认池1-池4） |
 | 喂食时间 | 写入时间戳 |
 | 喂食人 | open_id → 飞书通讯录 |
 | 饲料种类 | Agent 提供 |
@@ -522,7 +523,7 @@ scene 确定 + 参数传入
 
 | 列名 | 说明 |
 |------|------|
-| 池号 | 池1-池4 |
+| 池号 | 设置页配置的池号枚举（默认池1-池4） |
 | 测量时间 | 写入时间戳 |
 | 测量人 | open_id → 飞书通讯录 |
 | 水温(℃) | Agent 提供 |
@@ -534,7 +535,7 @@ scene 确定 + 参数传入
 
 | 列名 | 说明 |
 |------|------|
-| 池号 | 池1-池4 |
+| 池号 | 设置页配置的池号枚举（默认池1-池4） |
 | 汇报时间 | 写入时间戳 |
 | 汇报人 | open_id → 飞书通讯录 |
 | 解剖器官 | 下拉框多选: 体表/鳃/肝/胆囊/肠/脾/鳔/肾/腹腔 |
@@ -594,7 +595,7 @@ aquasense_analyze: buildPrompt(pool_id) ← 不含 description
 | 校验项 | 规则 | 失败行为 |
 |--------|------|----------|
 | 池号必填 | fields['池号'] 或 args.pool_id 必须存在 | 返回追问 |
-| 池号白名单 | 必须为 池1/池2/池3/池4 | 返回追问 |
+| 池号白名单 | 必须为设置页配置的池号枚举（默认 池1-池4） | 返回追问 |
 | 池号冲突 | pool_id 与 fields.池号 不能不一致 | 拒绝写入 |
 | 上报人 | open_id 解析或 reporter 兜底,占位符黑名单拦截 | 返回追问 |
 | analysis 完整性 | inspection 场景 cls 不能为 unknown | 返回 success:false |
@@ -612,9 +613,9 @@ aquasense_analyze: buildPrompt(pool_id) ← 不含 description
 
 ---
 
-## 4. 三大模块协作关系
+## 5. 三大模块协作关系
 
-### 4.1 完整数据流（以 S2 巡检为例）
+### 5.1 完整数据流（以 S2 巡检为例）
 
 ```
 工人发图+文字: "池3鱼有点蹭壁"
@@ -686,7 +687,7 @@ dsh-lark 转发消息 (含 image_url + open_id)
 Agent 回复工人: "池3鲈鱼为前兆期(蹭壁、离群独游)..."
 ```
 
-### 4.2 紧急场景流程（S4 死亡汇报）
+### 5.2 紧急场景流程（S4 死亡汇报）
 
 ```
 工人: "池2死了3条鱼" (+ 图片)
@@ -707,9 +708,9 @@ ledger(scene=death): 死亡数量=3, 预警级别=P0 → 死亡记录表
 Agent 回复: "⚠️ 紧急! 池2发现3条死鱼...请立即通知负责人"
 ```
 
-### 4.3 纯图片路由流程
+### 5.3 纯图片路由流程
 
-#### 4.3.1 意图明确(scene_hint 非 inspection)
+#### 5.3.1 意图明确(scene_hint 非 inspection)
 
 ```
 工人: 只发一张水质检测仪器照片 (无文字)
@@ -728,7 +729,7 @@ detectIntentWithVision: 文字0.7 < 0.85 + 有图
 ledger(scene=water_quality): 水质汇报表
 ```
 
-#### 4.3.2 意图不明确(scene_hint = inspection, 需追问)
+#### 5.3.2 意图不明确(scene_hint = inspection, 需追问)
 
 ```
 工人: 只发图片,无文字(视觉模型无法判断具体场景)
@@ -749,7 +750,7 @@ Worker: "② 水质检测"
 Agent: 按 worker 回复确定 scene → ledger(scene=water_quality): 水质汇报表
 ```
 
-#### 4.3.3 追问兜底
+#### 5.3.3 追问兜底
 
 ```
 Worker 回复仍不明确(如"就那个"):
@@ -758,7 +759,7 @@ Worker 回复仍不明确(如"就那个"):
 Agent: 按巡检表兜底落表,回复中说明"已按常规巡检记录"
 ```
 
-### 4.4 S9 每日提醒流程（插件内调度）
+### 5.4 S9 每日提醒流程（插件内调度）
 
 > S9 完整架构设计（配置模型/推送计划/tick 语义/卡片与回调/容错/里程碑）见专题分文档：**[s9-daily-reminder-architecture.md](./s9-daily-reminder-architecture.md)**。
 
@@ -778,7 +779,47 @@ Agent: 按巡检表兜底落表,回复中说明"已按常规巡检记录"
 
 ---
 
-## 5. 目录结构
+## 6. AquaSense 设置（池号枚举配置）
+
+**文件**: `src/config/aqua-settings.ts`（配置模型）、`src/web/aqua-settings-gateway.ts`（HTTP API + settings 配对）、`src/client/AquaSettingsCard.tsx`（设置页卡片）
+
+入口为「设置 → 插件 → 插件配置」tab 中的「AquaSense 设置」卡片，用于配置**整个插件系统**的池号枚举（默认 池1-池4）。
+
+### 6.1 配置模型（唯一事实源）
+
+```
+读取优先级: settings.json(配置文件) > AQUA_POOLS(环境变量,JSON 数组) > 默认池1-池4
+```
+
+- 持久化位置: `$AQUASENSE_CACHE_DIR/aqua/settings.json`
+- 每次读取即时读盘（文件 <1KB），设置页保存后全系统立即生效，无需重启
+- 归一化规则（sanitizePools）: trim、去空、去重、单池最长 16 字符、最多 20 个；结果为空回退默认 4 池
+- 非法值不阻断启动: 文件解析失败 / 环境变量非法 JSON 时警告日志 + 静默回退（与 s9-reminder 的 `remind/config.json` 同构）
+
+### 6.2 HTTP API 与设置页配对
+
+| 环节 | 实现 |
+|------|------|
+| settings 配对 | Host 侧 `ctx.inject(['settings'])` 注册命名空间 `aquasense-settings`（schemastery schema）；浏览器侧在 `settings.plugin.item` 槽以同 key 注册卡片，设置页「插件配置」tab 扫描同名命名空间后自动派发 |
+| HTTP API | `POST /aquasense-settings/api/get`（读取）与 `POST /aquasense-settings/api/save`（保存）；协议层：POST only(405)、同源校验(403)、JSON 体(415)、超限 413 |
+| 卡片 UI | 对齐 SkillHub 设置卡（`.sh-cfg` 体系）：展开区 + 未保存徽标 + 独立收起按钮 + 底部「放弃修改 / 保存配置」；前端预校验与 Host 侧 sanitize 同一口径 |
+
+> 命名空间仅作配对键，配置读写不走宿主 settings 服务，唯一事实源仍是 `settings.json`（与 S9 配置页同模式，见 [s9-daily-reminder-architecture.md](./s9-daily-reminder-architecture.md)）。
+
+### 6.3 全系统消费方
+
+| 消费方 | 取值方式 | 生效点 |
+|--------|----------|--------|
+| `record-ledger`（台账） | `getValidPoolIds()` / `formatPoolIds()` | 池号白名单校验；缺失追问与非法值提示文案 |
+| `report-handler`（H5 汇报） | `getValidPoolIds()` / `getPoolIds()` | 表单池号校验 + `/aquasense-remind/report` 页面池号按钮服务端注入（占位符 `__AQUA_POOLS__`） |
+| `trace-gateway`（分析记录） | `getPoolIds()` | 趋势页池号选项 + `GET /aquasense-reports/api/pools` 接口 |
+| `TraceRecordList.tsx`（设置面板） | `GET /aquasense-reports/api/pools` | 列表态池号筛选下拉（接口不可用时兜底默认 4 池） |
+
+配置保存后在**下一次读取时**即时生效（运行时每次取最新，不缓存）。
+
+---
+
+## 7. 目录结构
 
 ```
 dsh-aquasense/
@@ -794,6 +835,9 @@ dsh-aquasense/
 │   │   ├── ima-api.ts                 # IMA 知识库 API 封装(三通道检索 + PDF/笔记正文层)
 │   │   ├── pdf-content-search.ts      # 通道 C: PDF 切片索引构建 + 运行时检索(OCR 标记契约定义处)
 │   │   └── pdf-content-search.test.ts # 通道 C 索引 + 检索单元测试
+│   ├── config/
+│   │   ├── aqua-settings.ts           # 池号枚举配置(唯一事实源 settings.json;文件>环境变量>默认)
+│   │   └── aqua-settings.test.ts      # 配置模型单元测试(优先级/归一化/回退)
 │   ├── scripts/
 │   │   ├── warm-kb-cache.ts           # 正文批量预热(PDF+笔记, npm run kb:warm)
 │   │   ├── ocr-scanned-pdfs.ts        # 扫描件 OCR 兜底(npm run ocr, checkpoint 续跑 + 整本才发布)
@@ -802,14 +846,32 @@ dsh-aquasense/
 │   │   └── token.ts                   # 飞书 token 缓存 + 用户名解析 + 图片上传
 │   ├── router/
 │   │   └── intent-router.ts           # 消息意图识别 (S1-S8 纯函数,文字+视觉两级合并)
-│   └── scheduler/
-│       └── s9-reminder.ts             # S9 每日任务提醒(插件内调度)
+│   ├── scheduler/
+│   │   └── s9-reminder.ts             # S9 每日任务提醒(插件内调度)
+│   ├── web/
+│   │   ├── remind-gateway.ts          # S9 配置页 API 网关(/aquasense-remind/api)
+│   │   ├── aqua-settings-gateway.ts   # AquaSense 设置网关(settings 配对 + /aquasense-settings/api)
+│   │   ├── aqua-settings-gateway.test.ts  # 设置网关单元测试
+│   │   ├── trace-gateway.ts           # R8 分析记录网关(/aquasense-reports;含 /api/pools)
+│   │   ├── report-handler.ts          # R8 H5 拍照汇报页 + 提交/进度接口
+│   │   └── *.html                     # H5 汇报页/趋势页等静态资源(构建时拷贝至 dist/web/)
+│   └── client/
+│       ├── index.ts                   # 浏览器侧入口(字典/设置卡片/侧栏入口注册)
+│       ├── AquaConfig.tsx             # 侧栏「智慧渔业」一级入口 + 独立配置页(原型 3)
+│       ├── AquaSettingsCard.tsx       # 设置页「AquaSense 设置」卡片(池号枚举编辑)
+│       ├── RemindForm.tsx             # S9 配置表单(useRemindConfig 数据层 + 视图)
+│       ├── TraceRecordList.tsx        # 分析记录列表/详情(面板内同页切换)
+│       ├── api.ts                     # 浏览器侧 API 封装(remind/trace/aquaSettings)
+│       ├── locales.ts                 # 配置页文案 zh/en 字典
+│       └── settings-locales.ts        # 设置卡片文案 zh/en 字典
 ├── skills/
 │   └── aquasense-expert/
 │       └── SKILL.md                   # Agent 专家技能定义
 ├── docs/
 │   ├── architecture.md                # 架构说明 (本文件)
 │   ├── s9-daily-reminder-architecture.md  # S9 每日任务提醒架构设计 (分文档)
+│   ├── r8-traceability-requirements.md # R8 分析记录可追溯需求文档
+│   ├── r8-traceability-architecture.md # R8 分析记录可追溯架构设计 (分文档)
 │   ├── deployment.md                  # 部署文档
 │   ├── pdf-search-channel-architecture.md  # 方案 D: 三通道混合检索架构设计
 │   ├── pdf-search-channel-implementation.md # 方案 D: 三通道混合检索实现记录
@@ -826,7 +888,7 @@ dsh-aquasense/
 
 ---
 
-## 6. 外部依赖
+## 8. 外部依赖
 
 | 服务 | 用途 | 凭证 | 模块 |
 |------|------|------|------|
@@ -837,10 +899,10 @@ dsh-aquasense/
 
 ---
 
-## 7. 设计约束
+## 9. 设计约束
 
 - **台账只追加不修改**: 满足政府 2 年台账审计要求（30 分钟窗口内同池号合并更新是例外，避免短时间多次上报冗余）
-- **池号必填 + 白名单**: 缺失池号时返回追问，非法值（非 池1-池4）拒绝写入，pool_id 与 fields.池号 冲突时拒绝写入
+- **池号必填 + 白名单**: 缺失池号时返回追问，枚举外非法值拒绝写入，pool_id 与 fields.池号 冲突时拒绝写入；池号枚举由设置页「AquaSense 设置」配置
 - **上报人只认发消息的人**: 以 `open_id` → 飞书通讯录解析为准，禁止凭记忆填写，占位符值被黑名单拦截
 - **描述不进入视觉模型**: 结构隔离防注入，视觉诊断完全基于图片像素
 - **inspection 缺 analysis 时拒绝落表**: 返回 success:false 而非抛异常，不将未分析记录伪装成健康记录
@@ -851,3 +913,4 @@ dsh-aquasense/
 - **用药不代替兽医**: 疾病场景明确建议咨询专业兽医，知识库仅作参考
 - **S9 插件内调度**: 无独立进程；重启恢复当日剩余计划，已推送不重复，已过时间点不补推（详见分文档）
 - **仅 3 个 Tool**: 最大化复用 DSH 生态，降低维护成本
+- **池号枚举全局单源**: 唯一事实源为 `$AQUASENSE_CACHE_DIR/aqua/settings.json`（优先级：配置文件 > 环境变量 `AQUA_POOLS` > 默认 池1-池4），全系统消费方动态读取，不硬编码池号列表

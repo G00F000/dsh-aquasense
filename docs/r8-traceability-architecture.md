@@ -68,6 +68,7 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 │  │  GET  /aquasense-reports/api/records          → 列表 JSON    │  │
 │  │  GET  /aquasense-reports/api/records/:id      → 详情 JSON    │  │
 │  │  GET  /aquasense-reports/api/trend/:pool      → 趋势 JSON    │  │
+│  │  GET  /aquasense-reports/api/pools          → 池号枚举 JSON│  │
 │  └─────────────────────────────────────────────────────────────┘  │
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐  │
@@ -447,6 +448,7 @@ export function installTraceWeb(ctx: Context): void {
   webServer.router.get('/aquasense-reports/api/records', handleRecordsList)
   webServer.router.get('/aquasense-reports/api/records/:id', handleRecordDetail)
   webServer.router.get('/aquasense-reports/api/trend/:pool', handleTrendData)
+  // + /aquasense-reports/api/pools 池号枚举（2026-09 随设置页「AquaSense 设置」新增，供筛选/趋势页选项）
 
   console.log('[aquasense-trace] R8 分析记录路由已注册')
 }
@@ -459,6 +461,7 @@ export function installTraceWeb(ctx: Context): void {
 | GET | `/aquasense-reports/api/records` | `pool`, `cls`, `date`, `limit`, `offset` | `{ ok, value: { records, total, has_more } }` | 列表查询 |
 | GET | `/aquasense-reports/api/records/:id` | — | `{ ok, value: AnalysisRecord }` | 单条详情 |
 | GET | `/aquasense-reports/api/trend/:pool` | `days` | `{ ok, value: TrendData }` | 趋势统计 |
+| GET | `/aquasense-reports/api/pools` | — | `{ ok, value: { pools } }` | 池号枚举（设置页「AquaSense 设置」配置；列表筛选/趋势页选项来源） |
 
 **协议层防护**（与 `remind-gateway.ts` 一致）：
 - 仅 GET（405）
@@ -740,6 +743,10 @@ function renderCluster(records, canvas) {
 | `src/tools/analyze-image.ts` | 增量导出 | 新增 `callVisionModelWithUsage`（ Token 采集）、导出 `buildPrompt`/`parseAnalysisResponse`/`ImageDownloadResult`；`callVisionModel` 变为薄包装，对外行为不变 |
 | `src/tools/generate-advice.ts` | 增量导出 | 抽取导出 `retrieveKnowledge`/`generateAdviceInternal`（含 `AdviceResult`/`KnowledgeRetrieval` 类型），execute 改为两步调用（行为等价） |
 | `src/feishu/token.ts` | 增量导出 | `uploadImageToFeishu` 新增 data URL 分支（H5 内存图片）；导出 `uploadBufferToFeishu`/`parseDataUrl` |
+| `src/web/trace-gateway.ts` | 增量/动态化 | 新增 `GET /aquasense-reports/api/pools`（池号枚举，设置页「AquaSense 设置」配置）；趋势页池号选项动态化 |
+| `src/web/report-handler.ts` | 动态化 | H5 提交池号白名单校验改读设置页配置枚举（`getValidPoolIds`） |
+| `src/web/report-upload.html` | 动态化 | 池号按钮由服务端注入 `__AQUA_POOLS__`（设置页配置枚举，缺失时兜底默认 4 池） |
+| `src/client/TraceRecordList.tsx` | 动态化 | 列表态池号筛选下拉改由 `/api/pools` 加载（接口不可用时兜底默认 4 池） |
 | `package.json` | 构建 | build 脚本追加 `mkdir -p dist/web && cp src/web/*.html dist/web/`（页面随包发布） |
 | `docs/architecture.md` | 引用 | R8 概述为摘要 + 指向本文（分-总关系） |
 | `docs/requirements.md` | 引用 | R8 需求指向专题需求分文档 |
@@ -854,6 +861,7 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 | M8 | 群聊场景 trace 集成（后置收集） | M1 | ✅ 已完成（trace-ledger-wrap.ts） |
 | M9 | 集成测试 + 构建验证 | M4-M8 | ✅ 已完成（新增 59 用例，全套 111 用例通过；typecheck + build 验证） |
 | M10 | v1.6 展示归并对齐：H5 仅「提交成功」反馈；列表/详情统一入口 C 面板承载；列表/详情页路由停用 | M5, M7 | ⏳ 待实施 |
+| M11 | 池号枚举动态化（/api/pools + 筛选/趋势选项） | M3 | ✅ 已完成（随设置页「AquaSense 设置」交付；全套 139 用例通过） |
 
 **验收要点**（对应需求 R8.10）：
 

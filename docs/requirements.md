@@ -1,7 +1,7 @@
 # AquaSense 水产养殖 AI 巡检系统 — 需求文档
 
-> **版本**: v1.9 (R6 已实现：V2 插件内调度 + 原型 3 单入口——侧栏「智慧渔业」（v1.9 更名，图标为插件广场同风格线性 SVG）独立配置页（v1.8 移除设置卡片入口）；UI 对齐 SkillHub；页脚动作各自整行)
-> **基线日期**: 2026-09-16
+> **版本**: v2.0 (新增设置页「AquaSense 设置」卡片：全插件池号枚举配置——配置模型 settings.json + `/aquasense-settings/api` + `settings.plugin.item` 配对卡片；台账/H5 汇报/分析记录筛选消费方动态化。R6 原型 3 单入口与 v1.9 变更保持不变)
+> **基线日期**: 2026-09-19
 > **目标用户**: 清徐基地 4 池循环水鲈鱼养殖工人(飞书端)
 > **技术载体**: DeepSeek Harness 插件(dsh-aquasense)，配合 dsh-lark 桥接层对接飞书
 
@@ -125,8 +125,9 @@ AquaSense 是一个运行在 DeepSeek Harness 上的 AI 巡检插件，工人通
 
 #### R3.2 池号管理
 
-- [x] 支持池1~池4（清徐基地 4 池循环水鲈鱼养殖）
-- [x] 池号白名单校验，缺失池号时追问
+- [x] 默认支持池1~池4（清徐基地 4 池循环水鲈鱼养殖）
+- [x] 池号枚举可配置：设置页「AquaSense 设置」卡片管理（`src/config/aqua-settings.ts` + `src/web/aqua-settings-gateway.ts` + `src/client/AquaSettingsCard.tsx`），持久化于 `$AQUASENSE_CACHE_DIR/aqua/settings.json`（优先级：配置文件 > `AQUA_POOLS` 环境变量 > 默认）；最多 20 个、每项最长 16 字
+- [x] 池号白名单校验，缺失池号时追问（台账/H5 汇报/分析记录筛选/趋势页统一消费动态枚举）
 - [x] 池号传入 `aquasense_analyze` 时用于结果展示，写入台账时作为必填字段
 
 #### R3.3 上报人自动解析
@@ -593,6 +594,7 @@ S9_REMIND_TASKS=[                                # 任务列表(JSON)
 | `S9_REMIND_CRON` | 否 | 每日总览推送时刻（cron），默认 `0 7 * * *` |
 | `S9_REMIND_TASKS` | 否 | 任务列表（JSON 数组） |
 | `AQUASENSE_CACHE_DIR` | 否 | 缓存目录绝对路径（PDF/笔记缓存） |
+| `AQUA_POOLS` | 否 | 池号枚举初始值（JSON 数组）；运行时以设置页「AquaSense 设置」保存的 settings.json 优先 |
 | `AQUASENSE_OCR_LANG_PATH` | 否 | OCR 语言包路径 |
 
 ---
@@ -629,17 +631,24 @@ dsh-aquasense/
 │   │   ├── generate-advice.ts     # 处置建议工具
 │   │   ├── record-ledger.ts       # 台账写入工具
 │   │   └── train_aquaspecies.py   # 水产种类训练脚本
+│   ├── config/
+│   │   ├── aqua-settings.ts       # 池号枚举配置（settings.json 读写；文件>环境变量>默认）
+│   │   └── aqua-settings.test.ts  # 配置模型单元测试
 │   ├── scheduler/
 │   │   └── s9-reminder.ts         # S9 每日任务提醒（插件内调度）
 │   ├── web/
 │   │   ├── remind-gateway.ts      # S9 配置页 API 网关（原型 3 Host 侧）
-│   │   └── remind-gateway.test.ts # 网关单元测试
+│   │   ├── remind-gateway.test.ts # 网关单元测试
+│   │   ├── aqua-settings-gateway.ts       # AquaSense 设置 API 网关（settings 配对）
+│   │   └── aqua-settings-gateway.test.ts  # 设置网关单元测试
 │   ├── client/
-│   │   ├── index.ts               # 浏览器半侧入口（字典 + 侧栏配置入口注册）
+│   │   ├── index.ts               # 浏览器半侧入口（字典 + 设置卡片 + 侧栏入口注册）
 │   │   ├── AquaConfig.tsx         # 侧栏一级入口 + 独立配置页（原型 3）
+│   │   ├── AquaSettingsCard.tsx   # 设置页「AquaSense 设置」卡片（池号枚举）
 │   │   ├── RemindForm.tsx         # 配置表单（useRemindConfig 数据层 + 视图）
 │   │   ├── api.ts                 # 浏览器侧 API 封装
-│   │   └── locales.ts             # 配置页文案 zh/en 字典
+│   │   ├── locales.ts             # 配置页文案 zh/en 字典
+│   │   └── settings-locales.ts    # 设置卡片文案 zh/en 字典
 │   └── scripts/
 │       ├── ocr-scanned-pdfs.ts    # 扫描件 OCR 离线处理
 │       ├── ocr-scanned-pdfs.test.ts # OCR 脚本单元测试
@@ -737,6 +746,8 @@ interface LedgerParams {
 | `pdf-content-search.test.ts` | PDF 原文检索引擎 |
 | `ocr-scanned-pdfs.test.ts` | OCR 扫描件处理脚本 |
 | `remind-gateway.test.ts` | S9 配置页 API 网关（校验/分发/协议层） |
+| `aqua-settings.test.ts` | 池号配置模型（读取优先级/归一化/回退） |
+| `aqua-settings-gateway.test.ts` | AquaSense 设置 API 网关（校验/分发/协议层） |
 
 ---
 
@@ -768,6 +779,7 @@ interface LedgerParams {
 | v1.8 | 2026-09-16 | R6.5 原型 3 单入口制：「设置→插件→插件配置」S9 每日任务提醒卡片整链路移除（客户端注册/组件/文案 + Host 侧 settings 配对命名空间 + `settings-plugins` 依赖）；修复页脚动作容器单行 flex 挤压——经 `:has()` 允许换行，「插件广场 / 🐟 AquaSense 配置 / 设置」各占整行 |
 | v1.9 | 2026-09-17 | R6.5 原型 3 入口更名与图标升级：侧栏一级入口「🐟 AquaSense 配置」→「智慧渔业」（英文字典同步 Smart Fishery）；触发按钮图标由 emoji 改为插件广场同风格线性 SVG（三道水波；16×16 视窗、`stroke=currentColor`、`strokeWidth=1.4`）；aria-label 随 `entry.label` 同步 |
 | v1.1 | 2026-09-16 | R6.5 新增：S9 每日任务页面原型设计（5 个原型） |
+| v2.0 | 2026-09-19 | 新增设置页「AquaSense 设置」卡片（池号枚举全插件配置）：`src/config/aqua-settings.ts` + `/aquasense-settings/api` + `settings.plugin.item` 配对；台账/H5 汇报/分析记录筛选/趋势页消费方动态化；R3.2、环境配置、目录结构、测试覆盖同步 |
 
 ---
 

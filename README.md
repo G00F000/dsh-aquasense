@@ -16,7 +16,7 @@ Worker sends a photo + message to the farm's Feishu bot ("池3有几条鱼离群
 2. **aquasense_advice** — automatically queries the IMA knowledge base for the symptoms, returns tiered actions + P0/P1/P2 alert level (never invents prescriptions)
 3. **aquasense_ledger** — appends one record to the matching Feishu Bitable table (only-append, satisfies the 2-year farm ledger requirement)
 
-S9 runs as a standalone scheduler (`daily-reminder`) that reads 《每日操作手册》from the IMA knowledge base and pushes task reminders to the worker group at each `HH:MM`.
+S9 runs inside the plugin (`scheduler/s9-reminder.ts`): it reads 《每日操作手册》from the IMA knowledge base and pushes task reminders to the worker group at each `HH:MM`.
 
 Only **3 tools** are developed — everything else reuses the DSH ecosystem (`dsh-lark` for Feishu messaging, IMA API for knowledge).
 
@@ -35,8 +35,8 @@ dsh plugin add /path/to/dsh-aquasense # or from a local checkout
 # 3. Optional expert skill(可选:诊断专家技能)
 dsh skill add ./skills/aquasense-expert
 
-# 4. Optional S9 reminder scheduler(可选:S9 定时提醒,独立进程)
-npm run remind          # dev;or: node dist/scheduler/daily-reminder.js
+# 4. S9 daily reminders run in-plugin (no extra process) — configure them
+#    from the sidebar "智慧渔业" (Smart Fishery) page
 ```
 
 ## Configuration
@@ -51,8 +51,9 @@ Credentials via environment variables (copy [.env.example](.env.example)); IMA a
 | `FEISHU_BITABLE_APP_TOKEN` | ✅ | Bitable base |
 | `FEISHU_BITABLE_TABLE_ID_INSPECTION` | ✅ | Inspection table (other scene tables optional) |
 | `FEISHU_BITABLE_TABLE_ID_WATER_QUALITY` / `_MEDICATION` / `_FEEDING` / `_TEMPERATURE` / `_DEATH` / `_DISSECTION` | optional | Per-scene tables |
-| `FEISHU_WORKER_GROUP` | for S9 | Worker group chat_id |
+| `S9_REMIND_ENABLED` / `S9_REMIND_GROUP` | for S9 | Enable S9 reminders (`true`) + worker group chat_id; the sidebar **智慧渔业** page, once saved, takes precedence |
 | `AQUASENSE_CACHE_DIR` | optional | Cache root for PDF/note text + index (default absolute `/data/aquasense/cache`) |
+| `AQUA_POOLS` | optional | Pool ID enumeration (JSON array) — seed value only; the runtime source of truth is the **Settings → Plugins → "AquaSense Settings"** card (`$AQUASENSE_CACHE_DIR/aqua/settings.json`) |
 | `AQUASENSE_OCR_LANG_PATH` | optional | tessdata dir/URL for `npm run ocr` (default: local npm lang pack, then CDN) |
 
 ## Scenes S1–S9
@@ -67,7 +68,7 @@ Credentials via environment variables (copy [.env.example](.env.example)); IMA a
 | S6 feeding | 喂食/投喂/吃料/饲料 | feeding | ledger |
 | S7 temperature | 水温/棚温/温度 | temperature | ledger |
 | S8 dissection | 解剖/内脏/肝/胆/肠/鳃 | dissection | analyze(if photo) → advice → ledger |
-| S9 daily reminders | timer-driven | Feishu group | daily-reminder scheduler |
+| S9 daily reminders | timer-driven | Feishu group | in-plugin scheduler (`scheduler/s9-reminder.ts`) |
 
 `aquasense_ledger` validates pool_id first: when missing it returns follow-up questions for the agent to ask the worker — no records without a pool id.
 
@@ -100,9 +101,11 @@ src/
 │   ├── warm-kb-cache.ts           # npm run kb:warm — prewarm text cache + rebuild index
 │   ├── ocr-scanned-pdfs.ts        # npm run ocr — offline OCR producer for scanned PDFs (tesseract.js)
 │   └── ocr-scanned-pdfs.test.ts   # OCR producer contract tests
+├── config/aqua-settings.ts        # pool ID enumeration (settings.json; file > AQUA_POOLS > default)
 ├── feishu/token.ts                # tenant_access_token with cache (shared)
 ├── router/intent-router.ts        # pure S1-S8 intent detection (for hosts/skills)
-└── scheduler/daily-reminder.ts    # S9 standalone process (not a tool)
+├── web/aqua-settings-gateway.ts   # "AquaSense Settings" card: settings namespace + /aquasense-settings/api
+└── scheduler/s9-reminder.ts       # S9 daily reminders (in-plugin scheduler)
 ```
 
 ## Roadmap
@@ -116,6 +119,7 @@ src/
 - **Not a veterinary prescription tool.** `medication` always defers to a professional vet when a disease is detected; knowledge-base hits are shown as references only.
 - **Reporter comes from the message sender.** `aquasense_ledger` resolves the reporter name from the current message's `open_id` (Feishu contact lookup) — never from chat memory; `reporter` is only a fallback when `open_id` is unavailable, and when neither can be resolved the tool returns a follow-up question instead of writing a placeholder.
 - Column names in `fields` must match your actual Feishu Bitable columns — the API rejects mismatches with a readable message; adjust the constants in `src/tools/record-ledger.ts` (or pass `fields` explicitly) to fit your table.
+- **Pool IDs are configurable.** The ledger whitelist, H5 report page, analysis-record filters and trend page all read the live enumeration from `$AQUASENSE_CACHE_DIR/aqua/settings.json`, managed via **Settings → Plugins → "AquaSense Settings"**; `AQUA_POOLS` only seeds the initial value.
 - The scheduler never back-fills tasks whose time already passed after a restart (no spam).
 
 ## License

@@ -241,6 +241,7 @@ POST /open-apis/im/v1/messages?receive_id_type=chat_id
 - 设置卡片入口（`settings.plugin.item` 键位槽，v1.5 交付）与 Host 侧 settings 配对命名空间（`registerRemindSettingsNamespace`）随 v1.8 整体移除；「智慧渔业」（v1.9 更名前为「🐟 AquaSense 配置」）为唯一入口
 - 宿主页脚动作容器（footerActions）为单行 flex（nowrap），多个整宽条目并排会互相挤压（插件广场被压窄、本入口贴边）；v1.8 在样式注入中以 `div:has(> [data-slot="sidebar.footer.action"]){flex-wrap:wrap}` 允许换行，使「插件广场 / 智慧渔业 / 设置」各占一整行（56px 收起轨道下圆钮亦垂直堆叠）
 - 配置读写仍不走宿主 settings 服务，唯一事实源是 `config.json`（§9），经 `/aquasense-remind/api` 直连读写
+- 注（2026-09-19）：后续新增的「AquaSense 设置」卡片（池号枚举配置，`settings.plugin.item` + `aquasense-settings` 命名空间配对）为独立功能（见 [architecture.md](./architecture.md) §6），与本模块 S9 配置无关；S9 入口仍为侧栏「智慧渔业」单入口制
 
 **组件架构**：
 

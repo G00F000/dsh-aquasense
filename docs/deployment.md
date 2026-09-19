@@ -45,7 +45,7 @@
 
 | 列名 | 类型 | 说明 |
 |------|------|------|
-| 池号 | 文本 | 池1/池2/池3/池4 |
+| 池号 | 文本 | 池1/池2/池3/池4（默认枚举，可在设置页调整） |
 | 巡检时间 | 日期时间 | 自动填入 |
 | 巡检人 | 文本 | 工人姓名（由消息发送者 open_id 自动解析） |
 | 鱼群状态 | 单选 | normal/early/disease |
@@ -62,7 +62,7 @@
 ### 2.3 配置飞书群机器人
 
 1. 将飞书应用添加到巡检工作群
-2. 记录群的 `chat_id`（作为 `FEISHU_WORKER_GROUP` 的值）
+2. 记录群的 `chat_id`（作为 `S9_REMIND_GROUP` 的值）
 
 ---
 
@@ -123,11 +123,21 @@ FEISHU_BITABLE_TABLE_ID_TEMPERATURE=xxxxxxxx
 FEISHU_BITABLE_TABLE_ID_DEATH=xxxxxxxx
 FEISHU_BITABLE_TABLE_ID_DISSECTION=xxxxxxxx
 
-# ===== S9 每日任务提醒（启用时必填）=====
-FEISHU_WORKER_GROUP=oc_xxxxxxxx
+# ===== S9 每日任务提醒（可选；设置页保存的提醒配置优先于环境变量）=====
+S9_REMIND_ENABLED=true
+S9_REMIND_GROUP=oc_xxxxxxxx
+# 每日总览推送时刻（标准 5 段 cron，仅使用"每天 HH:MM"语义），默认每天 07:00
+# S9_REMIND_CRON=0 7 * * *
+# 任务列表（JSON 数组；侧栏「智慧渔业」配置页保存后以页面配置为准）
+# S9_REMIND_TASKS=[{"time":"07:00","task":"开启增氧机,检查水质"},{"time":"08:00","task":"投喂早餐,记录投喂量"}]
 # 缓存目录（必须使用绝对路径，避免不同启动方式各建一份缓存）
 # Linux: /data/aquasense/cache    Windows: D:\data\aquasense\cache
 AQUASENSE_CACHE_DIR=/data/aquasense/cache
+
+# ===== AquaSense 设置：池号枚举（可选）=====
+# 初始池号（JSON 数组；仅作初始化，运行时以设置页「AquaSense 设置」
+# 保存的 $AQUASENSE_CACHE_DIR/aqua/settings.json 为唯一事实源）
+# AQUA_POOLS=["池1","池2","池3","池4"]
 
 # ===== OCR 扫描件兜底（可选；npm run ocr 用）=====
 # 语言包目录或 URL（自备 tessdata_best 的 4.0.0_best_int 版本；不填则自动探测本机 npm 包，其次官方 CDN）
@@ -356,19 +366,16 @@ dsh start
 [aquasense] 知识库查询:generate-advice 内置 IMA API 自动查询
 ```
 
-### 5.2 启动 S9 每日任务提醒（独立进程）
+### 5.2 S9 每日任务提醒（插件内调度，无需独立进程）
 
-```bash
-# 开发模式
-npm run remind
+S9 提醒随 DSH 启动自动运行（`src/scheduler/s9-reminder.ts`），**无需启动额外进程，也无需单独保活**。
 
-# 生产模式
-npm run remind:prod
-# 或直接运行
-node dist/scheduler/daily-reminder.js
-```
+启用方式任选其一:
 
-S9 调度器与 DSH 主服务**并行运行**，互不依赖。
+1. 环境变量: `S9_REMIND_ENABLED=true` + `S9_REMIND_GROUP`（见 §3.3）
+2. Web 界面: 侧栏「智慧渔业」→ S9 配置页保存（保存后的配置优先于环境变量）
+
+调度器在插件进程内按计划 tick，到点经飞书消息 API 推送；重启后自动恢复当日剩余计划（已推送不重复、已过时间点不补推）。
 
 ### 5.3 后台运行（生产环境推荐）
 
@@ -383,13 +390,12 @@ npm install -g pm2
 # 启动 DSH
 pm2 start dsh --name "dsh-main" -- start
 
-# 启动 S9 提醒
-pm2 start dist/scheduler/daily-reminder.js --name "aquasense-remind"
-
 # 保存进程列表 & 设置开机自启
 pm2 save
 pm2 startup
 ```
+
+> S9 提醒在 DSH 进程内调度，只需保活 `dsh-main` 一个进程。
 
 **Docker 方式**（参考）:
 
@@ -463,12 +469,16 @@ Agent 技能编排工具时，直接传入与表格列名一致的 `fields` 对�
 
 ### 7.4 测试 S9 提醒
 
-```bash
-# 手动触发一次提醒测试
-node dist/scheduler/daily-reminder.js
-```
+侧栏「智慧渔业」→ S9 配置页底部点击「发送测试提醒」（对应 `POST /aquasense-remind/api/test`），确认巡检群收到测试消息。也可将某任务的 `HH:MM` 设为近几分钟之后保存，等待到点自动推送。
 
-确认飞书群收到任务提醒消息。
+### 7.5 测试池号设置
+
+打开 DSH Web 界面 →「设置 → 插件 → 插件配置 → AquaSense 设置」卡片，修改池号枚举并保存。随后检查:
+
+1. 卡片提示「已保存,整个插件系统池号已更新」
+2. `$AQUASENSE_CACHE_DIR/aqua/settings.json` 出现新配置
+3. H5 拍照汇报页的池号按钮按新枚举展示
+4. 发消息汇报非枚举池号时，台账工具返回追问
 
 ---
 
@@ -491,12 +501,13 @@ node dist/scheduler/daily-reminder.js
 
 ### Q3: S9 提醒没有推送
 
-**原因**: `FEISHU_WORKER_GROUP` 未配置，或飞书应用未加入巡检群。
+**原因**: 未启用（`S9_REMIND_ENABLED=false` 或设置页未启用）、`S9_REMIND_GROUP` 未配置，或飞书应用未加入巡检群。
 
 **解决**:
-1. 确认 `FEISHU_WORKER_GROUP` 已设置为群的 `chat_id`
-2. 确认飞书应用已被添加为群机器人
-3. 确认 IMA 知识库中存在标题含"每日操作手册"的知识条目
+1. 确认已在「智慧渔业」S9 配置页保存启用配置，或设置 `S9_REMIND_ENABLED=true`
+2. 确认 `S9_REMIND_GROUP` 已设置为群的 `chat_id`
+3. 确认飞书应用已被添加为群机器人
+4. 确认 IMA 知识库中存在标题含"每日操作手册"的知识条目
 
 ### Q4: 图片分析返回异常结果
 
@@ -509,9 +520,9 @@ node dist/scheduler/daily-reminder.js
 
 ### Q5: 台账中池号缺失或被拒
 
-**原因**: 工人发消息时未提及池号，或池号不在允许范围内（仅支持池1/池2/池3/池4）。
+**原因**: 工人发消息时未提及池号，或池号不在当前枚举范围内（默认 池1/池2/池3/池4）。
 
-**解决**: 这是设计行为 — 池号缺失或非法时工具返回追问，Agent 会自动向工人询问池号，补齐后再写入。pool_id 与 fields.池号 冲突时也会拒绝写入。无需人工干预。
+**解决**: 池号缺失或非法时工具返回追问，Agent 会自动向工人询问池号，补齐后再写入；pool_id 与 fields.池号 冲突时也会拒绝写入。若基地池号有增减，管理员在「设置 → 插件 → 插件配置 → AquaSense 设置」中调整池号枚举并保存，台账/H5 汇报/分析记录筛选将统一按新枚举生效。
 
 ### Q6: 台账上报人识别失败（为空或追问）
 
