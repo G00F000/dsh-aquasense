@@ -1,10 +1,11 @@
 # R8：AI 分析结果可追溯 — 功能架构设计文档
 
 > - 总文档：[architecture.md](./architecture.md)（本文为其 R8 专题**分文档**，展开模块级/接口级设计）
-> - 需求依据：[r8-traceability-requirements.md](./r8-traceability-requirements.md)（R8 专题需求分文档，现行 v1.7）
-> - 状态：✅ 已实现（M1-M9、M11、M12 完成，含单元测试与构建验证）；**v1.6 展示归并调整待代码对齐**（见 M10）
+> - 需求依据：[r8-traceability-requirements.md](./r8-traceability-requirements.md)（R8 专题需求分文档，现行 v1.8）
+> - 状态：✅ 已实现（M1-M9、M11、M12 完成，含单元测试与构建验证）；**v1.6 展示归并调整待代码对齐**（见 M10）；**v1.8 群聊 Agent 决策链（方式 B 会话事件桥接）设计定稿待实施**（见 M13）
 > - 设计参考：Langfuse Trace/Span 模型、Arize Phoenix 嵌入可视化、MedgeClaw Dashboard 分步骤展开
 > - **v1.6 展示归并（同步自需求）**：入口 A（H5）提交后仅「提交成功」反馈——不跳转、不展示进度与结果明细；分析记录查看统一到入口 C（PC 端面板，列表态 ⇄ 详情态同页切换）；独立列表/详情页路由停用（仅保留趋势页 + API），移动端不再承载查看界面
+> - **v1.8 Agent 决策链（方式 B，同步自需求）**：群聊场景新增 `session-trace-bridge.ts` 订阅 DSH 会话事件（`ctx.on('session/event')`），按 tool/call ↔ tool/result 配对采集 Agent 层 turn/step/call_id/重试/精确耗时并回填 `AnalysisRecord.agent`；详情态新增「Agent 决策链」区块、列表态新增「Agent链路/重试」角标；H5 链路与旧记录不受影响（无 agent 字段自动隐藏）
 
 ---
 
@@ -58,6 +59,14 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 │  │  │  → 组装 AnalysisRecord                                │   │  │
 │  │  │  → 写入 reports/RPT-*.json + 更新 index.json          │   │  │
 │  │  └──────────────────────────────────────────────────────┘   │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  session-trace-bridge.ts (新增, v1.8 ⏳ 待实施)               │  │
+│  │                                                             │  │
+│  │  订阅 ctx.on('session/event') → aquasense_* 工具调用配对      │  │
+│  │  → 采集 turn/step/call_id/重试/精确耗时                      │  │
+│  │  → 回填 AnalysisRecord.agent（仅群聊链路）                    │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐  │
@@ -116,6 +125,7 @@ AquaSense 的 AI 分析管线已完整运行（图片 → 视觉分析 → 知�
 | Trace 存储 | `src/web/trace-store.ts` | index.json 读写 + reports/ 目录管理 + 图片落盘/读取/清理 |
 | 分析记录视图（入口 C） | `src/client/TraceRecordList.tsx` + `src/client/AquaConfig.tsx` | 面板内列表态 ⇄ 详情态同页切换（React 组件直调 JSON API）；PC 端唯一查看入口 |
 | 趋势页 | `src/web/trace-trend.html` | 池号趋势分析（纯 HTML） |
+| Session Trace 桥接（v1.8 ⏳ 待实施） | `src/web/session-trace-bridge.ts` | 订阅 DSH 会话事件，采集群聊链路 Agent 决策链（turn/step/call_id/重试）并回填 `AnalysisRecord.agent` |
 
 > **v1.6 展示归并注**：分析记录不再有独立「列表页 / 详情页」——v1.5 已将两态合并为同一页面的列表态 ⇄ 详情态（同页切换），v1.6 进一步收口到入口 C 面板（`TraceRecordList.tsx`）；原页面路由（`/aquasense-reports`、`/aquasense-reports/report`）停用，`trace-list.html` / `trace-detail.html` 待清理。
 
@@ -542,6 +552,60 @@ report-handler.ts:
 新交互（v1.6 起）：仅「提交成功」反馈（不跳转、不展示进度/明细）
 ```
 
+### 3.6 Session Trace 桥接（session-trace-bridge.ts，v1.8 ⏳ 待实施）
+
+**背景与定位**：方式 B 会话事件桥接。群聊场景原采用方案 A 后置收集（`trace-ledger-wrap.ts`）——耗时取包装器实测、无 Token 数据、拿不到 Agent 层重试与决策上下文。v1.8 借鉴 dsh-observe（Apache-2.0）的事件配对模式（仅借鉴设计思路，原创实现），改为订阅 DSH 会话事件流实时采集 Agent 决策链，回填 `AnalysisRecord.agent`。
+
+**核心机制（借鉴 dsh-observe 四纪律）**：
+
+```typescript
+// src/web/session-trace-bridge.ts（骨架示意）
+export function installSessionTraceBridge(ctx: Context): void {
+  const states = new WeakMap<Session, BridgeState>()   // 纪律3: WeakMap 会话状态自动回收
+  ctx.effect(() => {
+    const off = ctx.on('session/event', (session, event) => {
+      try { bridge.handleEvent(session, event) }        // 纪律4: 回调 try-catch 不炸宿主
+      catch (error) { logger.warn('[aquasense-trace] 会话事件处理失败:', error) }
+    })
+    const offDisposed = ctx.on('session/disposed', (session) => {
+      try { bridge.flushPending(session, 'disposed') }  // 纪律2: 悬挂兜底强制关闭
+      catch { /* 忽略 */ }
+    })
+    return () => { off(); offDisposed() }
+  })
+}
+```
+
+- **纪律 1 开闭配对**：`tool/call`（name 为 `aquasense_*`）按 callId 开态，`tool/result` 闭合并记录 status/error
+- **重试推导**：同一 step 内相同 (name, arguments) 的再次 `tool/call` → attempt 递增（对齐 dsh-observe 的 toolCounts 计数）
+- **纪律 2 悬挂兜底**：`turn/end`、`session/disposed` 或三工具收齐时，未闭合调用以 `status:'error'`、`error_code:'ABORTED'` 强制关闭
+- **回填时机**：`aquasense_ledger` 的 tool/result 出现（或 turn/end）→ 组装 `AnalysisRecord.agent` 幂等合并入该群聊记录
+
+**事件 → agent 字段映射**：
+
+```
+session/event 事件流                     AnalysisRecord.agent
+────────────────────────────             ────────────────────────────────
+turn/start (turn=N)            ──────►   agent.turn
+step/start (step=M)            ──────►   agent.step
+step/start → 首个 tool/call 间隙 ──────►   agent.think_ms（Agent 决策耗时）
+tool/call (callId=X, name=工具) ──────►   calls[].tool / call_id
+tool/result (callId=X)         ──────►   calls[].duration_ms / status
+同名同参再次 tool/call         ──────►   calls[].attempt++（重试）
+```
+
+**与 trace-ledger-wrap 的迁移与去重**：
+- 桥接只负责 agent 决策链采集；图片下载落盘与 upload Span 补记仍由 `trace-ledger-wrap.ts` 承担（职责收缩）
+- 写入去重键：`chat_id + turn`——同一群聊 turn 内重复写入幂等合并（读改写 RPT-*.json 的 agent 字段）
+- 迁移路径：先双写验证（桥接采集 + 旧包装器简化记录并存，agent 字段为准），稳定后旧包装器简化为图片落盘专用
+- H5 链路（`report-handler.ts` 直调埋点）不接桥接，无 agent 字段
+
+**边界（诚实声明）**：
+- 视觉模型 Token/知识库命中数在 agent 层拿不到——仍需工具内埋点（H5 已有 `callVisionModelWithUsage`；群聊维持「—」展示）
+- 桥接不读日志文件（`~/.dsh/sessions/*.jsonl`），只订阅进程内实时事件；插件晚挂载/中途重启的历史事件不可回溯（记录缺失 agent 字段，UI 自动隐藏该区块）
+
+**许可说明**：dsh-observe 为 Apache-2.0——本模块为原创实现，仅借鉴其事件配对/悬挂兜底/WeakMap 设计模式，不复制代码、无许可证义务。
+
 ---
 
 ## 4. 关键流程
@@ -592,6 +656,8 @@ Agent 调用 aquasense_ledger:
 **推荐方案 A**（后置收集）：群聊场景优先保证稳定性，不侵入现有 Tool。通过飞书 Bitable API 读取刚写入的记录，组装简化的 AnalysisRecord（缺少 Token/耗时，但包含核心分析结果）。
 
 **实际实现**：群聊场景用「注册期包装（后置收集）」的 `trace-ledger-wrap.ts`——透传台账工具定义、仅在 execute 后追加简化记录（零修改 record-ledger.ts；耗时取包装器实测、无 Token 数据）；H5 场景由 `report-handler.ts` 直调底层导出函数（`callVisionModelWithUsage`/`retrieveKnowledge`/`generateAdviceInternal`/`recordLedger.execute`），精确收集每个 Span 的耗时与 Token。
+
+**方式 B 升级（v1.8 ⏳ 待实施）**：群聊链路改为「会话事件桥接」——新增 `session-trace-bridge.ts` 订阅 `ctx.on('session/event')`，对 `aquasense_analyze/advice/ledger` 的 tool/call ↔ tool/result 配对采集精确耗时/错误/重试（attempt 计数），turn/end 或三工具收齐后回填 `AnalysisRecord.agent`（详见 §3.6）；`trace-ledger-wrap.ts` 职责收缩为图片下载落盘 + upload Span 补记，写入以 `chat_id + turn` 去重键幂等合并。H5 链路不变。
 
 **图片素材落盘（两路）**：群聊侧 `saveChatImages` 下载工人图片（data URL 直解析／http(s) URL 走网络，30s 超时，逐张容错）→ `saveReportImages` 落盘并补记 upload Span（image_count/image_names/image_sizes）；H5 侧管线收到 base64 后直接 `saveReportImages` 落盘。落盘失败仅 warn，不影响 trace 与主链路。
 
@@ -765,6 +831,32 @@ function renderCluster(records, canvas) {
 }
 ```
 
+### 5.6 Agent 决策链 UI（v1.8 ⏳ 待实施）
+
+需求原型见 [r8-traceability-requirements.md §4.1](./r8-traceability-requirements.md)（详情态新增「Agent 决策链」区块、列表态新增角标）。实现落点 `src/client/TraceRecordList.tsx`：
+
+| UI 变化 | 实现方式 |
+|---------|----------|
+| 详情态「Agent 决策链」区块 | 新增 `AgentChain` 子组件：复用 `.trc-wf-row` 迷你时间条样式渲染工具调用序列；重试工具以 🔁 标注，置灰折叠行展示前次失败 error_code |
+| 元信息「Agent: turn N · step N · 工具 N 次 · 重试 N 次」行 | 元信息网格条件渲染（`record.agent` 存在时） |
+| 步骤 Accordion 头部 agent 标签 | `StepAccordion` 头部追加 `[Agent: stepN · call_xxx]` 标签行 |
+| 列表态「Agent链路 / 🔁 工具名 ×N」角标 | index.json 摘要 `agent_retries` 驱动 |
+
+条件渲染原则：`record.agent` 缺失（H5/旧群聊记录）时不渲染上述任何元素——渐进增强、零兼容成本；agent 层拿不到的字段显示「—」并标注「数据来源：会话事件边界」（对齐 dsh-observe「不发明模型看不见的内容」原则）。
+
+```html
+<!-- 详情态「Agent 决策链」区块（仅群聊记录，位于元信息区与现场照片之间） -->
+<section class="trc-agent-chain">
+  <div class="trc-section-title">Agent 决策链</div>
+  <div class="trc-wf">
+    <div class="trc-wf-row">🔄 turn 12 · step 3    Agent 思考 0.4s</div>
+    <div class="trc-wf-row">🧠 aquasense_analyze  0.9s ✅  call_a1b2</div>
+    <div class="trc-wf-row">💡 aquasense_advice   0.7s ✅  call_c3d4</div>
+    <div class="trc-wf-row">📝 aquasense_ledger   0.5s 🔁  call_e5f6（第2次）</div>
+  </div>
+</section>
+```
+
 ---
 
 ## 6. 文件变更矩阵
@@ -787,8 +879,9 @@ function renderCluster(records, canvas) {
 | `src/web/trace-store.test.ts` | ~273 行 | 存储层单元测试（含损坏重建/清理/趋势/图片存取） |
 | `src/web/trace-gateway.test.ts` | ~361 行 | 网关单元测试（路由/参数/协议层/图片接口） |
 | `src/web/report-handler.test.ts` | ~554 行 | H5 管线与协议层单元测试（含图片落盘断言） |
+| `src/web/session-trace-bridge.ts` | ⏳ 待实施 | v1.8：群聊 Agent 决策链会话事件桥接（订阅 session/event + 工具调用配对 + agent 字段回填，见 §3.6） |
 
-### 6.2 修改文件（已实现）
+### 6.2 修改文件（已实现 + v1.8 待实施）
 
 | 文件路径 | 变更类型 | 变更说明 |
 |----------|---------|----------|
@@ -811,6 +904,10 @@ function renderCluster(records, canvas) {
 | `package.json` | 构建 | build 脚本追加 `mkdir -p dist/web && cp src/web/*.html dist/web/`（页面随包发布） |
 | `docs/architecture.md` | 引用 | R8 概述为摘要 + 指向本文（分-总关系） |
 | `docs/requirements.md` | 引用 | R8 需求指向专题需求分文档 |
+| `src/index.ts` | 接入（v1.8 ⏳） | `apply()` 调用 `installSessionTraceBridge(ctx)` 注册会话事件桥接 |
+| `src/web/trace-ledger-wrap.ts` | 收缩（v1.8 ⏳） | 职责收缩为图片下载落盘 + upload Span 补记；记录写入与桥接以 `chat_id + turn` 去重合并 |
+| `src/web/trace-store.ts` | 摘要（v1.8 ⏳） | index.json 摘要新增 `agent_retries`（>0 时写入，供列表态 🔁 角标） |
+| `src/client/TraceRecordList.tsx` | UI（v1.8 ⏳） | 新增 `AgentChain` 区块 + 元信息「Agent」行 + StepAccordion agent 标签 + 列表角标（agent 字段条件渲染，见 §5.6） |
 
 ### 6.3 行为不变约束（原「不变更文件」的实际落地）
 
@@ -898,6 +995,9 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 | 记录数超过 1000 条 | 不拦截 | index.json 仍可承载（~300KB） |
 | webServer 不存在 | 启动时检查 | 静默跳过路由注册 + warn |
 | H5 上传 trace 埋点失败 | try-catch | 主流程不受影响（分析结果照常返回） |
+| 会话事件订阅回调抛错 | 回调内 try-catch + warn | 主流程不受影响，仅丢失该事件采集 |
+| 工具调用未闭合（会话中断/插件晚挂载） | 悬挂兜底（turn/end 或 session/disposed 时强制关闭） | 未闭合调用以 error 状态补记，不悬挂内存 |
+| 群聊记录无 agent 字段（旧记录/H5） | 详情态条件渲染 | 隐藏「Agent 决策链」区块，其余照常 |
 
 ---
 
@@ -909,6 +1009,8 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 [aquasense-trace] 索引已更新: 当前 42 条记录
 [aquasense-trace] H5 汇报 trace: RPT-20260917-100532, 5 spans, 2.8s total
 [aquasense-trace] 群聊 trace: RPT-20260917-093015, 简化模式(无 Token)
+[aquasense-trace] 会话事件桥接已启动(方式B): 订阅 session/event, 目标工具 aquasense_analyze/advice/ledger
+[aquasense-trace] 群聊 Agent 决策链已回填: RPT-20260917-093015, turn 12, step 3, 3 工具, 1 重试
 [aquasense-trace] 群聊图片已落盘: RPT-20260917-093015, 2 张
 [aquasense-trace] 群聊图片下载失败(跳过): https://... (超时/HTTP 错误)
 [aquasense-trace] H5 图片落盘失败(详情页将无图): ...
@@ -936,6 +1038,7 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 | M10 | v1.6 展示归并对齐：H5 仅「提交成功」反馈；列表/详情统一入口 C 面板承载；列表/详情页路由停用 | M5, M7 | ⏳ 待实施 |
 | M11 | 池号枚举动态化（/api/pools + 筛选/趋势选项） | M3 | ✅ 已完成（随设置页「AquaSense 设置」交付；全套 139 用例通过） |
 | M12 | 详情态工人图片展示：群聊/H5 图片落盘 + 图片二进制接口 + 现场照片缩略图/灯箱 | M3, M7, M8 | ✅ 已完成（2026-09-19；全套 147 用例通过） |
+| M13 | 群聊 Agent 决策链：session-trace-bridge 会话事件桥接 + AnalysisRecord.agent 回填 + 详情态决策链区块 + 列表角标 | M9, M12 | ⏳ 待实施（v1.8 设计定稿） |
 
 **验收要点**（对应需求 R8.10）：
 
@@ -952,6 +1055,7 @@ async function cleanupOldReports(daysToKeep: number = 90): Promise<number> {
 - [x] index.json 损坏时自动重建
 - [x] 90 天以上的旧记录可清理
 - [ ] ⏳ v1.6 展示归并对齐：H5 仅「提交成功」反馈（不跳转/不展示明细）；列表态 ⇄ 详情态统一入口 C 面板承载；列表/详情页路由停用
+- [ ] ⏳ v1.8 群聊 Agent 决策链：会话事件桥接采集（turn/step/工具调用/重试）+ 详情态「Agent 决策链」区块 + 列表态「Agent链路/重试」角标
 
 ---
 

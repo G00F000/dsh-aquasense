@@ -1,9 +1,9 @@
 # R8：AI 分析结果可追溯 — 需求分析文档
 
-> **版本**: v1.7（详情态新增「现场照片」——工人发送的原图随记录落盘并展示（缩略图网格 + 灯箱）；v1.6 入口精简结论不变：H5 提交后仅「提交成功」反馈，查看统一到入口 C）
-> **基线日期**: 2026-09-17（v1.7 补充：2026-09-19）
+> **版本**: v1.8（v1.8 群聊场景新增「Agent 决策链」——方式 B 会话事件桥接（`session-trace-bridge.ts`）订阅 DSH 会话事件，采集 Agent 层 turn/step/工具调用/重试；详情态新增「Agent 决策链」区块、列表态新增「Agent链路/重试」角标。v1.7 详情态「现场照片」不变；v1.6 入口精简结论不变：H5 提交后仅「提交成功」反馈，查看统一到入口 C）
+> **基线日期**: 2026-09-17（v1.7 补充：2026-09-19；v1.8 补充：2026-09-20）
 > **总文档**: [requirements.md](./requirements.md)（本文为 R8 专题分文档）
-> **状态**: ✅ 已实现（实现细节见 [r8-traceability-architecture.md](./r8-traceability-architecture.md)）
+> **状态**: ✅ 已实现（v1.8 群聊「Agent 决策链」设计定稿待实施；实现细节见 [r8-traceability-architecture.md](./r8-traceability-architecture.md)）
 > **设计参考**: Langfuse Trace/Span 模型、Arize Phoenix 嵌入可视化、MedgeClaw Dashboard 分步骤展开、SkillHub 插件广场页签式二级标题
 
 ---
@@ -28,6 +28,7 @@ AquaSense 的 AI 分析管线（图片 → 视觉分析 → 知识库检索 → 
 - **知识溯源**：AI 处置建议的每条知识引用均可追溯到源文档（PDF 页码、笔记标题）
 - **趋势分析**：按池号、时间段查看分析结果的语义分布和趋势变化
 - **PC 端统一查看**：分析记录与详情统一在 PC 端配置页面板（入口 C）查看，屏幕大、信息密度高；移动端（飞书 H5）仅保留拍照汇报与「提交成功」反馈
+- **Agent 决策链回溯（v1.8）**：群聊场景通过订阅 DSH 会话事件流（方式 B 会话事件桥接）采集 Agent 层 turn/step/工具调用顺序/重试/精确耗时，在详情态以「Agent 决策链」区块回放"AI 为什么这么分析"；H5 场景无 Agent 会话，维持原样
 
 ### 1.3 设计约束
 
@@ -154,7 +155,7 @@ AquaSense 的 AI 分析管线（图片 → 视觉分析 → 知识库检索 → 
 │  你好    │  今天 (9月17日)                                                     │
 │          │  ┌──────────────────────────────────────────────────────────┐     │
 │ 未分组   │  │ 🔴 RPT-20260917-1005  池3  early  0.85  蹭壁、离群       │     │
-│  水温25  │  │    10:05 · AI视觉+知识库 · 2.8s · 1,500 tokens           │     │
+│  水温25  │  │    10:05 · 群聊发图 · Agent链路 · 2.8s · 🔁 analyze ×2 │     │
 │  微信    │  ├──────────────────────────────────────────────────────────┤     │
 │  你是谁  │  │ 🟢 RPT-20260917-0930  池1  normal 0.92  无异常           │     │
 │          │  │    09:30 · AI视觉 · 0.8s · 800 tokens                   │     │
@@ -182,6 +183,7 @@ AquaSense 的 AI 分析管线（图片 → 视觉分析 → 知识库检索 → 
 - 筛选栏：按池号（池1~池4 / 全部）、状态筛选 + 右侧「📈 池号趋势分析」跳转链接
 - 每条记录显示：状态指示灯（🟢normal / 🟡early / 🔴disease）、报告 ID、池号、状态、置信度、症状摘要
 - 底部行：时间来源（AI视觉/AI视觉+知识库/H5上传/群聊发图）、总耗时、Token 总量
+- 底部行（v1.8）：群聊记录追加「Agent链路」角标（记录含 agent 字段时）；含重试的记录显示「🔁 工具名 ×N」（agent_retries>0 时）
 - 点击任意记录 → 同页切换至详情态（原型 A 状态 2）
 - 按日期分组，今天/昨天/更早
 - 内容区右侧有滚动条，`▲` 表示上方还有未展示的内容
@@ -198,9 +200,16 @@ AquaSense 的 AI 分析管线（图片 → 视觉分析 → 知识库检索 → 
 │ 工作区   ├────────────────────────────────────────────────────────────────────┤
 │          │                                                                   ▲│
 │          │  ── 元信息 ──                                                      │
-│          │  池号: 池3    上报人: 张三    来源: H5上传                           │
+│          │  池号: 池3    上报人: 张三    来源: 群聊发图                         │
 │          │  时间: 2026-09-17 10:05:32    总耗时: 2.8s                         │
 │          │  模型: deepseek-flash    Token: input=1,200 output=300             │
+│          │  Agent: turn 12 · step 3 · 工具 3 次 · 重试 1 次                   │
+│          │                                                                    │
+│          │  ── Agent 决策链（群聊 · 会话事件自动记录）──                        │
+│          │  ├─ 🔄 turn 12 · step 3                Agent 思考 0.4s           │
+│          │  ├─ 🧠 aquasense_analyze               0.9s ✅  call_a1b2         │
+│          │  ├─ 💡 aquasense_advice                0.7s ✅  call_c3d4         │
+│          │  └─ 📝 aquasense_ledger                0.5s 🔁  call_e5f6(第2次)  │
 │          │                                                                    │
 │          │  ── 现场照片（3 张）──                                             │
 │          │  [🖼 1] [🖼 2] [🖼 3]  ← 点击缩略图打开灯箱（←/→ 切换/点击关闭）    │
@@ -257,6 +266,8 @@ AquaSense 的 AI 分析管线（图片 → 视觉分析 → 知识库检索 → 
 **交互说明（详情态）**：
 - 顶部「← 返回」切回列表态（同页切换）
 - 元信息区：池号、上报人、来源、时间、总耗时、模型、Token 总量
+- 元信息区（v1.8）：群聊记录追加「Agent: turn N · step N · 工具 N 次 · 重试 N 次」行（H5 记录无 agent 字段，不显示）
+- 「Agent 决策链」区块（v1.8，仅群聊记录，位于元信息区与现场照片之间）：Agent 思考耗时 + 工具调用序列（名称/耗时/call_id/状态）；重试工具以 🔁 标注（第 N 次尝试，展开可见前次失败 error_code）；数据来自 DSH 会话事件，H5 记录无此区块
 - 瀑布图：5 个步骤的时间轴可视化，颜色编码（上传=灰色，视觉=蓝色，检索=橙色，建议=绿色，台账=紫色）
 - 步骤 Accordion：点击任意步骤展开/折叠详情
 - 每步详情包含完整的 Input/Output/耗时/Token
@@ -423,6 +434,21 @@ interface AnalysisRecord {
     duration_ms: number
     error?: string
   }
+
+  /** ---- Agent 决策链（v1.8，仅群聊场景；方式 B 会话事件桥接采集） ---- */
+  agent?: {
+    turn: number               // 会话 turn 序号
+    step: number               // 会话 step 序号
+    think_ms: number           // step 开始 → 首个工具调用（Agent 决策耗时）
+    calls: Array<{
+      tool: 'aquasense_analyze' | 'aquasense_advice' | 'aquasense_ledger'
+      call_id: string          // 会话事件 callId
+      attempt: number          // 第几次尝试（1 起，>1 表示重试）
+      duration_ms: number      // tool/call → tool/result 时间戳差
+      status: 'ok' | 'error'
+      error_code?: string      // 失败原因码（如 ABORTED/超时）
+    }>
+  }
 }
 ```
 
@@ -442,6 +468,7 @@ interface AnalysisIndex {
     alert_level?: string
     created_at: string
     total_duration_ms: number
+    agent_retries?: number     // 群聊 Agent 重试次数汇总（v1.8，供列表态 🔁 角标；H5/旧记录无）
   }>
 }
 ```
@@ -449,6 +476,7 @@ interface AnalysisIndex {
 **设计要点**：
 - `records` 按 `created_at` 倒序排列
 - 仅保留轻量摘要字段，避免列表态加载时读取全部 JSON 文件
+- `agent_retries` 仅群聊记录存在且 >0 时写入，列表态据此显示「🔁 工具名 ×N」角标
 - 单条记录完整数据在 `reports/RPT-*.json` 中
 
 ---
@@ -573,8 +601,9 @@ GET /aquasense-reports/api/records?limit=50
 GET /aquasense-reports/api/records/RPT-20260917-1005
     │ → 返回完整 AnalysisRecord + images 元数据
     ▼
-渲染 Trace 视图（现场照片 + 瀑布图 + 步骤 Accordion）
+渲染 Trace 视图（现场照片 + Agent 决策链 + 瀑布图 + 步骤 Accordion）
     │ → 现场照片经 /images/:index 懒加载缩略图，点击打开灯箱（←/→ 切换）
+    │ → record.agent 存在时渲染「Agent 决策链」区块（H5/旧群聊记录自动隐藏）
     │ → 知识库检索步骤展示命中条目详情
     ▼
 底部「查看趋势」→ 跳转池号趋势页
@@ -596,6 +625,9 @@ GET /aquasense-reports/api/records/RPT-20260917-1005
 | 图片序号非法（越界/非数字） | 返回 400（白名单校验） |
 | 记录数超过 1000 条 | index.json 仍可承载（~300KB），不阻断 |
 | 趋势页数据不足 | 显示"数据不足，至少需要 3 条记录" |
+| 会话事件桥接采集异常（回调抛错） | 回调内 try-catch，仅 warn；主流程与记录写入不受影响 |
+| Agent 决策链未闭合（会话中断/插件晚挂载） | 悬挂兜底：turn/end 或会话 disposed 时未闭合工具调用以 error 状态强制补记 |
+| 记录无 agent 字段（H5/旧群聊记录） | 详情态隐藏「Agent 决策链」区块与「Agent」元信息行，其余照常渲染 |
 
 ---
 
@@ -612,6 +644,7 @@ GET /aquasense-reports/api/records/RPT-20260917-1005
 | M7 | H5 提交成功反馈（精简：不跳转、不展示明细） | M1, M3 | 1 天 |
 | M8 | 集成测试 + 部署验证 | M4-M7 | 1 天 |
 | M9 | 详情态现场照片展示（图片落盘/接口/缩略图+灯箱） | M5, M7 | 1 天 |
+| M13 | 群聊 Agent 决策链（方式 B 会话事件桥接 + 详情态决策链区块 + 列表角标） | M9 | 2 天 |
 
 **验收要点**：
 
@@ -621,6 +654,7 @@ GET /aquasense-reports/api/records/RPT-20260917-1005
 - [ ] 配置页顶栏二级标题区含「📊 分析记录」页签（位于「每日任务提醒」右侧），点击进入分析记录页（列表态）
 - [ ] 详情态展示完整 5 步 Trace 瀑布图 + 步骤 Accordion
 - [ ] 详情态展示工人发送的原始照片（缩略图网格 + 灯箱预览，覆盖 H5 与群聊两种来源）
+- [ ] 群聊记录详情态展示「Agent 决策链」（turn/step/工具调用/耗时/重试），H5 记录不展示
 - [ ] 知识库检索步骤展示命中条目详情（标题/通道/页码/摘录）
 - [ ] 池号趋势页展示状态分布 + 症状频次 + 语义聚类
 - [ ] H5 提交后仅展示「提交成功」反馈（不跳转、不展示进度/结果明细）
