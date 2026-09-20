@@ -116,6 +116,9 @@ export async function removeReportImages(id) {
 }
 /** 摘要条目(从完整记录提取;索引与重建共用) */
 export function toSummary(record) {
+    // 群聊 Agent 决策链(v1.8):重试次数汇总 + 重试最多的工具名(供列表态角标)
+    const retryCalls = record.agent?.calls.filter((c) => c.attempt > 1) ?? [];
+    const agentRetries = retryCalls.reduce((n, c) => n + c.attempt - 1, 0);
     return {
         id: record.id,
         pool: record.pool,
@@ -127,7 +130,10 @@ export function toSummary(record) {
         alert_level: record.span_advice?.alert_level,
         created_at: record.created_at,
         total_duration_ms: record.total_duration_ms,
-        total_tokens: record.total_tokens
+        total_tokens: record.total_tokens,
+        // agent 存在时始终写入(0 也表示已回填);>0 时前端显示 🔁 角标
+        agent_retries: record.agent ? agentRetries : undefined,
+        agent_retry_tool: retryCalls.length > 0 ? retryCalls[0].tool : undefined
     };
 }
 /** 索引更新串行队列(防止并发 flush 时读-改-写丢条目) */
@@ -204,6 +210,59 @@ export async function readReport(id) {
     catch {
         return null;
     }
+}
+// ========== Agent 决策链回填(v1.8 会话事件桥接) ==========
+/**
+ * 在 index.json 中定位「待回填」的群聊记录候选(按 created_at 倒序,最多 5 条)。
+ * 候选仅按摘要初筛(同池号 + 群聊 + 时间窗口);真正的幂等判定在
+ * patchReportAgent 读 RPT-*.json 时进行(agent 已存在且 turn 不同则跳过)。
+ * @param pool 池号(来自 ledger 工具参数)
+ * @param sinceIso 时间窗口起点(turn/start 时间,ISO 8601)
+ */
+export async function findPendingAgentRecord(pool, sinceIso) {
+    const index = await readIndex();
+    return index.records
+        .filter((r) => r.source === 'group_chat' && r.pool === pool && r.created_at >= sinceIso)
+        .slice(0, 5)
+        .map((r) => r.id);
+}
+/**
+ * 将 Agent 决策链回填到单条群聊记录(读改写 RPT-*.json + 刷新索引摘要)。
+ * 幂等:记录已有 agent 且 turn 不同 → 该记录已被其他 turn 认领,跳过并返回 false;
+ * 同一 turn 重复回填为覆盖写(数据一致,无害)。
+ * @returns 是否回填成功
+ */
+export async function patchReportAgent(id, agent) {
+    const record = await readReport(id);
+    if (!record)
+        return false;
+    if (record.agent && record.agent.turn !== agent.turn)
+        return false;
+    record.agent = agent;
+    await writeReport(record);
+    await refreshIndexSummary(record);
+    const retries = agent.calls.reduce((n, c) => n + Math.max(0, c.attempt - 1), 0);
+    console.log(`[aquasense-trace] 群聊 Agent 决策链已回填: ${id}, turn ${agent.turn}, ` +
+        `step ${agent.step}, ${agent.calls.length} 工具, ${retries} 重试`);
+    return true;
+}
+/**
+ * 刷新索引中单条记录的摘要字段(不重排顺序;回填/补录场景用)。
+ * 经索引串行队列执行,避免与并发 flush 竞争。
+ */
+export function refreshIndexSummary(record) {
+    const task = writeChain.then(async () => {
+        const index = await readIndex();
+        const entry = index.records.find((r) => r.id === record.id);
+        if (!entry)
+            return;
+        Object.assign(entry, toSummary(record));
+        await fs.mkdir(reportsDir(), { recursive: true });
+        await fs.writeFile(indexFile(), JSON.stringify(index, null, 2), 'utf-8');
+    });
+    // 队列自身永不 reject,避免一次失败阻断后续更新;调用方仍能拿到本次的 reject
+    writeChain = task.catch(() => { });
+    return task;
 }
 // ========== 重建与清理 ==========
 /** 从 reports/ 目录扫描全部记录并重建索引(按 created_at 倒序) */

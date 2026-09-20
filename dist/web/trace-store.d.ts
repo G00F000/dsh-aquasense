@@ -9,7 +9,7 @@
  * 单条记录损坏时读取返回 null(列表跳过,不阻断整体)。
  * 并发:索引更新经进程内串行队列,避免读-改-写竞争丢条目。
  */
-import type { AnalysisIndex, AnalysisRecord, RecordSummary } from './trace-recorder.js';
+import type { AgentTraceData, AnalysisIndex, AnalysisRecord, RecordSummary } from './trace-recorder.js';
 /** 报告目录 */
 export declare function reportsDir(): string;
 /** 索引文件路径 */
@@ -55,6 +55,26 @@ export declare function updateIndex(record: AnalysisRecord): Promise<void>;
 export declare function readIndex(): Promise<AnalysisIndex>;
 /** 读取单条完整记录;不存在或损坏时返回 null */
 export declare function readReport(id: string): Promise<AnalysisRecord | null>;
+/**
+ * 在 index.json 中定位「待回填」的群聊记录候选(按 created_at 倒序,最多 5 条)。
+ * 候选仅按摘要初筛(同池号 + 群聊 + 时间窗口);真正的幂等判定在
+ * patchReportAgent 读 RPT-*.json 时进行(agent 已存在且 turn 不同则跳过)。
+ * @param pool 池号(来自 ledger 工具参数)
+ * @param sinceIso 时间窗口起点(turn/start 时间,ISO 8601)
+ */
+export declare function findPendingAgentRecord(pool: string, sinceIso: string): Promise<string[]>;
+/**
+ * 将 Agent 决策链回填到单条群聊记录(读改写 RPT-*.json + 刷新索引摘要)。
+ * 幂等:记录已有 agent 且 turn 不同 → 该记录已被其他 turn 认领,跳过并返回 false;
+ * 同一 turn 重复回填为覆盖写(数据一致,无害)。
+ * @returns 是否回填成功
+ */
+export declare function patchReportAgent(id: string, agent: AgentTraceData): Promise<boolean>;
+/**
+ * 刷新索引中单条记录的摘要字段(不重排顺序;回填/补录场景用)。
+ * 经索引串行队列执行,避免与并发 flush 竞争。
+ */
+export declare function refreshIndexSummary(record: AnalysisRecord): Promise<void>;
 /** 从 reports/ 目录扫描全部记录并重建索引(按 created_at 倒序) */
 export declare function rebuildIndex(): Promise<AnalysisIndex>;
 /**

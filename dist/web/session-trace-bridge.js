@@ -1,0 +1,318 @@
+/**
+ * R8 群聊 Agent 决策链桥接(方式 B,见 docs/r8-traceability-architecture.md §3.6)
+ *
+ * 订阅 DSH 会话事件流(ctx.on('session/event')),对群聊场景的
+ * aquasense_analyze/advice/ledger 三工具调用做 tool/call ↔ tool/result 配对,
+ * 采集 turn/step/call_id/重试/精确耗时,组装 AnalysisRecord.agent 并回填到
+ * trace-ledger-wrap 后置收集写入的分析记录(业务数据仍由包装器负责)。
+ *
+ * 借鉴 dsh-observe(Apache-2.0)的设计模式,原创实现(无代码复制,无许可证义务):
+ *  纪律1 开闭配对  / 纪律2 悬挂兜底  / 纪律3 WeakMap  / 纪律4 回调 try-catch
+ *
+ * 关联方式(会话事件拿不到 chat_id,以池号+时间窗口关联):
+ *  ledger 工具参数提取 pool_id → index.json 中查找「同池号 + group_chat +
+ *  无 agent 字段 + turn/start 时间之后」的最新记录回填;ledger-wrap 写盘可能
+ *  晚于 ledger tool/result 事件(图片下载耗时),故回填带延迟重试。
+ *
+ * 边界(诚实声明):
+ *  - 视觉模型 Token/知识库命中数在 agent 层拿不到(仍由工具内埋点负责);
+ *  - 不读日志文件(~/.dsh/sessions/*.jsonl),只订阅进程内实时事件;
+ *    插件晚挂载/中途重启的历史事件不可回溯(记录缺失 agent,UI 自动隐藏)。
+ */
+import { findPendingAgentRecord, patchReportAgent } from './trace-store.js';
+// ========== 常量 ==========
+/** 参与决策链采集的工具名(与 Agent 编排链一致) */
+const TRACE_TOOLS = new Set(['aquasense_analyze', 'aquasense_advice', 'aquasense_ledger']);
+/** 回填重试间隔(毫秒):ledger-wrap 写盘可能晚于 ledger tool/result 事件 */
+const FILL_DELAYS = [0, 3_000, 10_000, 30_000];
+/** 悬挂兜底原因码(turn/end 或 session/disposed 时未闭合的调用) */
+const ABORTED_CODE = 'ABORTED';
+// ========== 数据读取辅助 ==========
+/** 从 unknown 中读取数字(非 number 返回 fallback) */
+function numOf(value, fallback = 0) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+/** 从 unknown 中读取字符串(非 string 返回 fallback) */
+function strOf(value, fallback = '') {
+    return typeof value === 'string' ? value : fallback;
+}
+/** 从 ledger 工具 arguments JSON 中提取池号(解析失败返回 '') */
+function poolOfArgs(argumentsJson) {
+    try {
+        const parsed = JSON.parse(argumentsJson);
+        if (!parsed || typeof parsed !== 'object')
+            return '';
+        const args = parsed;
+        const direct = strOf(args.pool_id).trim();
+        if (direct)
+            return direct;
+        const fields = args.fields;
+        if (fields && typeof fields === 'object') {
+            return strOf(fields['池号']).trim();
+        }
+        return '';
+    }
+    catch {
+        return '';
+    }
+}
+// ========== 核心状态机(导出供测试) ==========
+export class SessionTraceBridge {
+    states = new WeakMap();
+    /** 会话事件入口(纪律4:调用方已包 try-catch,此处仍防御) */
+    handleEvent(session, event) {
+        const type = strOf(event.type);
+        if (type === 'turn/start') {
+            const turn = numOf(readField(event, 'turn'));
+            if (turn <= 0)
+                return;
+            // 新 turn 开始:上一 turn 若仍有未闭合调用,悬挂兜底关闭(纪律2)
+            const prev = this.stateOf(session);
+            if (prev.open.size > 0)
+                this.closeHanging(prev, false);
+            const state = this.stateOf(session);
+            state.turn = turn;
+            state.turnStartedAt = numOf(event.time);
+            state.open.clear();
+            state.done = [];
+            state.toolCounts.clear();
+            state.pool = '';
+            return;
+        }
+        if (type === 'step/start') {
+            const state = this.stateOf(session);
+            state.step = numOf(readField(event, 'step'), state.step);
+            state.stepStartedAt = numOf(event.time, state.stepStartedAt);
+            return;
+        }
+        if (type === 'tool/call') {
+            const data = event.data;
+            if (!data)
+                return;
+            const name = strOf(data.name);
+            if (!TRACE_TOOLS.has(name))
+                return;
+            const callId = strOf(data.callId);
+            if (!callId)
+                return;
+            const argumentsJson = strOf(data.arguments);
+            const turn = numOf(data.turn);
+            const step = numOf(data.step);
+            const state = this.stateOf(session);
+            if (turn > 0)
+                state.turn = turn;
+            if (step > 0)
+                state.step = step;
+            // 重试推导:同一 step 内相同 (name, arguments) 的再次调用 → attempt 递增
+            const key = `${name}\u0000${argumentsJson}`;
+            const attempt = (state.toolCounts.get(key) ?? 0) + 1;
+            state.toolCounts.set(key, attempt);
+            const call = {
+                callId,
+                tool: name,
+                turn: state.turn,
+                step: state.step,
+                attempt,
+                startedAt: numOf(event.time),
+                durationMs: 0,
+                status: 'error',
+                arguments: argumentsJson
+            };
+            state.open.set(callId, call);
+            // ledger 参数携带池号 → 记录为回填关联键
+            if (name === 'aquasense_ledger') {
+                const pool = poolOfArgs(argumentsJson);
+                if (pool)
+                    state.pool = pool;
+            }
+            return;
+        }
+        if (type === 'tool/result') {
+            const data = event.data;
+            if (!data)
+                return;
+            const callId = strOf(data.callId);
+            if (!callId)
+                return;
+            const state = this.stateOf(session);
+            const call = state.open.get(callId);
+            if (!call)
+                return;
+            call.durationMs = Math.max(0, Math.round(numOf(event.time) - call.startedAt));
+            const error = data.error;
+            if (error) {
+                call.status = 'error';
+                call.errorCode = strOf(error.code, strOf(error.name));
+            }
+            else {
+                call.status = 'ok';
+            }
+            state.open.delete(callId);
+            state.done.push(call);
+            // ledger 收尾 → 组装并回填 agent
+            if (call.tool === 'aquasense_ledger') {
+                this.fill(session, state);
+            }
+            return;
+        }
+        if (type === 'turn/end') {
+            const state = this.stateOf(session);
+            // 悬挂兜底:turn 结束时未闭合的调用以 error 状态强制关闭
+            this.closeHanging(state, true);
+            return;
+        }
+    }
+    /** 会话销毁兜底(纪律2):未闭合调用强制关闭并尝试回填 */
+    handleSessionDisposed(session) {
+        const state = this.states.get(session);
+        if (!state)
+            return;
+        this.closeHanging(state, true);
+        this.states.delete(session);
+    }
+    /** 获取/创建会话状态(WeakMap) */
+    stateOf(session) {
+        const key = session;
+        let state = this.states.get(key);
+        if (!state) {
+            state = {
+                turn: 0,
+                step: 0,
+                turnStartedAt: 0,
+                stepStartedAt: 0,
+                open: new Map(),
+                done: [],
+                toolCounts: new Map(),
+                pool: '',
+                filledTurns: new Set()
+            };
+            this.states.set(key, state);
+        }
+        return state;
+    }
+    /** 悬挂兜底:未闭合调用以 error 状态并入 done;willFill=true 时触发回填 */
+    closeHanging(state, willFill) {
+        if (state.open.size === 0)
+            return;
+        for (const call of state.open.values()) {
+            call.status = 'error';
+            call.errorCode = call.errorCode ?? ABORTED_CODE;
+            state.done.push(call);
+        }
+        state.open.clear();
+        if (willFill)
+            this.fill(undefined, state);
+    }
+    /** 组装 AgentTraceData 并异步回填(延迟重试,防重复) */
+    fill(session, state) {
+        if (state.filledTurns.has(state.turn))
+            return;
+        const agent = buildAgentData(state);
+        if (!agent)
+            return;
+        state.filledTurns.add(state.turn);
+        // 若无池号,清空 done 避免累积;不重试
+        if (!state.pool) {
+            state.done = [];
+            return;
+        }
+        const sinceIso = new Date(state.turnStartedAt > 0 ? state.turnStartedAt : Date.now() - 600_000).toISOString();
+        void attachWithRetry(state.pool, sinceIso, agent, 0);
+        state.done = [];
+    }
+}
+/** 从事件 data 读取字段(data 可能缺失) */
+function readField(event, field) {
+    const data = event.data;
+    if (!data || typeof data !== 'object')
+        return undefined;
+    return data[field];
+}
+/** 组装 AgentTraceData(按开始时间排序;think_ms 为 step 开始 → 首个工具调用) */
+function buildAgentData(state) {
+    if (state.done.length === 0 || state.turn <= 0)
+        return null;
+    const calls = [...state.done].sort((a, b) => a.startedAt - b.startedAt || a.attempt - b.attempt);
+    const first = calls[0];
+    const thinkMs = state.stepStartedAt > 0 && first.startedAt > 0 ? Math.max(0, first.startedAt - state.stepStartedAt) : 0;
+    return {
+        turn: state.turn,
+        step: state.step,
+        think_ms: Math.round(thinkMs),
+        calls: calls.map((c) => ({
+            tool: c.tool,
+            call_id: c.callId,
+            attempt: c.attempt,
+            duration_ms: c.durationMs,
+            status: c.status,
+            ...(c.errorCode ? { error_code: c.errorCode } : {})
+        }))
+    };
+}
+/** 回填(带延迟重试:ledger-wrap 写盘可能晚于 ledger tool/result 事件) */
+async function attachWithRetry(pool, sinceIso, agent, delayIdx) {
+    try {
+        const ids = await findPendingAgentRecord(pool, sinceIso);
+        for (const id of ids) {
+            if (await patchReportAgent(id, agent))
+                return;
+        }
+        const next = delayIdx + 1;
+        if (next < FILL_DELAYS.length) {
+            setTimeout(() => {
+                void attachWithRetry(pool, sinceIso, agent, next);
+            }, FILL_DELAYS[next]);
+        }
+        else {
+            console.warn(`[aquasense-trace] Agent 决策链回填失败(无匹配记录): 池号 ${pool}, turn ${agent.turn}`);
+        }
+    }
+    catch (error) {
+        console.warn('[aquasense-trace] Agent 决策链回填异常:', error instanceof Error ? error.message : error);
+    }
+}
+// ========== 插件接线 ==========
+/**
+ * 订阅 DSH 会话事件,启动群聊 Agent 决策链采集(v1.8)。
+ * enabled=false/宿主不支持 session 事件时静默跳过(零注册)。
+ * 注册与注销经 ctx.effect 统一收口,回调内全量 try-catch(纪律4)。
+ */
+export function installSessionTraceBridge(ctx) {
+    const host = ctx;
+    if (typeof host.on !== 'function') {
+        console.warn('[aquasense-trace] 宿主不支持 session/event 订阅,跳过 Agent 决策链桥接');
+        return;
+    }
+    ctx.effect(() => {
+        const bridge = new SessionTraceBridge();
+        let offEvent;
+        let offDisposed;
+        try {
+            offEvent = host.on('session/event', (session, event) => {
+                try {
+                    bridge.handleEvent(session, event);
+                }
+                catch (error) {
+                    console.warn('[aquasense-trace] 会话事件处理失败:', error instanceof Error ? error.message : error);
+                }
+            });
+            offDisposed = host.on('session/disposed', (session) => {
+                try {
+                    bridge.handleSessionDisposed(session);
+                }
+                catch {
+                    /* 忽略:销毁兜底失败不影响宿主 */
+                }
+            });
+        }
+        catch (error) {
+            console.warn('[aquasense-trace] 会话事件桥接启动失败:', error instanceof Error ? error.message : error);
+            return () => { };
+        }
+        console.log('[aquasense-trace] 会话事件桥接已启动(方式B): 订阅 session/event, 目标工具 aquasense_analyze/advice/ledger');
+        return () => {
+            offEvent?.();
+            offDisposed?.();
+        };
+    }, 'aquasense-trace-bridge');
+}

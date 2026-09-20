@@ -16,6 +16,8 @@
  *  - H5 拍照汇报页由 web/report-handler 提供(/aquasense-remind/report 页面 +
  *    /aquasense-remind/api/report/{submit,progress} 提交与进度接口);
  *  - 群聊场景经 recordLedger 包装器后置收集简化记录(方案 A);
+ *  - 群聊场景另经 session-trace-bridge 订阅会话事件采集 Agent 决策链
+ *    (方式 B,v1.8)并回填 AnalysisRecord.agent;
  *  - 设置页「AquaSense 设置」卡片由 web/aqua-settings-gateway 提供
  *    (settings 命名空间配对 + /aquasense-settings/api 路由),池号枚举配置
  *    供台账白名单/H5 校验/列表筛选全局生效。
@@ -31,6 +33,7 @@ import { installTraceWeb } from './web/trace-gateway.js'
 import { installReportWeb } from './web/report-handler.js'
 import { installAquaSettingsWeb } from './web/aqua-settings-gateway.js'
 import { wrapLedgerWithTrace } from './web/trace-ledger-wrap.js'
+import { installSessionTraceBridge } from './web/session-trace-bridge.js'
 
 export const name = 'aquasense-plugin'
 export const inject = ['tools']
@@ -58,6 +61,9 @@ export function apply(ctx: Context) {
 
   // 设置页「AquaSense 设置」:池号枚举配置(settings 命名空间 + /aquasense-settings/api)
   installAquaSettingsWeb(ctx)
+
+  // R8 群聊 Agent 决策链(方式 B,v1.8):订阅会话事件采集 turn/step/工具调用/重试
+  installSessionTraceBridge(ctx)
 
   console.log('[aquasense] 工具加载完成')
   console.log('[aquasense] 知识库查询:generate-advice 内置 IMA API 自动查询')

@@ -866,6 +866,140 @@ function formatDateTime(iso) {
 	const p = (n) => (n < 10 ? "0" : "") + n;
 	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+/** Agent 决策链工具元信息(v1.8 详情态区块;未知工具降级灰图标) */
+const AGENT_TOOL_META = {
+	aquasense_analyze: {
+		icon: "🧠",
+		label: "AI 视觉分析",
+		color: "#1677ff"
+	},
+	aquasense_advice: {
+		icon: "💡",
+		label: "处置建议生成",
+		color: "#52c41a"
+	},
+	aquasense_ledger: {
+		icon: "📝",
+		label: "台账写入",
+		color: "#722ed1"
+	}
+};
+/** Agent 决策链区块(v1.8,仅群聊记录;数据来自 DSH 会话事件,agent 缺失时自动隐藏) */
+function AgentChain({ agent }) {
+	if (!agent || agent.calls.length === 0) return null;
+	const total = Math.max(agent.think_ms, ...agent.calls.map((c) => c.duration_ms), 1);
+	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+		style: { marginBottom: 20 },
+		children: [
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "trc-section-title",
+				children: ["Agent 决策链", /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					style: {
+						fontWeight: 400,
+						fontSize: 12,
+						color: "var(--dsw-alias-label-secondary,#7b8088)"
+					},
+					children: [
+						"（turn ",
+						agent.turn,
+						" · step ",
+						agent.step,
+						" · 会话事件自动记录）"
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "trc-wf",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					className: "trc-wf-row",
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: "trc-wf-icon",
+							style: S.iconBg("#8c8c8c"),
+							children: "🔄"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: "trc-wf-label",
+							children: "Agent 思考"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+							className: "trc-wf-track",
+							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: "trc-wf-bar",
+								style: S.wfBar("#8c8c8c", agent.think_ms / total * 100)
+							})
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: "trc-wf-dur",
+							children: durationText(agent.think_ms)
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							className: "trc-wf-status",
+							children: "—"
+						})
+					]
+				}), agent.calls.map((call$1) => {
+					const meta = AGENT_TOOL_META[call$1.tool] ?? {
+						icon: "🔧",
+						label: call$1.tool,
+						color: "#9ca3af"
+					};
+					return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						className: "trc-wf-row",
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: "trc-wf-icon",
+								style: S.iconBg(meta.color),
+								children: meta.icon
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: "trc-wf-label",
+								children: meta.label
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+								className: "trc-wf-track",
+								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+									className: "trc-wf-bar",
+									style: S.wfBar(call$1.status === "error" ? "#ff4d4f" : meta.color, call$1.duration_ms / total * 100)
+								})
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: "trc-wf-dur",
+								children: durationText(call$1.duration_ms)
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: "trc-wf-status",
+								children: call$1.status === "ok" ? "✅" : "❌"
+							})
+						]
+					}), call$1.attempt > 1 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							margin: "-2px 0 6px 128px",
+							fontSize: 11,
+							color: "var(--dsw-alias-label-secondary,#7b8088)"
+						},
+						children: [
+							"🔁 第 ",
+							call$1.attempt,
+							" 次尝试",
+							call$1.error_code ? `（前次失败: ${call$1.error_code}）` : "",
+							" · call ",
+							call$1.call_id
+						]
+					})] }, `${call$1.call_id}-${call$1.attempt}`);
+				})]
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				style: {
+					marginTop: 6,
+					fontSize: 11,
+					color: "var(--dsw-alias-label-secondary,#7b8088)"
+				},
+				children: "数据来源: DSH 会话事件边界（工具内部 Token/知识库命中明细见下方步骤详情）"
+			})
+		]
+	});
+}
 /** 瀑布图：5 个 span 的时间轴可视化 */
 function WaterfallChart({ record }) {
 	const spans = SPAN_DEFS.map((def) => ({
@@ -1607,9 +1741,33 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 									tokenText(detailRecord.span_analyze?.output_tokens ?? 0)
 								]
 							})]
+						}),
+						detailRecord.agent && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+							className: "trc-meta-item",
+							style: { gridColumn: "1 / -1" },
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: "trc-meta-label",
+								children: "Agent:"
+							}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+								className: "trc-meta-value",
+								children: [
+									"turn ",
+									detailRecord.agent.turn,
+									" · step ",
+									detailRecord.agent.step,
+									" · 工具 ",
+									detailRecord.agent.calls.length,
+									" 次",
+									(() => {
+										const retries = detailRecord.agent.calls.reduce((n, c) => n + Math.max(0, c.attempt - 1), 0);
+										return retries > 0 ? ` · 重试 ${retries} 次` : "";
+									})()
+								]
+							})]
 						})
 					]
 				}),
+				/* @__PURE__ */ (0, react_jsx_runtime.jsx)(AgentChain, { agent: detailRecord.agent }),
 				detailRecord.images && detailRecord.images.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: { marginBottom: 20 },
 					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -1876,10 +2034,25 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "·" }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: SOURCE_LABEL[r.source || ""] || r.source }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "·" }),
+							r.agent_retries !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+								className: "trc-badge",
+								style: {
+									background: "#4d6bfe1a",
+									color: "#4d6bfe",
+									fontWeight: 600
+								},
+								children: "Agent链路"
+							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: r.alert_level ? "AI视觉+知识库" : "AI视觉" }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "·" }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: durationText(r.total_duration_ms) }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "·" }),
+							r.agent_retries !== void 0 && r.agent_retries > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [
+								"🔁 ",
+								(r.agent_retry_tool || "tool").replace(/^aquasense_/, ""),
+								" ×",
+								r.agent_retries
+							] }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", { children: [tokenText(r.total_tokens), " tokens"] })
 						]
 					})]

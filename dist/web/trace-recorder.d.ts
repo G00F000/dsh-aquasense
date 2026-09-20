@@ -17,9 +17,9 @@ export type RecordSource = 'h5_upload' | 'group_chat' | 'api';
 /** Span: 图片上传 */
 export interface SpanUpload {
     image_count: number;
-    /** 图片文件名(H5 提交时采集;群聊场景为空) */
+    /** 图片文件名(H5:提交采集;群聊:下载/落盘名) */
     image_names?: string[];
-    /** 服务端收到的图片字节数(客户端已压缩) */
+    /** 服务端收到的图片字节数(H5 为客户端压缩后) */
     image_sizes: number[];
     compressed_sizes?: number[];
     duration_ms?: number;
@@ -78,6 +78,33 @@ export interface SpanLedger {
     duration_ms?: number;
     error?: string;
 }
+/** Agent 决策链中的单次工具调用(会话事件 tool/call ↔ tool/result 配对) */
+export interface AgentToolCall {
+    tool: 'aquasense_analyze' | 'aquasense_advice' | 'aquasense_ledger';
+    /** 会话事件 callId */
+    call_id: string;
+    /** 第几次尝试(1 起,>1 表示重试) */
+    attempt: number;
+    /** tool/call → tool/result 时间戳差(毫秒) */
+    duration_ms: number;
+    status: 'ok' | 'error';
+    /** 失败原因码(如 ABORTED/超时) */
+    error_code?: string;
+}
+/**
+ * Agent 决策链(v1.8,仅群聊场景;由 session-trace-bridge 会话事件桥接采集)。
+ * 记录 Agent 层的 turn/step 上下文与工具调用序列,支撑详情态
+ * 「Agent 决策链」区块回放"AI 为什么这么分析"。
+ */
+export interface AgentTraceData {
+    /** 会话 turn 序号 */
+    turn: number;
+    /** 会话 step 序号 */
+    step: number;
+    /** step 开始 → 首个工具调用(Agent 决策耗时,毫秒) */
+    think_ms: number;
+    calls: AgentToolCall[];
+}
 /** Span 名 → 数据类型 */
 export interface SpanDataMap {
     upload: SpanUpload;
@@ -119,6 +146,8 @@ export interface AnalysisRecord {
     span_retrieve?: SpanRetrieve;
     span_advice?: SpanAdvice;
     span_ledger?: SpanLedger;
+    /** Agent 决策链(v1.8,仅群聊场景;会话事件桥接回填,缺失时前端隐藏区块) */
+    agent?: AgentTraceData;
 }
 /** 索引摘要条目(存 index.json,供列表/趋势页轻量加载) */
 export interface RecordSummary {
@@ -133,6 +162,10 @@ export interface RecordSummary {
     created_at: string;
     total_duration_ms: number;
     total_tokens: number;
+    /** 群聊 Agent 重试次数汇总(v1.8;agent 存在时写入,>0 时列表态显示 🔁 角标) */
+    agent_retries?: number;
+    /** 重试最多的工具名(供列表态角标文案) */
+    agent_retry_tool?: string;
 }
 /** 分析记录索引 */
 export interface AnalysisIndex {

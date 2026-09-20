@@ -27,6 +27,25 @@ interface RecordSummary {
   created_at: string
   total_duration_ms: number
   total_tokens: number
+  /** 群聊 Agent 重试次数汇总(v1.8;>0 时显示 🔁 角标) */
+  agent_retries?: number
+  /** 重试最多的工具名(角标文案) */
+  agent_retry_tool?: string
+}
+
+/** Agent 决策链(v1.8,会话事件桥接采集;缺失时前端隐藏区块) */
+interface AgentTraceData {
+  turn: number
+  step: number
+  think_ms: number
+  calls: Array<{
+    tool: 'aquasense_analyze' | 'aquasense_advice' | 'aquasense_ledger'
+    call_id: string
+    attempt: number
+    duration_ms: number
+    status: 'ok' | 'error'
+    error_code?: string
+  }>
 }
 
 /** 详情接口：完整 AnalysisRecord（嵌套 span_*） */
@@ -92,6 +111,8 @@ interface AnalysisRecord {
     duration_ms?: number
     error?: string
   }
+  /** Agent 决策链(v1.8,仅群聊记录;数据来自会话事件桥接) */
+  agent?: AgentTraceData
   /** 工人发送的图片(详情接口附加,已落盘缓存目录) */
   images?: Array<{ index: number; fileName: string; mimeType: string; size: number; url: string }>
 }
@@ -334,6 +355,67 @@ function formatDateTime(iso: string): string {
 }
 
 // ========== 子组件 ==========
+
+/** Agent 决策链工具元信息(v1.8 详情态区块;未知工具降级灰图标) */
+const AGENT_TOOL_META: Record<string, { icon: string; label: string; color: string }> = {
+  aquasense_analyze: { icon: '🧠', label: 'AI 视觉分析', color: '#1677ff' },
+  aquasense_advice: { icon: '💡', label: '处置建议生成', color: '#52c41a' },
+  aquasense_ledger: { icon: '📝', label: '台账写入', color: '#722ed1' }
+}
+
+/** Agent 决策链区块(v1.8,仅群聊记录;数据来自 DSH 会话事件,agent 缺失时自动隐藏) */
+function AgentChain({ agent }: { agent?: AgentTraceData }): ReactNode {
+  if (!agent || agent.calls.length === 0) return null
+  const total = Math.max(agent.think_ms, ...agent.calls.map((c) => c.duration_ms), 1)
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div className="trc-section-title">
+        Agent 决策链
+        <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>
+          （turn {agent.turn} · step {agent.step} · 会话事件自动记录）
+        </span>
+      </div>
+      <div className="trc-wf">
+        <div className="trc-wf-row">
+          <span className="trc-wf-icon" style={S.iconBg('#8c8c8c')}>🔄</span>
+          <span className="trc-wf-label">Agent 思考</span>
+          <div className="trc-wf-track">
+            <div className="trc-wf-bar" style={S.wfBar('#8c8c8c', (agent.think_ms / total) * 100)} />
+          </div>
+          <span className="trc-wf-dur">{durationText(agent.think_ms)}</span>
+          <span className="trc-wf-status">—</span>
+        </div>
+        {agent.calls.map((call) => {
+          const meta = AGENT_TOOL_META[call.tool] ?? { icon: '🔧', label: call.tool, color: '#9ca3af' }
+          return (
+            <div key={`${call.call_id}-${call.attempt}`}>
+              <div className="trc-wf-row">
+                <span className="trc-wf-icon" style={S.iconBg(meta.color)}>{meta.icon}</span>
+                <span className="trc-wf-label">{meta.label}</span>
+                <div className="trc-wf-track">
+                  <div
+                    className="trc-wf-bar"
+                    style={S.wfBar(call.status === 'error' ? '#ff4d4f' : meta.color, (call.duration_ms / total) * 100)}
+                  />
+                </div>
+                <span className="trc-wf-dur">{durationText(call.duration_ms)}</span>
+                <span className="trc-wf-status">{call.status === 'ok' ? '✅' : '❌'}</span>
+              </div>
+              {call.attempt > 1 && (
+                <div style={{ margin: '-2px 0 6px 128px', fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>
+                  🔁 第 {call.attempt} 次尝试{call.error_code ? `（前次失败: ${call.error_code}）` : ''} · call {call.call_id}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ marginTop: 6, fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>
+        数据来源: DSH 会话事件边界（工具内部 Token/知识库命中明细见下方步骤详情）
+      </div>
+    </div>
+  )
+}
 
 /** 瀑布图：5 个 span 的时间轴可视化 */
 function WaterfallChart({ record }: { record: AnalysisRecord }): ReactNode {
@@ -840,7 +922,22 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
                 <span className="trc-meta-label">Token:</span>
                 <span className="trc-meta-value">input={tokenText(detailRecord.span_analyze?.input_tokens ?? 0)} output={tokenText(detailRecord.span_analyze?.output_tokens ?? 0)}</span>
               </div>
+              {detailRecord.agent && (
+                <div className="trc-meta-item" style={{ gridColumn: '1 / -1' }}>
+                  <span className="trc-meta-label">Agent:</span>
+                  <span className="trc-meta-value">
+                    turn {detailRecord.agent.turn} · step {detailRecord.agent.step} · 工具 {detailRecord.agent.calls.length} 次
+                    {(() => {
+                      const retries = detailRecord.agent.calls.reduce((n, c) => n + Math.max(0, c.attempt - 1), 0)
+                      return retries > 0 ? ` · 重试 ${retries} 次` : ''
+                    })()}
+                  </span>
+                </div>
+              )}
             </div>
+
+            {/* Agent 决策链(v1.8,仅群聊记录;agent 缺失时组件自动隐藏) */}
+            <AgentChain agent={detailRecord.agent} />
 
             {/* 现场照片(工人发送的图片,已落盘缓存目录) */}
             {detailRecord.images && detailRecord.images.length > 0 && (
@@ -1034,8 +1131,16 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
                   <div className="trc-line2">
                     <span>{timeText(r.created_at)}</span><span>·</span>
                     <span>{SOURCE_LABEL[r.source || ''] || r.source}</span><span>·</span>
+                    {r.agent_retries !== undefined && (
+                      <span className="trc-badge" style={{ background: '#4d6bfe1a', color: '#4d6bfe', fontWeight: 600 }}>
+                        Agent链路
+                      </span>
+                    )}
                     <span>{r.alert_level ? 'AI视觉+知识库' : 'AI视觉'}</span><span>·</span>
                     <span>{durationText(r.total_duration_ms)}</span><span>·</span>
+                    {r.agent_retries !== undefined && r.agent_retries > 0 && (
+                      <span>🔁 {(r.agent_retry_tool || 'tool').replace(/^aquasense_/, '')} ×{r.agent_retries}</span>
+                    )}
                     <span>{tokenText(r.total_tokens)} tokens</span>
                   </div>
                 </button>
