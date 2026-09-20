@@ -45,6 +45,7 @@ interface AgentTraceData {
     duration_ms: number
     status: 'ok' | 'error'
     error_code?: string
+    meta?: Record<string, unknown>
   }>
 }
 
@@ -386,16 +387,20 @@ function AgentChain({ agent }: { agent?: AgentTraceData }): ReactNode {
           <span className="trc-wf-status">—</span>
         </div>
         {agent.calls.map((call) => {
-          const meta = AGENT_TOOL_META[call.tool] ?? { icon: '🔧', label: call.tool, color: '#9ca3af' }
+          const toolMeta = AGENT_TOOL_META[call.tool] ?? { icon: '🔧', label: call.tool, color: '#9ca3af' }
+          const summary = formatCallMeta(call)
           return (
             <div key={`${call.call_id}-${call.attempt}`}>
               <div className="trc-wf-row">
-                <span className="trc-wf-icon" style={S.iconBg(meta.color)}>{meta.icon}</span>
-                <span className="trc-wf-label">{meta.label}</span>
+                <span className="trc-wf-icon" style={S.iconBg(toolMeta.color)}>{toolMeta.icon}</span>
+                <span className="trc-wf-label">
+                  {toolMeta.label}
+                  {summary && <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)' }}>{summary}</span>}
+                </span>
                 <div className="trc-wf-track">
                   <div
                     className="trc-wf-bar"
-                    style={S.wfBar(call.status === 'error' ? '#ff4d4f' : meta.color, (call.duration_ms / total) * 100)}
+                    style={S.wfBar(call.status === 'error' ? '#ff4d4f' : toolMeta.color, (call.duration_ms / total) * 100)}
                   />
                 </div>
                 <span className="trc-wf-dur">{durationText(call.duration_ms)}</span>
@@ -415,6 +420,29 @@ function AgentChain({ agent }: { agent?: AgentTraceData }): ReactNode {
       </div>
     </div>
   )
+}
+
+/** 格式化单次工具调用的 meta 摘要(显示关键业务字段) */
+function formatCallMeta(call: AgentTraceData['calls'][number]): string {
+  const m = call.meta
+  if (!m) return ''
+  if (call.tool === 'aquasense_analyze') {
+    const cls = m.cls ? String(m.cls) : ''
+    const conf = typeof m.confidence === 'number' ? m.confidence.toFixed(2) : ''
+    const imgs = typeof m.image_count === 'number' && m.image_count > 0 ? `${m.image_count}张` : ''
+    return [cls, conf, imgs].filter(Boolean).join(' · ')
+  }
+  if (call.tool === 'aquasense_advice') {
+    const level = m.alert_level ? String(m.alert_level) : ''
+    const refs = typeof m.knowledge_refs_count === 'number' ? `${m.knowledge_refs_count}条知识` : ''
+    return [level, refs].filter(Boolean).join(' · ')
+  }
+  if (call.tool === 'aquasense_ledger') {
+    const ok = m.success === true ? '✅' : m.success === false ? '❌' : ''
+    const rid = m.record_id ? String(m.record_id).slice(-8) : ''
+    return [ok, rid].filter(Boolean).join(' · ')
+  }
+  return ''
 }
 
 /** 瀑布图：5 个 span 的时间轴可视化 */

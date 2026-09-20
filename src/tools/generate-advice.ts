@@ -74,7 +74,12 @@ export const generateAdvice = defineTool({
         reasoning: { type: 'string', description: '逻辑推理说明(三段式之"逻辑推理",含结论边界声明)' }
       }
     },
-    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+    presentationMeta: (_args, value) => {
+      const v = value as Record<string, unknown>
+      const refs = Array.isArray(v.knowledge_refs) ? v.knowledge_refs : []
+      return { alert_level: String(v.alert_level ?? ''), knowledge_refs_count: refs.length, diagnosis_summary: String(v.diagnosis_summary ?? '').slice(0, 200) }
+    }
   },
   async execute(args) {
     const analysis = args.analysis as AnalysisInput

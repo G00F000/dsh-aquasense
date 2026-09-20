@@ -103,7 +103,11 @@ export const recordLedger = defineTool({
         questions: { type: 'array', items: { type: 'string' } }
       }
     },
-    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+    presentationMeta: (_args, value) => {
+      const v = value as Record<string, unknown>
+      return { success: !!v.success, record_id: String(v.record_id ?? ''), table: String((_args as Record<string, unknown>).scene ?? 'inspection') }
+    }
   },
   async execute(args) {
     const scene = (args.scene || 'inspection') as LedgerScene

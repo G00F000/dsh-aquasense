@@ -76,6 +76,8 @@ interface PendingCall {
   status: 'ok' | 'error'
   errorCode?: string
   arguments: string
+  /** tool/result 事件中工具附加的 presentationMeta 结构化摘要 */
+  meta?: Record<string, unknown>
 }
 
 /** 每个会话的采集状态(纪律3:WeakMap 键为 session 对象,自动回收) */
@@ -214,6 +216,11 @@ export class SessionTraceBridge {
       } else {
         call.status = 'ok'
       }
+      // 读取工具 presentationMeta 结构化摘要
+      const rawMeta = data.meta
+      if (rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta)) {
+        call.meta = rawMeta as Record<string, unknown>
+      }
       state.open.delete(callId)
       state.done.push(call)
       // ledger 收尾 → 组装并回填 agent
@@ -313,7 +320,8 @@ function buildAgentData(state: BridgeState): AgentTraceData | null {
       attempt: c.attempt,
       duration_ms: c.durationMs,
       status: c.status,
-      ...(c.errorCode ? { error_code: c.errorCode } : {})
+      ...(c.errorCode ? { error_code: c.errorCode } : {}),
+      ...(c.meta ? { meta: c.meta } : {})
     }))
   }
 }
