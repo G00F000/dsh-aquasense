@@ -68,6 +68,14 @@ export declare const remindApi: RemindApi;
 /** 池号设置(settings.json 快照) */
 export interface AquaSettings {
     pools: string[];
+    /** 用户映射表:open_id → 姓名 */
+    userMap: Record<string, string>;
+}
+/** 飞书群成员信息 */
+export interface FeishuChatMember {
+    open_id: string;
+    name: string;
+    member_id_type?: string;
 }
 /** 设置页 API 合同(设置 → 插件 → 插件配置 中的「AquaSense 设置」卡片) */
 export interface AquaSettingsApi {
@@ -76,6 +84,9 @@ export interface AquaSettingsApi {
     }>;
     save(input: AquaSettings): Promise<{
         settings: AquaSettings;
+    }>;
+    listChatMembers(chatId: string): Promise<{
+        members: FeishuChatMember[];
     }>;
 }
 /** 设置页 API 客户端 */

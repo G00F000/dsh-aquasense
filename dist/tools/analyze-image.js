@@ -64,7 +64,11 @@ export const analyzeImage = defineTool({
                 data_completeness: { type: 'string', enum: ['complete', 'partial', 'empty'], description: '数据完整性:complete=齐全, partial=有丢失(禁止落表正常结论), empty=全部丢失' }
             }
         },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+        presentationMeta: (_args, value) => {
+            const v = value;
+            return { cls: String(v.cls ?? ''), confidence: Number(v.confidence ?? 0), severity: String(v.severity ?? ''), image_count: Number(v.image_count ?? 0), scene_hint: String(v.scene_hint ?? '') };
+        }
     },
     async execute(args) {
         // 参数缺失由 defineTool 按 required 校验拦截,此处直接执行

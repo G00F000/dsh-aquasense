@@ -53,5 +53,6 @@ export const remindApi = {
 /** 设置页 API 客户端 */
 export const aquaSettingsApi = {
     get: () => call(AQUA_SETTINGS_API_PREFIX, 'get'),
-    save: (input) => call(AQUA_SETTINGS_API_PREFIX, 'save', { settings: input })
+    save: (input) => call(AQUA_SETTINGS_API_PREFIX, 'save', { settings: input }),
+    listChatMembers: (chatId) => call(AQUA_SETTINGS_API_PREFIX, 'list-members', { chat_id: chatId })
 };

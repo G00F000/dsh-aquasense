@@ -13,6 +13,7 @@
 import z from '@deepseek-ai/schemastery';
 import { HttpError } from './remind-gateway.js';
 import { DEFAULT_POOLS, getAquaSettings, saveAquaSettings } from '../config/aqua-settings.js';
+import { getFeishuChatMembers } from '../feishu/token.js';
 // ========== 常量 ==========
 /** 设置页 API 路由前缀(同源 fetch;方法追加在其后,如 /get) */
 export const AQUA_SETTINGS_API_PREFIX = '/aquasense-settings/api';
@@ -49,7 +50,7 @@ export function registerAquaSettingsNamespace(ctx) {
 // ========== 请求校验 ==========
 /**
  * 校验并归一化「保存设置」请求体(导出供测试)。
- * body 形如 { settings: { pools: [...] } }。
+ * body 形如 { settings: { pools: [...], userMap: { ... } } }。
  */
 export function parseAquaSettingsInput(body) {
     const raw = body?.settings;
@@ -60,7 +61,15 @@ export function parseAquaSettingsInput(body) {
     if (!Array.isArray(input.pools)) {
         throw new HttpError(400, 'invalid-config', 'pools 必须为数组');
     }
-    return { pools: input.pools };
+    return { pools: input.pools, userMap: input.userMap };
+}
+/** 获取群成员请求体校验 */
+export function parseChatId(body) {
+    const raw = body?.chat_id;
+    if (!raw || typeof raw !== 'string' || !raw.trim()) {
+        throw new HttpError(400, 'invalid-chat-id', '请求体缺少 chat_id 字符串');
+    }
+    return raw.trim();
 }
 // ========== API 分发 ==========
 /**
@@ -76,6 +85,11 @@ export function createAquaSettingsApi(deps) {
                 case 'save': {
                     const settings = deps.saveSettings(parseAquaSettingsInput(body));
                     return ok({ settings });
+                }
+                case 'list-members': {
+                    const chatId = parseChatId(body);
+                    const members = await deps.listChatMembers(chatId);
+                    return ok({ members });
                 }
                 default:
                     return fail(404, 'unknown-method', `未知方法: ${method}`);
@@ -196,7 +210,8 @@ export function installAquaSettingsWeb(ctx) {
     registerAquaSettingsNamespace(ctx);
     const dispatch = createAquaSettingsApi({
         getSettings: getAquaSettings,
-        saveSettings: saveAquaSettings
+        saveSettings: saveAquaSettings,
+        listChatMembers: getFeishuChatMembers
     });
     ctx.inject(['webServer'], (sctx) => {
         sctx.effect(() => {

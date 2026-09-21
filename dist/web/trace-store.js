@@ -239,6 +239,21 @@ export async function patchReportAgent(id, agent) {
     if (record.agent && record.agent.turn !== agent.turn)
         return false;
     record.agent = agent;
+    // 补齐 span_* 的 duration_ms(群聊简化模式下 analyze/advice 原本无耗时)
+    const toolSpanMap = {
+        aquasense_analyze: 'span_analyze',
+        aquasense_advice: 'span_advice',
+        aquasense_ledger: 'span_ledger'
+    };
+    for (const call of agent.calls) {
+        const spanKey = toolSpanMap[call.tool];
+        if (!spanKey || call.status !== 'ok' || call.duration_ms <= 0)
+            continue;
+        const span = record[spanKey];
+        if (span && (span.duration_ms === undefined || span.duration_ms === 0)) {
+            span.duration_ms = call.duration_ms;
+        }
+    }
     await writeReport(record);
     await refreshIndexSummary(record);
     const retries = agent.calls.reduce((n, c) => n + Math.max(0, c.attempt - 1), 0);

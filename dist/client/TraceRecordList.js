@@ -232,9 +232,33 @@ function AgentChain({ agent }) {
         return null;
     const total = Math.max(agent.think_ms, ...agent.calls.map((c) => c.duration_ms), 1);
     return (_jsxs("div", { style: { marginBottom: 20 }, children: [_jsxs("div", { className: "trc-section-title", children: ["Agent \u51B3\u7B56\u94FE", _jsxs("span", { style: { fontWeight: 400, fontSize: 12, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: ["\uFF08turn ", agent.turn, " \u00B7 step ", agent.step, " \u00B7 \u4F1A\u8BDD\u4E8B\u4EF6\u81EA\u52A8\u8BB0\u5F55\uFF09"] })] }), _jsxs("div", { className: "trc-wf", children: [_jsxs("div", { className: "trc-wf-row", children: [_jsx("span", { className: "trc-wf-icon", style: S.iconBg('#8c8c8c'), children: "\uD83D\uDD04" }), _jsx("span", { className: "trc-wf-label", children: "Agent \u601D\u8003" }), _jsx("div", { className: "trc-wf-track", children: _jsx("div", { className: "trc-wf-bar", style: S.wfBar('#8c8c8c', (agent.think_ms / total) * 100) }) }), _jsx("span", { className: "trc-wf-dur", children: durationText(agent.think_ms) }), _jsx("span", { className: "trc-wf-status", children: "\u2014" })] }), agent.calls.map((call) => {
-                        const meta = AGENT_TOOL_META[call.tool] ?? { icon: '🔧', label: call.tool, color: '#9ca3af' };
-                        return (_jsxs("div", { children: [_jsxs("div", { className: "trc-wf-row", children: [_jsx("span", { className: "trc-wf-icon", style: S.iconBg(meta.color), children: meta.icon }), _jsx("span", { className: "trc-wf-label", children: meta.label }), _jsx("div", { className: "trc-wf-track", children: _jsx("div", { className: "trc-wf-bar", style: S.wfBar(call.status === 'error' ? '#ff4d4f' : meta.color, (call.duration_ms / total) * 100) }) }), _jsx("span", { className: "trc-wf-dur", children: durationText(call.duration_ms) }), _jsx("span", { className: "trc-wf-status", children: call.status === 'ok' ? '✅' : '❌' })] }), call.attempt > 1 && (_jsxs("div", { style: { margin: '-2px 0 6px 128px', fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: ["\uD83D\uDD01 \u7B2C ", call.attempt, " \u6B21\u5C1D\u8BD5", call.error_code ? `（前次失败: ${call.error_code}）` : '', " \u00B7 call ", call.call_id] }))] }, `${call.call_id}-${call.attempt}`));
+                        const toolMeta = AGENT_TOOL_META[call.tool] ?? { icon: '🔧', label: call.tool, color: '#9ca3af' };
+                        const summary = formatCallMeta(call);
+                        return (_jsxs("div", { children: [_jsxs("div", { className: "trc-wf-row", children: [_jsx("span", { className: "trc-wf-icon", style: S.iconBg(toolMeta.color), children: toolMeta.icon }), _jsxs("span", { className: "trc-wf-label", children: [toolMeta.label, summary && _jsx("span", { style: { marginLeft: 6, fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: summary })] }), _jsx("div", { className: "trc-wf-track", children: _jsx("div", { className: "trc-wf-bar", style: S.wfBar(call.status === 'error' ? '#ff4d4f' : toolMeta.color, (call.duration_ms / total) * 100) }) }), _jsx("span", { className: "trc-wf-dur", children: durationText(call.duration_ms) }), _jsx("span", { className: "trc-wf-status", children: call.status === 'ok' ? '✅' : '❌' })] }), call.attempt > 1 && (_jsxs("div", { style: { margin: '-2px 0 6px 128px', fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: ["\uD83D\uDD01 \u7B2C ", call.attempt, " \u6B21\u5C1D\u8BD5", call.error_code ? `（前次失败: ${call.error_code}）` : '', " \u00B7 call ", call.call_id] }))] }, `${call.call_id}-${call.attempt}`));
                     })] }), _jsx("div", { style: { marginTop: 6, fontSize: 11, color: 'var(--dsw-alias-label-secondary,#7b8088)' }, children: "\u6570\u636E\u6765\u6E90: DSH \u4F1A\u8BDD\u4E8B\u4EF6\u8FB9\u754C\uFF08\u5DE5\u5177\u5185\u90E8 Token/\u77E5\u8BC6\u5E93\u547D\u4E2D\u660E\u7EC6\u89C1\u4E0B\u65B9\u6B65\u9AA4\u8BE6\u60C5\uFF09" })] }));
+}
+/** 格式化单次工具调用的 meta 摘要(显示关键业务字段) */
+function formatCallMeta(call) {
+    const m = call.meta;
+    if (!m)
+        return '';
+    if (call.tool === 'aquasense_analyze') {
+        const cls = m.cls ? String(m.cls) : '';
+        const conf = typeof m.confidence === 'number' ? m.confidence.toFixed(2) : '';
+        const imgs = typeof m.image_count === 'number' && m.image_count > 0 ? `${m.image_count}张` : '';
+        return [cls, conf, imgs].filter(Boolean).join(' · ');
+    }
+    if (call.tool === 'aquasense_advice') {
+        const level = m.alert_level ? String(m.alert_level) : '';
+        const refs = typeof m.knowledge_refs_count === 'number' ? `${m.knowledge_refs_count}条知识` : '';
+        return [level, refs].filter(Boolean).join(' · ');
+    }
+    if (call.tool === 'aquasense_ledger') {
+        const ok = m.success === true ? '✅' : m.success === false ? '❌' : '';
+        const rid = m.record_id ? String(m.record_id).slice(-8) : '';
+        return [ok, rid].filter(Boolean).join(' · ');
+    }
+    return '';
 }
 /** 瀑布图：5 个 span 的时间轴可视化 */
 function WaterfallChart({ record }) {

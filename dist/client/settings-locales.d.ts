@@ -29,6 +29,16 @@ export declare const zh: {
     readonly 'field.pools.empty': "至少需要 1 个池号";
     readonly 'field.pools.invalid': "第 {index} 项池号非法:不能为空、不能超过 {len} 字";
     readonly 'field.pools.duplicate': "池号「{name}」重复,已自动去重";
+    readonly 'field.userMap.label': "人员映射表";
+    readonly 'field.userMap.hint': "配置飞书 open_id 与姓名的映射关系,用于台账自动填充上报人";
+    readonly 'field.userMap.chatIdPlaceholder': "输入飞书群 ID";
+    readonly 'field.userMap.loadMembers': "加载群成员";
+    readonly 'field.userMap.loading': "加载中…";
+    readonly 'field.userMap.namePlaceholder': "输入姓名";
+    readonly 'field.userMap.nameLabel': "姓名";
+    readonly 'field.userMap.remove': "删除";
+    readonly 'field.userMap.empty': "暂无映射记录,请通过上方加载群成员或手动添加";
+    readonly 'field.userMap.chatMembersHint': "群内共 {count} 人,以下为未添加的成员:";
 };
 /** 英文字典(与中文 key 一一对应) */
 export declare const en: Record<keyof typeof zh, string>;

@@ -59,46 +59,46 @@ describe('sanitizePools', () => {
 
 describe('getAquaSettings / saveAquaSettings', () => {
   it('无文件无环境变量 → 默认 4 池', () => {
-    expect(getAquaSettings()).toEqual({ pools: DEFAULT_POOLS })
+    expect(getAquaSettings()).toEqual({ pools: DEFAULT_POOLS, userMap: {} })
   })
 
   it('环境变量 AQUA_POOLS 回退(合法 JSON)', () => {
     process.env.AQUA_POOLS = JSON.stringify(['池1', '池5', '池9'])
-    expect(getAquaSettings()).toEqual({ pools: ['池1', '池5', '池9'] })
+    expect(getAquaSettings()).toEqual({ pools: ['池1', '池5', '池9'], userMap: {} })
   })
 
   it('环境变量非法 JSON → 静默回退默认', () => {
     process.env.AQUA_POOLS = '池1,池2'
-    expect(getAquaSettings()).toEqual({ pools: DEFAULT_POOLS })
+    expect(getAquaSettings()).toEqual({ pools: DEFAULT_POOLS, userMap: {} })
   })
 
   it('保存 → 文件落盘且读回一致(sanitize 后)', () => {
     saveAquaSettings({ pools: [' 池3 ', '池1', '池3', '池2'] })
     const file = JSON.parse(readFileSync(join(dir, 'aqua', 'settings.json'), 'utf8'))
-    expect(file).toEqual({ pools: ['池3', '池1', '池2'] })
-    expect(getAquaSettings()).toEqual({ pools: ['池3', '池1', '池2'] })
+    expect(file).toEqual({ pools: ['池3', '池1', '池2'], userMap: {} })
+    expect(getAquaSettings()).toEqual({ pools: ['池3', '池1', '池2'], userMap: {} })
   })
 
   it('配置文件优先级高于环境变量', () => {
     process.env.AQUA_POOLS = JSON.stringify(['池8'])
     saveAquaSettings({ pools: ['池2', '池4'] })
-    expect(getAquaSettings()).toEqual({ pools: ['池2', '池4'] })
+    expect(getAquaSettings()).toEqual({ pools: ['池2', '池4'], userMap: {} })
   })
 
   it('文件被外部修改后重新读取(每次读盘)', () => {
     saveAquaSettings({ pools: ['池1'] })
-    expect(getAquaSettings()).toEqual({ pools: ['池1'] })
+    expect(getAquaSettings()).toEqual({ pools: ['池1'], userMap: {} })
     // 绕过 saveAquaSettings 直接改文件(模拟外部修改)
     const path = join(dir, 'aqua', 'settings.json')
     writeFileSync(path, JSON.stringify({ pools: ['池6'] }), 'utf8')
-    expect(getAquaSettings()).toEqual({ pools: ['池6'] })
+    expect(getAquaSettings()).toEqual({ pools: ['池6'], userMap: {} })
   })
 
   it('文件解析失败 → 回退环境变量', () => {
     mkdirSync(join(dir, 'aqua'), { recursive: true })
     writeFileSync(join(dir, 'aqua', 'settings.json'), '{broken', 'utf8')
     process.env.AQUA_POOLS = JSON.stringify(['池A'])
-    expect(getAquaSettings()).toEqual({ pools: ['池A'] })
+    expect(getAquaSettings()).toEqual({ pools: ['池A'], userMap: {} })
   })
 })
 

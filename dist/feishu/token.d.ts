@@ -11,6 +11,21 @@ export declare function getFeishuToken(): Promise<string>;
  * 优先命中进程内缓存,未命中时调用飞书通讯录 API
  */
 export declare function getFeishuUserName(openId: string): Promise<string>;
+/** 飞书群成员信息 */
+export interface FeishuChatMember {
+    /** 用户 open_id */
+    open_id: string;
+    /** 用户名称 */
+    name: string;
+    /** 成员在群中的类型 */
+    member_id_type?: string;
+}
+/**
+ * 获取飞书群成员列表
+ * @param chatId 群 ID
+ * @returns 群成员列表(包含 open_id 和 name)
+ */
+export declare function getFeishuChatMembers(chatId: string): Promise<FeishuChatMember[]>;
 /**
  * 上传图片 URL 到飞书云文档,返回 Bitable 附件格式
  * 支持两种输入:

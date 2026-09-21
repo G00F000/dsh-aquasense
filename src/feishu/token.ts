@@ -72,6 +72,72 @@ export async function getFeishuUserName(openId: string): Promise<string> {
   return name
 }
 
+/** 飞书群成员信息 */
+export interface FeishuChatMember {
+  /** 用户 open_id */
+  open_id: string
+  /** 用户名称 */
+  name: string
+  /** 成员在群中的类型 */
+  member_id_type?: string
+}
+
+/**
+ * 获取飞书群成员列表
+ * @param chatId 群 ID
+ * @returns 群成员列表(包含 open_id 和 name)
+ */
+export async function getFeishuChatMembers(chatId: string): Promise<FeishuChatMember[]> {
+  if (!chatId) return []
+
+  const token = await getFeishuToken()
+  const members: FeishuChatMember[] = []
+  let pageToken = ''
+  let hasMore = true
+
+  while (hasMore) {
+    const url = new URL(`https://open.feishu.cn/open-apis/im/v1/chats/${chatId}/members`)
+    url.searchParams.set('member_id_type', 'open_id')
+    url.searchParams.set('page_size', '100')
+    if (pageToken) {
+      url.searchParams.set('page_token', pageToken)
+    }
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    const result = (await response.json()) as {
+      code: number; msg?: string;
+      data?: {
+        items?: Array<{ member_id?: string; name?: string; member_id_type?: string }>
+        page_token?: string
+        has_more?: boolean
+      }
+    }
+
+    if (result.code !== 0) {
+      console.error(`[aquasense] 获取飞书群成员失败: chatId=${chatId}, ${result.msg || result.code}`)
+      break
+    }
+
+    const items = result.data?.items || []
+    for (const item of items) {
+      if (item.member_id && item.name) {
+        members.push({
+          open_id: item.member_id,
+          name: item.name,
+          member_id_type: item.member_id_type
+        })
+      }
+    }
+
+    hasMore = result.data?.has_more || false
+    pageToken = result.data?.page_token || ''
+  }
+
+  return members
+}
+
 /**
  * 上传图片 URL 到飞书云文档,返回 Bitable 附件格式
  * 支持两种输入:

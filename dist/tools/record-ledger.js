@@ -11,7 +11,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { getFeishuToken, getFeishuUserName, uploadImageToFeishu } from '../feishu/token.js';
-import { formatPoolIds, getValidPoolIds } from '../config/aqua-settings.js';
+import { formatPoolIds, getValidPoolIds, getUserNameByOpenId } from '../config/aqua-settings.js';
 /** 场景 → 表格 id 环境变量(未配置 env 的场景不可写,返回明确错误) */
 const SCENE_TABLE_ENV = {
     inspection: 'FEISHU_BITABLE_TABLE_ID_INSPECTION',
@@ -90,7 +90,11 @@ export const recordLedger = defineTool({
                 questions: { type: 'array', items: { type: 'string' } }
             }
         },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+        presentationMeta: (_args, value) => {
+            const v = value;
+            return { success: !!v.success, record_id: String(v.record_id ?? ''), table: String(_args.scene ?? 'inspection') };
+        }
     },
     async execute(args) {
         const scene = (args.scene || 'inspection');
@@ -145,17 +149,22 @@ export const recordLedger = defineTool({
             };
         }
         // 自动解析汇报人:必须以发消息用户的 open_id 为准,防止记忆/猜测中的姓名顶替真实上报人
-        // reporter 仅作兜底:拿不到 open_id 或解析失败时才使用
+        // 优先使用映射表(管理员在 AquaSense 设置中配置),未命中时调用飞书通讯录 API
         let reporterName = '';
         if (args.open_id) {
-            reporterName = await getFeishuUserName(args.open_id);
+            // 优先从映射表获取(管理员配置的 open_id → 姓名映射)
+            reporterName = getUserNameByOpenId(args.open_id);
+            // 映射表未命中,尝试飞书通讯录 API
+            if (!reporterName) {
+                reporterName = await getFeishuUserName(args.open_id);
+            }
         }
         if (!reporterName) {
             const fallback = (args.reporter || '').trim();
             if (!fallback || REPORTER_BLOCKLIST.has(fallback)) {
                 return {
                     success: false,
-                    message: `无法识别上报人:open_id 解析失败,且提供的 reporter 值「${fallback || '(空)'}」不可用。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
+                    message: `无法识别上报人:open_id 解析失败,且提供的 reporter 值「${fallback || '(空)'}」不可用。请在 AquaSense 设置中配置人员映射表,或从消息上下文获取发送者 open_id 后重试。`,
                     missing: ['open_id'],
                     questions: ['请问上报人是谁?(将记入台账)']
                 };

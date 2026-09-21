@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { AquaSettings, AquaSettingsApi } from './api.js'
+import type { AquaSettings, AquaSettingsApi, FeishuChatMember } from './api.js'
 
 /** 词典翻译函数(命名空间 aquasense-settings) */
 export type AquaSettingsTranslate = PropsLocale<'aquasense-settings'>['t']
@@ -30,6 +30,8 @@ export type AquaSettingsCardProps = PropsLocale<'aquasense-settings'> & AquaSett
 /** 池号数量/长度上限(与 Host 侧 aqua-settings.ts 保持一致) */
 export const MAX_POOLS = 20
 export const MAX_POOL_LENGTH = 16
+/** 用户映射表单个姓名最大长度 */
+export const MAX_USER_NAME_LENGTH = 32
 
 /** 操作/提交状态 */
 type ApplyState =
@@ -240,6 +242,56 @@ const hintStyle: CSSProperties = {
   lineHeight: 1.5
 }
 
+/** 分隔线样式 */
+const dividerStyle: CSSProperties = {
+  borderTop: '1px solid var(--dsw-alias-border-l2, #e5e7eb)',
+  margin: '16px 0'
+}
+
+/** 用户映射表头样式 */
+const userMapHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  marginBottom: 8
+}
+
+/** 用户映射行样式 */
+const userMapRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  marginTop: 8
+}
+
+/** open_id 输入框样式(只读) */
+const openIdInputStyle: CSSProperties = {
+  ...inputStyle,
+  width: 200,
+  flex: 'none',
+  background: 'var(--dsw-alias-bg-layer-2, #f3f4f6)',
+  color: 'var(--dsw-alias-label-secondary, #6b7280)'
+}
+
+/** 姓名输入框样式 */
+const nameInputStyle: CSSProperties = {
+  ...inputStyle,
+  flex: 1
+}
+
+/** 加载按钮样式 */
+const loadBtnStyle: CSSProperties = {
+  ...addBtnStyle,
+  marginLeft: 'auto'
+}
+
+/** 群ID输入框样式 */
+const chatIdInputStyle: CSSProperties = {
+  ...inputStyle,
+  width: 280,
+  flex: 'none'
+}
+
 const errorStyle: CSSProperties = {
   ...hintStyle,
   color: 'var(--dsw-alias-state-danger-label, #dc2626)',
@@ -302,12 +354,26 @@ interface AquaSettingsModel {
   saved: string[] | null
   /** 草稿(编辑中) */
   draft: string[] | null
+  /** 已保存用户映射快照 */
+  savedUserMap: Record<string, string> | null
+  /** 用户映射草稿(编辑中) */
+  draftUserMap: Record<string, string> | null
   dirty: boolean
   applyState: ApplyState
+  /** 飞书群成员列表(用于自动填充 open_id) */
+  chatMembers: FeishuChatMember[]
+  /** 加载群成员中 */
+  loadingMembers: boolean
   load(): Promise<void>
   editPool(index: number, value: string): void
   addPool(): void
   removePool(index: number): void
+  /** 编辑用户映射(设置 open_id → 姓名) */
+  editUserMap(openId: string, name: string): void
+  /** 删除用户映射 */
+  removeUserMap(openId: string): void
+  /** 加载飞书群成员 */
+  loadChatMembers(chatId: string): Promise<void>
   save(): Promise<void>
   discard(): void
 }
@@ -322,15 +388,22 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
   const [phase, setPhase] = useState<'loading' | 'ready' | 'unavailable'>('loading')
   const [saved, setSaved] = useState<string[] | null>(null)
   const [draft, setDraft] = useState<string[] | null>(null)
+  const [savedUserMap, setSavedUserMap] = useState<Record<string, string> | null>(null)
+  const [draftUserMap, setDraftUserMap] = useState<Record<string, string> | null>(null)
   const [applyState, setApplyState] = useState<ApplyState>({ kind: 'idle' })
+  const [chatMembers, setChatMembers] = useState<FeishuChatMember[]>([])
+  const [loadingMembers, setLoadingMembers] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     setPhase('loading')
     try {
       const result = await api.get()
       const pools = [...result.settings.pools]
+      const userMap = { ...result.settings.userMap }
       setSaved(pools)
       setDraft(pools)
+      setSavedUserMap(userMap)
+      setDraftUserMap(userMap)
       setApplyState({ kind: 'idle' })
       setPhase('ready')
     } catch {
@@ -342,7 +415,7 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
     void load()
   }, [load])
 
-  const dirty = draft !== null && saved !== null && JSON.stringify(draft) !== JSON.stringify(saved)
+  const dirty = draft !== null && saved !== null && (JSON.stringify(draft) !== JSON.stringify(saved) || JSON.stringify(draftUserMap) !== JSON.stringify(savedUserMap))
   const saving = applyState.kind === 'saving'
 
   /** 编辑后回到 idle(清除「已保存」提示,由 dirty 徽标接管) */
@@ -365,6 +438,42 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
     markEdited()
   }
 
+  const editUserMap = (openId: string, name: string): void => {
+    setDraftUserMap((current) => {
+      const next = { ...(current || {}) }
+      if (name.trim()) {
+        next[openId] = name.trim()
+      } else {
+        delete next[openId]
+      }
+      return next
+    })
+    markEdited()
+  }
+
+  const removeUserMap = (openId: string): void => {
+    setDraftUserMap((current) => {
+      if (!current) return current
+      const next = { ...current }
+      delete next[openId]
+      return next
+    })
+    markEdited()
+  }
+
+  const loadChatMembers = useCallback(async (chatId: string): Promise<void> => {
+    if (!chatId.trim()) return
+    setLoadingMembers(true)
+    try {
+      const result = await api.listChatMembers(chatId)
+      setChatMembers(result.members)
+    } catch {
+      setChatMembers([])
+    } finally {
+      setLoadingMembers(false)
+    }
+  }, [api])
+
   const save = async (): Promise<void> => {
     if (!draft || saving) return
 
@@ -382,10 +491,13 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
 
     setApplyState({ kind: 'saving' })
     try {
-      const result = await api.save({ pools: trimmed })
+      const result = await api.save({ pools: trimmed, userMap: draftUserMap || {} })
       const pools = [...result.settings.pools]
+      const userMap = { ...result.settings.userMap }
       setSaved(pools)
       setDraft(pools)
+      setSavedUserMap(userMap)
+      setDraftUserMap(userMap)
       setApplyState({ kind: 'saved' })
     } catch (error) {
       setApplyState({ kind: 'error', message: messageOf(error) })
@@ -394,18 +506,21 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
 
   const discard = (): void => {
     setDraft(saved ? [...saved] : null)
+    setDraftUserMap(savedUserMap ? { ...savedUserMap } : null)
     setApplyState({ kind: 'idle' })
   }
 
-  return { phase, saved, draft, dirty, applyState, load, editPool, addPool, removePool, save, discard }
+  return { phase, saved, draft, savedUserMap, draftUserMap, dirty, applyState, chatMembers, loadingMembers, load, editPool, addPool, removePool, editUserMap, removeUserMap, loadChatMembers, save, discard }
 }
 
 // ========== 表单组件 ==========
 
-/** 展开区表单:池号列表编辑 + 底部操作区 */
+/** 展开区表单:池号列表编辑 + 用户映射配置 + 底部操作区 */
 function PoolsForm({ model, t }: { model: AquaSettingsModel; t: AquaSettingsTranslate }): ReactNode {
   const draft = model.draft ?? []
+  const draftUserMap = model.draftUserMap ?? {}
   const busy = model.applyState.kind === 'saving'
+  const [chatId, setChatId] = useState('')
 
   if (model.phase === 'unavailable') {
     return (
@@ -422,6 +537,7 @@ function PoolsForm({ model, t }: { model: AquaSettingsModel; t: AquaSettingsTran
 
   return (
     <div style={formStyle}>
+      {/* 池号配置 */}
       <div>
         <p style={labelStyle}>{t('field.pools.label')}</p>
         <p style={hintStyle}>{t('field.pools.hint', { max: MAX_POOLS, len: MAX_POOL_LENGTH })}</p>
@@ -456,6 +572,93 @@ function PoolsForm({ model, t }: { model: AquaSettingsModel; t: AquaSettingsTran
         </button>
       </div>
 
+      {/* 分隔线 */}
+      <div style={dividerStyle} />
+
+      {/* 用户映射配置 */}
+      <div>
+        <p style={labelStyle}>{t('field.userMap.label')}</p>
+        <p style={hintStyle}>{t('field.userMap.hint')}</p>
+      </div>
+
+      {/* 加载群成员 */}
+      <div style={{ ...userMapHeaderStyle, marginTop: 8 }}>
+        <input
+          style={chatIdInputStyle}
+          value={chatId}
+          placeholder={t('field.userMap.chatIdPlaceholder')}
+          onChange={(e) => setChatId(e.target.value)}
+        />
+        <button
+          type="button"
+          style={loadBtnStyle}
+          disabled={model.loadingMembers || !chatId.trim()}
+          onClick={() => void model.loadChatMembers(chatId)}
+        >
+          {model.loadingMembers ? t('field.userMap.loading') : t('field.userMap.loadMembers')}
+        </button>
+      </div>
+
+      {/* 用户映射列表 */}
+      {Object.keys(draftUserMap).length > 0 ? (
+        <div style={{ marginTop: 12 }}>
+          {Object.entries(draftUserMap).map(([openId, name]) => (
+            <div key={openId} style={userMapRowStyle}>
+              <input style={openIdInputStyle} value={openId} readOnly aria-label="open_id" />
+              <input
+                style={nameInputStyle}
+                value={name}
+                maxLength={MAX_USER_NAME_LENGTH}
+                placeholder={t('field.userMap.namePlaceholder')}
+                aria-label={t('field.userMap.nameLabel')}
+                onChange={(e) => model.editUserMap(openId, e.target.value)}
+              />
+              <button
+                type="button"
+                style={removeBtnStyle}
+                aria-label={t('field.userMap.remove')}
+                title={t('field.userMap.remove')}
+                onClick={() => model.removeUserMap(openId)}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p style={{ ...hintStyle, marginTop: 8 }}>{t('field.userMap.empty')}</p>
+      )}
+
+      {/* 从群成员添加 */}
+      {model.chatMembers.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <p style={hintStyle}>{t('field.userMap.chatMembersHint', { count: model.chatMembers.length })}</p>
+          <div style={{ maxHeight: 150, overflowY: 'auto', marginTop: 4 }}>
+            {model.chatMembers
+              .filter((m) => !draftUserMap[m.open_id])
+              .map((member) => (
+                <div key={member.open_id} style={{ ...userMapRowStyle, marginTop: 4 }}>
+                  <input style={openIdInputStyle} value={member.open_id} readOnly aria-label="open_id" />
+                  <input
+                    style={nameInputStyle}
+                    value={member.name}
+                    readOnly
+                    aria-label={t('field.userMap.nameLabel')}
+                  />
+                  <button
+                    type="button"
+                    style={addBtnStyle}
+                    onClick={() => model.editUserMap(member.open_id, member.name)}
+                  >
+                    ＋
+                  </button>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* 底部操作区 */}
       <div style={footerStyle}>
         {model.applyState.kind === 'error' ? (
           <p style={errorStyle} role="status">

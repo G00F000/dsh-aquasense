@@ -90,6 +90,8 @@ export interface AgentToolCall {
     status: 'ok' | 'error';
     /** 失败原因码(如 ABORTED/超时) */
     error_code?: string;
+    /** 工具 presentationMeta 透传的结构化摘要(供 UI 展示关键业务字段) */
+    meta?: Record<string, unknown>;
 }
 /**
  * Agent 决策链(v1.8,仅群聊场景;由 session-trace-bridge 会话事件桥接采集)。

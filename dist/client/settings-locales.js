@@ -28,7 +28,17 @@ export const zh = {
     'field.pools.placeholder': '如:池1',
     'field.pools.empty': '至少需要 1 个池号',
     'field.pools.invalid': '第 {index} 项池号非法:不能为空、不能超过 {len} 字',
-    'field.pools.duplicate': '池号「{name}」重复,已自动去重'
+    'field.pools.duplicate': '池号「{name}」重复,已自动去重',
+    'field.userMap.label': '人员映射表',
+    'field.userMap.hint': '配置飞书 open_id 与姓名的映射关系,用于台账自动填充上报人',
+    'field.userMap.chatIdPlaceholder': '输入飞书群 ID',
+    'field.userMap.loadMembers': '加载群成员',
+    'field.userMap.loading': '加载中…',
+    'field.userMap.namePlaceholder': '输入姓名',
+    'field.userMap.nameLabel': '姓名',
+    'field.userMap.remove': '删除',
+    'field.userMap.empty': '暂无映射记录,请通过上方加载群成员或手动添加',
+    'field.userMap.chatMembersHint': '群内共 {count} 人,以下为未添加的成员:'
 };
 /** 英文字典(与中文 key 一一对应) */
 export const en = {
@@ -52,5 +62,15 @@ export const en = {
     'field.pools.placeholder': 'e.g. Pond 1',
     'field.pools.empty': 'At least 1 pool ID is required',
     'field.pools.invalid': 'Pool {index} is invalid — must be non-empty and at most {len} characters',
-    'field.pools.duplicate': 'Pool "{name}" is duplicated and was deduplicated'
+    'field.pools.duplicate': 'Pool "{name}" is duplicated and was deduplicated',
+    'field.userMap.label': 'User Mapping',
+    'field.userMap.hint': 'Configure Feishu open_id to name mappings for automatic ledger reporter filling',
+    'field.userMap.chatIdPlaceholder': 'Enter Feishu chat ID',
+    'field.userMap.loadMembers': 'Load Members',
+    'field.userMap.loading': 'Loading…',
+    'field.userMap.namePlaceholder': 'Enter name',
+    'field.userMap.nameLabel': 'Name',
+    'field.userMap.remove': 'Remove',
+    'field.userMap.empty': 'No mappings yet. Load members from chat or add manually above',
+    'field.userMap.chatMembersHint': '{count} members in chat. Unadded members shown below:'
 };

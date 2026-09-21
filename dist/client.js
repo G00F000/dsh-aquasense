@@ -81,7 +81,8 @@ const remindApi = {
 /** 设置页 API 客户端 */
 const aquaSettingsApi = {
 	get: () => call(AQUA_SETTINGS_API_PREFIX, "get"),
-	save: (input) => call(AQUA_SETTINGS_API_PREFIX, "save", { settings: input })
+	save: (input) => call(AQUA_SETTINGS_API_PREFIX, "save", { settings: input }),
+	listChatMembers: (chatId) => call(AQUA_SETTINGS_API_PREFIX, "list-members", { chat_id: chatId })
 };
 
 //#endregion
@@ -939,28 +940,36 @@ function AgentChain({ agent }) {
 						})
 					]
 				}), agent.calls.map((call$1) => {
-					const meta = AGENT_TOOL_META[call$1.tool] ?? {
+					const toolMeta = AGENT_TOOL_META[call$1.tool] ?? {
 						icon: "🔧",
 						label: call$1.tool,
 						color: "#9ca3af"
 					};
+					const summary = formatCallMeta(call$1);
 					return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						className: "trc-wf-row",
 						children: [
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 								className: "trc-wf-icon",
-								style: S.iconBg(meta.color),
-								children: meta.icon
+								style: S.iconBg(toolMeta.color),
+								children: toolMeta.icon
 							}),
-							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 								className: "trc-wf-label",
-								children: meta.label
+								children: [toolMeta.label, summary && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+									style: {
+										marginLeft: 6,
+										fontSize: 11,
+										color: "var(--dsw-alias-label-secondary,#7b8088)"
+									},
+									children: summary
+								})]
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 								className: "trc-wf-track",
 								children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 									className: "trc-wf-bar",
-									style: S.wfBar(call$1.status === "error" ? "#ff4d4f" : meta.color, call$1.duration_ms / total * 100)
+									style: S.wfBar(call$1.status === "error" ? "#ff4d4f" : toolMeta.color, call$1.duration_ms / total * 100)
 								})
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
@@ -999,6 +1008,19 @@ function AgentChain({ agent }) {
 			})
 		]
 	});
+}
+/** 格式化单次工具调用的 meta 摘要(显示关键业务字段) */
+function formatCallMeta(call$1) {
+	const m = call$1.meta;
+	if (!m) return "";
+	if (call$1.tool === "aquasense_analyze") return [
+		m.cls ? String(m.cls) : "",
+		typeof m.confidence === "number" ? m.confidence.toFixed(2) : "",
+		typeof m.image_count === "number" && m.image_count > 0 ? `${m.image_count}张` : ""
+	].filter(Boolean).join(" · ");
+	if (call$1.tool === "aquasense_advice") return [m.alert_level ? String(m.alert_level) : "", typeof m.knowledge_refs_count === "number" ? `${m.knowledge_refs_count}条知识` : ""].filter(Boolean).join(" · ");
+	if (call$1.tool === "aquasense_ledger") return [m.success === true ? "✅" : m.success === false ? "❌" : "", m.record_id ? String(m.record_id).slice(-8) : ""].filter(Boolean).join(" · ");
+	return "";
 }
 /** 瀑布图：5 个 span 的时间轴可视化 */
 function WaterfallChart({ record }) {
@@ -2805,6 +2827,8 @@ const en = {
 /** 池号数量/长度上限(与 Host 侧 aqua-settings.ts 保持一致) */
 const MAX_POOLS = 20;
 const MAX_POOL_LENGTH = 16;
+/** 用户映射表单个姓名最大长度 */
+const MAX_USER_NAME_LENGTH = 32;
 const cardStyle = {
 	border: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
 	background: "var(--dsw-alias-bg-layer-3, #fff)",
@@ -2976,6 +3000,49 @@ const hintStyle = {
 	margin: 0,
 	lineHeight: 1.5
 };
+/** 分隔线样式 */
+const dividerStyle = {
+	borderTop: "1px solid var(--dsw-alias-border-l2, #e5e7eb)",
+	margin: "16px 0"
+};
+/** 用户映射表头样式 */
+const userMapHeaderStyle = {
+	display: "flex",
+	alignItems: "center",
+	gap: 8,
+	marginBottom: 8
+};
+/** 用户映射行样式 */
+const userMapRowStyle = {
+	display: "flex",
+	alignItems: "center",
+	gap: 8,
+	marginTop: 8
+};
+/** open_id 输入框样式(只读) */
+const openIdInputStyle = {
+	...inputStyle,
+	width: 200,
+	flex: "none",
+	background: "var(--dsw-alias-bg-layer-2, #f3f4f6)",
+	color: "var(--dsw-alias-label-secondary, #6b7280)"
+};
+/** 姓名输入框样式 */
+const nameInputStyle = {
+	...inputStyle,
+	flex: 1
+};
+/** 加载按钮样式 */
+const loadBtnStyle = {
+	...addBtnStyle,
+	marginLeft: "auto"
+};
+/** 群ID输入框样式 */
+const chatIdInputStyle = {
+	...inputStyle,
+	width: 280,
+	flex: "none"
+};
 const errorStyle = {
 	...hintStyle,
 	color: "var(--dsw-alias-state-danger-label, #dc2626)",
@@ -3031,13 +3098,21 @@ function useAquaSettings(api, t) {
 	const [phase, setPhase] = (0, react.useState)("loading");
 	const [saved, setSaved] = (0, react.useState)(null);
 	const [draft, setDraft] = (0, react.useState)(null);
+	const [savedUserMap, setSavedUserMap] = (0, react.useState)(null);
+	const [draftUserMap, setDraftUserMap] = (0, react.useState)(null);
 	const [applyState, setApplyState] = (0, react.useState)({ kind: "idle" });
+	const [chatMembers, setChatMembers] = (0, react.useState)([]);
+	const [loadingMembers, setLoadingMembers] = (0, react.useState)(false);
 	const load = (0, react.useCallback)(async () => {
 		setPhase("loading");
 		try {
-			const pools = [...(await api.get()).settings.pools];
+			const result = await api.get();
+			const pools = [...result.settings.pools];
+			const userMap = { ...result.settings.userMap };
 			setSaved(pools);
 			setDraft(pools);
+			setSavedUserMap(userMap);
+			setDraftUserMap(userMap);
 			setApplyState({ kind: "idle" });
 			setPhase("ready");
 		} catch {
@@ -3047,7 +3122,7 @@ function useAquaSettings(api, t) {
 	(0, react.useEffect)(() => {
 		load();
 	}, [load]);
-	const dirty = draft !== null && saved !== null && JSON.stringify(draft) !== JSON.stringify(saved);
+	const dirty = draft !== null && saved !== null && (JSON.stringify(draft) !== JSON.stringify(saved) || JSON.stringify(draftUserMap) !== JSON.stringify(savedUserMap));
 	const saving = applyState.kind === "saving";
 	/** 编辑后回到 idle(清除「已保存」提示,由 dirty 徽标接管) */
 	const markEdited = () => {
@@ -3065,6 +3140,35 @@ function useAquaSettings(api, t) {
 		setDraft((current) => current ? current.filter((_, i) => i !== index) : current);
 		markEdited();
 	};
+	const editUserMap = (openId, name) => {
+		setDraftUserMap((current) => {
+			const next = { ...current || {} };
+			if (name.trim()) next[openId] = name.trim();
+			else delete next[openId];
+			return next;
+		});
+		markEdited();
+	};
+	const removeUserMap = (openId) => {
+		setDraftUserMap((current) => {
+			if (!current) return current;
+			const next = { ...current };
+			delete next[openId];
+			return next;
+		});
+		markEdited();
+	};
+	const loadChatMembers = (0, react.useCallback)(async (chatId) => {
+		if (!chatId.trim()) return;
+		setLoadingMembers(true);
+		try {
+			setChatMembers((await api.listChatMembers(chatId)).members);
+		} catch {
+			setChatMembers([]);
+		} finally {
+			setLoadingMembers(false);
+		}
+	}, [api]);
 	const save = async () => {
 		if (!draft || saving) return;
 		const trimmed = draft.map((item) => item.trim());
@@ -3088,9 +3192,16 @@ function useAquaSettings(api, t) {
 		}
 		setApplyState({ kind: "saving" });
 		try {
-			const pools = [...(await api.save({ pools: trimmed })).settings.pools];
+			const result = await api.save({
+				pools: trimmed,
+				userMap: draftUserMap || {}
+			});
+			const pools = [...result.settings.pools];
+			const userMap = { ...result.settings.userMap };
 			setSaved(pools);
 			setDraft(pools);
+			setSavedUserMap(userMap);
+			setDraftUserMap(userMap);
 			setApplyState({ kind: "saved" });
 		} catch (error) {
 			setApplyState({
@@ -3101,26 +3212,36 @@ function useAquaSettings(api, t) {
 	};
 	const discard = () => {
 		setDraft(saved ? [...saved] : null);
+		setDraftUserMap(savedUserMap ? { ...savedUserMap } : null);
 		setApplyState({ kind: "idle" });
 	};
 	return {
 		phase,
 		saved,
 		draft,
+		savedUserMap,
+		draftUserMap,
 		dirty,
 		applyState,
+		chatMembers,
+		loadingMembers,
 		load,
 		editPool,
 		addPool,
 		removePool,
+		editUserMap,
+		removeUserMap,
+		loadChatMembers,
 		save,
 		discard
 	};
 }
-/** 展开区表单:池号列表编辑 + 底部操作区 */
+/** 展开区表单:池号列表编辑 + 用户映射配置 + 底部操作区 */
 function PoolsForm({ model, t }) {
 	const draft = model.draft ?? [];
+	const draftUserMap = model.draftUserMap ?? {};
 	const busy = model.applyState.kind === "saving";
+	const [chatId, setChatId] = (0, react.useState)("");
 	if (model.phase === "unavailable") return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		style: formStyle,
 		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
@@ -3180,6 +3301,107 @@ function PoolsForm({ model, t }) {
 					onClick: model.addPool,
 					children: ["＋ ", t("field.pools.add")]
 				})
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: dividerStyle }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: labelStyle,
+				children: t("field.userMap.label")
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: hintStyle,
+				children: t("field.userMap.hint")
+			})] }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: {
+					...userMapHeaderStyle,
+					marginTop: 8
+				},
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+					style: chatIdInputStyle,
+					value: chatId,
+					placeholder: t("field.userMap.chatIdPlaceholder"),
+					onChange: (e) => setChatId(e.target.value)
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+					type: "button",
+					style: loadBtnStyle,
+					disabled: model.loadingMembers || !chatId.trim(),
+					onClick: () => void model.loadChatMembers(chatId),
+					children: model.loadingMembers ? t("field.userMap.loading") : t("field.userMap.loadMembers")
+				})]
+			}),
+			Object.keys(draftUserMap).length > 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+				style: { marginTop: 12 },
+				children: Object.entries(draftUserMap).map(([openId, name]) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+					style: userMapRowStyle,
+					children: [
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							style: openIdInputStyle,
+							value: openId,
+							readOnly: true,
+							"aria-label": "open_id"
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							style: nameInputStyle,
+							value: name,
+							maxLength: MAX_USER_NAME_LENGTH,
+							placeholder: t("field.userMap.namePlaceholder"),
+							"aria-label": t("field.userMap.nameLabel"),
+							onChange: (e) => model.editUserMap(openId, e.target.value)
+						}),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: removeBtnStyle,
+							"aria-label": t("field.userMap.remove"),
+							title: t("field.userMap.remove"),
+							onClick: () => model.removeUserMap(openId),
+							children: "✕"
+						})
+					]
+				}, openId))
+			}) : /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: {
+					...hintStyle,
+					marginTop: 8
+				},
+				children: t("field.userMap.empty")
+			}),
+			model.chatMembers.length > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: { marginTop: 12 },
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+					style: hintStyle,
+					children: t("field.userMap.chatMembersHint", { count: model.chatMembers.length })
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+					style: {
+						maxHeight: 150,
+						overflowY: "auto",
+						marginTop: 4
+					},
+					children: model.chatMembers.filter((m) => !draftUserMap[m.open_id]).map((member) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							...userMapRowStyle,
+							marginTop: 4
+						},
+						children: [
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+								style: openIdInputStyle,
+								value: member.open_id,
+								readOnly: true,
+								"aria-label": "open_id"
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+								style: nameInputStyle,
+								value: member.name,
+								readOnly: true,
+								"aria-label": t("field.userMap.nameLabel")
+							}),
+							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								style: addBtnStyle,
+								onClick: () => model.editUserMap(member.open_id, member.name),
+								children: "＋"
+							})
+						]
+					}, member.open_id))
+				})]
 			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: footerStyle,
@@ -3308,7 +3530,17 @@ const zh$1 = {
 	"field.pools.placeholder": "如:池1",
 	"field.pools.empty": "至少需要 1 个池号",
 	"field.pools.invalid": "第 {index} 项池号非法:不能为空、不能超过 {len} 字",
-	"field.pools.duplicate": "池号「{name}」重复,已自动去重"
+	"field.pools.duplicate": "池号「{name}」重复,已自动去重",
+	"field.userMap.label": "人员映射表",
+	"field.userMap.hint": "配置飞书 open_id 与姓名的映射关系,用于台账自动填充上报人",
+	"field.userMap.chatIdPlaceholder": "输入飞书群 ID",
+	"field.userMap.loadMembers": "加载群成员",
+	"field.userMap.loading": "加载中…",
+	"field.userMap.namePlaceholder": "输入姓名",
+	"field.userMap.nameLabel": "姓名",
+	"field.userMap.remove": "删除",
+	"field.userMap.empty": "暂无映射记录,请通过上方加载群成员或手动添加",
+	"field.userMap.chatMembersHint": "群内共 {count} 人,以下为未添加的成员:"
 };
 /** 英文字典(与中文 key 一一对应) */
 const en$1 = {
@@ -3332,7 +3564,17 @@ const en$1 = {
 	"field.pools.placeholder": "e.g. Pond 1",
 	"field.pools.empty": "At least 1 pool ID is required",
 	"field.pools.invalid": "Pool {index} is invalid — must be non-empty and at most {len} characters",
-	"field.pools.duplicate": "Pool \"{name}\" is duplicated and was deduplicated"
+	"field.pools.duplicate": "Pool \"{name}\" is duplicated and was deduplicated",
+	"field.userMap.label": "User Mapping",
+	"field.userMap.hint": "Configure Feishu open_id to name mappings for automatic ledger reporter filling",
+	"field.userMap.chatIdPlaceholder": "Enter Feishu chat ID",
+	"field.userMap.loadMembers": "Load Members",
+	"field.userMap.loading": "Loading…",
+	"field.userMap.namePlaceholder": "Enter name",
+	"field.userMap.nameLabel": "Name",
+	"field.userMap.remove": "Remove",
+	"field.userMap.empty": "No mappings yet. Load members from chat or add manually above",
+	"field.userMap.chatMembersHint": "{count} members in chat. Unadded members shown below:"
 };
 
 //#endregion

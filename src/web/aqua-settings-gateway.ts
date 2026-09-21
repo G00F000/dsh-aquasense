@@ -21,6 +21,7 @@ import {
   saveAquaSettings,
   type AquaSettings
 } from '../config/aqua-settings.js'
+import { getFeishuChatMembers, type FeishuChatMember } from '../feishu/token.js'
 
 // ========== 常量 ==========
 
@@ -37,7 +38,8 @@ const MAX_BODY_BYTES = 16 * 1024
 /** 设置页 API 数据依赖(注入以便独立测试) */
 export interface AquaSettingsApiDeps {
   getSettings(): AquaSettings
-  saveSettings(input: { pools: unknown }): AquaSettings
+  saveSettings(input: { pools: unknown; userMap?: Record<string, unknown> }): AquaSettings
+  listChatMembers(chatId: string): Promise<FeishuChatMember[]>
 }
 
 /** webServer 服务最小鸭子类型(仅用到 register) */
@@ -90,9 +92,9 @@ export function registerAquaSettingsNamespace(ctx: Context): void {
 
 /**
  * 校验并归一化「保存设置」请求体(导出供测试)。
- * body 形如 { settings: { pools: [...] } }。
+ * body 形如 { settings: { pools: [...], userMap: { ... } } }。
  */
-export function parseAquaSettingsInput(body: unknown): { pools: unknown } {
+export function parseAquaSettingsInput(body: unknown): { pools: unknown; userMap?: Record<string, unknown> } {
   const raw = (body as { settings?: unknown } | null)?.settings
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new HttpError(400, 'invalid-config', '请求体缺少 settings 对象')
@@ -101,7 +103,16 @@ export function parseAquaSettingsInput(body: unknown): { pools: unknown } {
   if (!Array.isArray(input.pools)) {
     throw new HttpError(400, 'invalid-config', 'pools 必须为数组')
   }
-  return { pools: input.pools }
+  return { pools: input.pools, userMap: input.userMap as Record<string, unknown> | undefined }
+}
+
+/** 获取群成员请求体校验 */
+export function parseChatId(body: unknown): string {
+  const raw = (body as { chat_id?: unknown } | null)?.chat_id
+  if (!raw || typeof raw !== 'string' || !raw.trim()) {
+    throw new HttpError(400, 'invalid-chat-id', '请求体缺少 chat_id 字符串')
+  }
+  return raw.trim()
 }
 
 // ========== API 分发 ==========
@@ -120,6 +131,12 @@ export function createAquaSettingsApi(deps: AquaSettingsApiDeps): (method: strin
         case 'save': {
           const settings = deps.saveSettings(parseAquaSettingsInput(body))
           return ok({ settings })
+        }
+
+        case 'list-members': {
+          const chatId = parseChatId(body)
+          const members = await deps.listChatMembers(chatId)
+          return ok({ members })
         }
 
         default:
@@ -255,7 +272,8 @@ export function installAquaSettingsWeb(ctx: Context): void {
 
   const dispatch = createAquaSettingsApi({
     getSettings: getAquaSettings,
-    saveSettings: saveAquaSettings
+    saveSettings: saveAquaSettings,
+    listChatMembers: getFeishuChatMembers
   })
 
   ctx.inject(['webServer'], (sctx) => {

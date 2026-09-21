@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Context } from '@deepseek-ai/cordis';
 import { type ApiResult } from './remind-gateway.js';
 import { type AquaSettings } from '../config/aqua-settings.js';
+import { type FeishuChatMember } from '../feishu/token.js';
 /** 设置页 API 路由前缀(同源 fetch;方法追加在其后,如 /get) */
 export declare const AQUA_SETTINGS_API_PREFIX = "/aquasense-settings/api";
 /** settings 命名空间(小写连字符;仅作 Host/浏览器卡片配对键) */
@@ -23,7 +24,9 @@ export interface AquaSettingsApiDeps {
     getSettings(): AquaSettings;
     saveSettings(input: {
         pools: unknown;
+        userMap?: Record<string, unknown>;
     }): AquaSettings;
+    listChatMembers(chatId: string): Promise<FeishuChatMember[]>;
 }
 /**
  * 注册 settings 命名空间。
@@ -34,11 +37,14 @@ export interface AquaSettingsApiDeps {
 export declare function registerAquaSettingsNamespace(ctx: Context): void;
 /**
  * 校验并归一化「保存设置」请求体(导出供测试)。
- * body 形如 { settings: { pools: [...] } }。
+ * body 形如 { settings: { pools: [...], userMap: { ... } } }。
  */
 export declare function parseAquaSettingsInput(body: unknown): {
     pools: unknown;
+    userMap?: Record<string, unknown>;
 };
+/** 获取群成员请求体校验 */
+export declare function parseChatId(body: unknown): string;
 /**
  * 创建设置页 API 分发函数(注入依赖便于测试)。
  * 返回 (method, body) => ApiResult;HTTP 层负责信封序列化。

@@ -12,7 +12,7 @@
  */
 import type { ReactNode } from 'react';
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots';
-import type { AquaSettingsApi } from './api.js';
+import type { AquaSettingsApi, FeishuChatMember } from './api.js';
 /** 词典翻译函数(命名空间 aquasense-settings) */
 export type AquaSettingsTranslate = PropsLocale<'aquasense-settings'>['t'];
 /** 卡片注入面(注册时提供,见 index.ts) */
@@ -24,6 +24,8 @@ export type AquaSettingsCardProps = PropsLocale<'aquasense-settings'> & AquaSett
 /** 池号数量/长度上限(与 Host 侧 aqua-settings.ts 保持一致) */
 export declare const MAX_POOLS = 20;
 export declare const MAX_POOL_LENGTH = 16;
+/** 用户映射表单个姓名最大长度 */
+export declare const MAX_USER_NAME_LENGTH = 32;
 /** 操作/提交状态 */
 type ApplyState = {
     kind: 'idle';
@@ -42,12 +44,26 @@ interface AquaSettingsModel {
     saved: string[] | null;
     /** 草稿(编辑中) */
     draft: string[] | null;
+    /** 已保存用户映射快照 */
+    savedUserMap: Record<string, string> | null;
+    /** 用户映射草稿(编辑中) */
+    draftUserMap: Record<string, string> | null;
     dirty: boolean;
     applyState: ApplyState;
+    /** 飞书群成员列表(用于自动填充 open_id) */
+    chatMembers: FeishuChatMember[];
+    /** 加载群成员中 */
+    loadingMembers: boolean;
     load(): Promise<void>;
     editPool(index: number, value: string): void;
     addPool(): void;
     removePool(index: number): void;
+    /** 编辑用户映射(设置 open_id → 姓名) */
+    editUserMap(openId: string, name: string): void;
+    /** 删除用户映射 */
+    removeUserMap(openId: string): void;
+    /** 加载飞书群成员 */
+    loadChatMembers(chatId: string): Promise<void>;
     save(): Promise<void>;
     discard(): void;
 }

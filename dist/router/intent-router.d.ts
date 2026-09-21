@@ -13,6 +13,36 @@ export interface IntentResult {
     needsImage: boolean;
     needsTable: boolean;
 }
+/** 领域过滤结果:与 IntentResult 分离,便于调用方区分"不在领域内"和"领域内但场景未识别" */
+export interface DomainFilterResult {
+    /** 是否属于水产养殖/RAS 领域 */
+    inDomain: boolean;
+    /** 不在领域时的拒绝回复(调用方直接返回给工人) */
+    rejectReply?: string;
+}
+/**
+ * 判断消息是否命中命令黑名单(服务器重启、脚本执行等一律禁止)。
+ */
+export declare function isCommandBlocked(content: string): boolean;
+/**
+ * 判断消息内容是否属于水产养殖/RAS 水循环养殖+工程设备+天气领域。
+ *
+ * 匹配策略:内容转小写后逐一比对 AQUACULTURE_KEYWORDS,
+ * 命中任意一个关键词即判定为领域内。
+ * 带图片的消息默认放行(图片可能包含养殖场景,由视觉模型进一步判断)。
+ */
+export declare function isAquacultureRelated(content: string, hasImage: boolean): boolean;
+/**
+ * 飞书渠道领域过滤入口。
+ *
+ * 过滤优先级:
+ *  1. 命令黑名单(服务器重启/脚本执行) → 无论是否养殖相关都拒绝
+ *  2. 领域关键词匹配 → 不在领域内则拒绝
+ *  3. 带图片 → 默认放行
+ *
+ * 调用方拿到 inDomain=false 时,直接把 rejectReply 回复工人,不走后续意图识别。
+ */
+export declare function domainFilter(content: string, hasImage: boolean): DomainFilterResult;
 /**
  * 按关键词优先级识别场景(S4 最高,常规巡检兜底)
  */

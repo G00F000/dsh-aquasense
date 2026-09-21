@@ -13,7 +13,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { getFeishuToken, getFeishuUserName, uploadImageToFeishu } from '../feishu/token.js'
 import { type Scene } from '../router/intent-router.js'
-import { formatPoolIds, getValidPoolIds } from '../config/aqua-settings.js'
+import { formatPoolIds, getValidPoolIds, getUserNameByOpenId } from '../config/aqua-settings.js'
 
 /** 台账场景 = S1-S8 中所有落表场景(排除 S3 知识询问) */
 export type LedgerScene = Exclude<Scene, 'knowledge'>
@@ -168,17 +168,22 @@ export const recordLedger = defineTool({
     }
 
     // 自动解析汇报人:必须以发消息用户的 open_id 为准,防止记忆/猜测中的姓名顶替真实上报人
-    // reporter 仅作兜底:拿不到 open_id 或解析失败时才使用
+    // 优先使用映射表(管理员在 AquaSense 设置中配置),未命中时调用飞书通讯录 API
     let reporterName = ''
     if (args.open_id) {
-      reporterName = await getFeishuUserName(args.open_id)
+      // 优先从映射表获取(管理员配置的 open_id → 姓名映射)
+      reporterName = getUserNameByOpenId(args.open_id)
+      // 映射表未命中,尝试飞书通讯录 API
+      if (!reporterName) {
+        reporterName = await getFeishuUserName(args.open_id)
+      }
     }
     if (!reporterName) {
       const fallback = (args.reporter || '').trim()
       if (!fallback || REPORTER_BLOCKLIST.has(fallback)) {
         return {
           success: false,
-          message: `无法识别上报人:open_id 解析失败,且提供的 reporter 值「${fallback || '(空)'}」不可用。请从消息上下文获取发送者 open_id 后重试,不要凭记忆填写。`,
+          message: `无法识别上报人:open_id 解析失败,且提供的 reporter 值「${fallback || '(空)'}」不可用。请在 AquaSense 设置中配置人员映射表,或从消息上下文获取发送者 open_id 后重试。`,
           missing: ['open_id'],
           questions: ['请问上报人是谁?(将记入台账)']
         }

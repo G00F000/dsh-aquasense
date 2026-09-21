@@ -21,8 +21,9 @@ import { HttpError } from './remind-gateway.js'
 /** 基础依赖(可按用例覆盖) */
 function createDeps(overrides: Partial<AquaSettingsApiDeps> = {}): AquaSettingsApiDeps {
   return {
-    getSettings: () => ({ pools: ['池1', '池2', '池3', '池4'] }),
-    saveSettings: (input) => ({ pools: Array.isArray(input.pools) ? (input.pools as string[]) : [] }),
+    getSettings: () => ({ pools: ['池1', '池2', '池3', '池4'], userMap: {} }),
+    saveSettings: (input) => ({ pools: Array.isArray(input.pools) ? (input.pools as string[]) : [], userMap: {} }),
+    listChatMembers: async () => [],
     ...overrides
   }
 }
@@ -97,18 +98,18 @@ describe('createAquaSettingsApi', () => {
     const dispatch = createAquaSettingsApi(createDeps())
     const result = await dispatch('get', {})
     expect(result.status).toBe(200)
-    expect(result.body).toEqual({ ok: true, value: { settings: { pools: ['池1', '池2', '池3', '池4'] } } })
+    expect(result.body).toEqual({ ok: true, value: { settings: { pools: ['池1', '池2', '池3', '池4'], userMap: {} } } })
   })
 
   it('save → sanitize 后回写', async () => {
     const dispatch = createAquaSettingsApi(
       createDeps({
-        saveSettings: () => ({ pools: ['池1', '池5'] })
+        saveSettings: () => ({ pools: ['池1', '池5'], userMap: {} })
       })
     )
     const result = await dispatch('save', { settings: { pools: [' 池1 ', '池5', '池1'] } })
     expect(result.status).toBe(200)
-    expect(result.body).toEqual({ ok: true, value: { settings: { pools: ['池1', '池5'] } } })
+    expect(result.body).toEqual({ ok: true, value: { settings: { pools: ['池1', '池5'], userMap: {} } } })
   })
 
   it('save 校验失败 → 400 invalid-config', async () => {
@@ -182,7 +183,7 @@ describe('handleAquaSettingsHttp', () => {
     const res = mockResponse()
     await handleAquaSettingsHttp(dispatch, mockRequest({ url: `${AQUA_SETTINGS_API_PREFIX}/get` }), res)
     expect(res.status).toBe(200)
-    expect(envelopeOf(res)).toEqual({ ok: true, value: { settings: { pools: ['池1', '池2', '池3', '池4'] } } })
+    expect(envelopeOf(res)).toEqual({ ok: true, value: { settings: { pools: ['池1', '池2', '池3', '池4'], userMap: {} } } })
   })
 
   it('save 请求体非法 JSON → 400 invalid-json', async () => {

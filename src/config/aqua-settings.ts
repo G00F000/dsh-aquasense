@@ -25,12 +25,16 @@ export const DEFAULT_POOLS = ['池1', '池2', '池3', '池4']
 export const MAX_POOLS = 20
 /** 单个池号最大长度(字符) */
 export const MAX_POOL_LENGTH = 16
+/** 用户映射表单个姓名最大长度(字符) */
+export const MAX_USER_NAME_LENGTH = 32
 
 // ========== 数据结构 ==========
 
 /** 池号设置(settings.json 为唯一事实源) */
 export interface AquaSettings {
   pools: string[]
+  /** 用户映射表:open_id → 姓名(用于台账自动填充上报人) */
+  userMap: Record<string, string>
 }
 
 // ========== 配置目录 ==========
@@ -76,7 +80,13 @@ function readSettingsFile(): AquaSettings | null {
   if (!existsSync(path)) return null
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<AquaSettings>
-    return parsed && typeof parsed === 'object' ? { pools: sanitizePools(parsed.pools) } : null
+    if (parsed && typeof parsed === 'object') {
+      return {
+        pools: sanitizePools(parsed.pools),
+        userMap: sanitizeUserMap(parsed.userMap)
+      }
+    }
+    return null
   } catch {
     console.warn('[aquasense-settings] settings.json 解析失败,忽略并回退默认池号')
     return null
@@ -103,7 +113,7 @@ function readEnvPools(): string[] | null {
 export function getAquaSettings(): AquaSettings {
   const fileSettings = readSettingsFile()
   if (fileSettings) return fileSettings
-  return { pools: readEnvPools() ?? [...DEFAULT_POOLS] }
+  return { pools: readEnvPools() ?? [...DEFAULT_POOLS], userMap: {} }
 }
 
 /** 当前生效池号(业务消费:台账白名单、H5 校验) */
@@ -121,15 +131,45 @@ export function formatPoolIds(pools?: string[]): string {
   return (pools ?? getPoolIds()).join('/')
 }
 
+// ========== 用户映射表 ==========
+
+/** 归一化用户映射表(open_id → 姓名):trim、去空键、限长;非法项跳过 */
+export function sanitizeUserMap(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+
+  const map: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof key !== 'string' || typeof value !== 'string') continue
+    const trimmedKey = key.trim()
+    const trimmedValue = value.trim()
+    if (!trimmedKey || !trimmedValue) continue
+    if (trimmedValue.length > MAX_USER_NAME_LENGTH) continue
+    map[trimmedKey] = trimmedValue
+  }
+  return map
+}
+
+/** 当前生效用户映射表(业务消费:台账自动填充上报人) */
+export function getUserMap(): Record<string, string> {
+  return getAquaSettings().userMap
+}
+
+/** 根据 open_id 获取用户名(优先映射表,未命中返回空字符串) */
+export function getUserNameByOpenId(openId: string): string {
+  if (!openId) return ''
+  return getUserMap()[openId] || ''
+}
+
 // ========== 保存 ==========
 
 /**
  * 保存池号配置(设置页「保存配置」;sanitize 后写盘并刷新缓存)。
  * 写盘失败向上抛,由网关映射 500。
  */
-export function saveAquaSettings(input: { pools: unknown }): AquaSettings {
+export function saveAquaSettings(input: { pools: unknown; userMap?: Record<string, unknown> }): AquaSettings {
   const pools = sanitizePools(input.pools)
-  const settings: AquaSettings = { pools }
+  const userMap = sanitizeUserMap(input.userMap)
+  const settings: AquaSettings = { pools, userMap }
   mkdirSync(settingsDirPath(), { recursive: true })
   writeFileSync(settingsFile(), JSON.stringify(settings, null, 2), 'utf8')
   return settings
