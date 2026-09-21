@@ -66,7 +66,8 @@ type ContextWithServices = Context & {
 
 /** settings 命名空间 schema:与 AquaSettings 形状对齐(base 取当前生效配置) */
 const AquaSettingsSchema = z.object({
-  pools: z.array(z.string()).default(DEFAULT_POOLS)
+  pools: z.array(z.string()).default(DEFAULT_POOLS),
+  userMap: z.any().default({})
 })
 
 /**
