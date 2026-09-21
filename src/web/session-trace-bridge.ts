@@ -44,10 +44,12 @@ interface TraceEvent {
 
 type TraceEventCallback = (session: TraceSession, event: TraceEvent) => void
 
-/** 桥接所需的 ctx 事件面(根上下文订阅 session 事件) */
+/** 桥接所需的 ctx 事件面(根上下文订阅 session 事件 + 工具注册表事件) */
 interface TraceEventHost {
   on(name: 'session/event', cb: TraceEventCallback): () => void
   on(name: 'session/disposed', cb: (session: TraceSession) => void): () => void
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tools/result 事件签名来自 dsh-tools,此处最小化声明
+  on(name: string, cb: (...args: any[]) => void): () => void
 }
 
 // ========== 常量 ==========
@@ -57,6 +59,45 @@ const TRACE_TOOLS = new Set(['aquasense_analyze', 'aquasense_advice', 'aquasense
 
 /** 回填重试间隔(毫秒):ledger-wrap 写盘可能晚于 ledger tool/result 事件 */
 const FILL_DELAYS = [0, 3_000, 10_000, 30_000] as const
+
+// ========== tools/result metadata 缓存(补充 presentationMeta 不可用的 agent 派发调用) ==========
+// DSH 核心:exec.parent !== undefined 时跳过 presentationMeta 计算;
+// agent loop 派发的工具调用 exec.parent 总被设置,因此 tool/result session 事件的 meta 永远为空。
+// 解决方案:订阅 tools/result registry 事件(在 session 事件之前触发),从 result.value 自行计算
+// metadata 存入 Map;bridge 处理 tool/result session 事件时查表补充 call.meta。
+const toolsMetaCache = new Map<string, Record<string, unknown>>()
+
+/** 从工具 result.value 计算结构化元数据(供 UI Agent 决策链摘要) */
+function computeToolMeta(toolName: string, value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Record<string, unknown>
+  try {
+    if (toolName === 'aquasense_analyze') {
+      return {
+        cls: String(v.cls ?? ''),
+        confidence: typeof v.confidence === 'number' ? v.confidence : 0,
+        severity: String(v.severity ?? ''),
+        image_count: typeof v.image_count === 'number' ? v.image_count : 0,
+        scene_hint: String(v.scene_hint ?? '')
+      }
+    }
+    if (toolName === 'aquasense_advice') {
+      const refs = Array.isArray(v.knowledge_refs) ? v.knowledge_refs : []
+      return {
+        alert_level: String(v.alert_level ?? ''),
+        knowledge_refs_count: refs.length,
+        diagnosis_summary: String(v.diagnosis_summary ?? '').slice(0, 200)
+      }
+    }
+    if (toolName === 'aquasense_ledger') {
+      return {
+        success: v.success === true,
+        record_id: String(v.record_id ?? '')
+      }
+    }
+  } catch { /* 防御:解析失败不阻断主链路 */ }
+  return undefined
+}
 
 /** 悬挂兜底原因码(turn/end 或 session/disposed 时未闭合的调用) */
 const ABORTED_CODE = 'ABORTED'
@@ -216,10 +257,16 @@ export class SessionTraceBridge {
       } else {
         call.status = 'ok'
       }
-      // 读取工具 presentationMeta 结构化摘要
-      const rawMeta = data.meta
-      if (rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta)) {
-        call.meta = rawMeta as Record<string, unknown>
+      // 读取工具 metadata:优先 tools/result cache(agent 派发调用),回退 session 事件 meta(直接调用)
+      const cached = toolsMetaCache.get(callId)
+      if (cached) {
+        call.meta = cached
+        toolsMetaCache.delete(callId)
+      } else {
+        const rawMeta = data.meta
+        if (rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta)) {
+          call.meta = rawMeta as Record<string, unknown>
+        }
       }
       state.open.delete(callId)
       state.done.push(call)
@@ -364,6 +411,7 @@ export function installSessionTraceBridge(ctx: Context): void {
     const bridge = new SessionTraceBridge()
     let offEvent: (() => void) | undefined
     let offDisposed: (() => void) | undefined
+    let offToolsResult: (() => void) | undefined
     try {
       offEvent = host.on('session/event', (session, event) => {
         try {
@@ -379,15 +427,27 @@ export function installSessionTraceBridge(ctx: Context): void {
           /* 忽略:销毁兜底失败不影响宿主 */
         }
       })
+      // 订阅 tools/result registry 事件:在 agent loop 追加 session 事件之前触发,
+      // 从 result.value 计算 presentationMeta(DSH 核心对 agent 派发调用跳过此计算)
+      offToolsResult = host.on('tools/result', (exec: { callId?: unknown; name?: unknown }, result: { value?: unknown }) => {
+        try {
+          const callId = strOf(exec?.callId)
+          const name = strOf(exec?.name)
+          if (!callId || !TRACE_TOOLS.has(name)) return
+          const meta = computeToolMeta(name, result?.value)
+          if (meta) toolsMetaCache.set(callId, meta)
+        } catch { /* 防御:metadata 计算失败不阻断主链路 */ }
+      })
     } catch (error) {
       console.warn('[aquasense-trace] 会话事件桥接启动失败:', error instanceof Error ? error.message : error)
       return () => {}
     }
 
-    console.log('[aquasense-trace] 会话事件桥接已启动(方式B): 订阅 session/event, 目标工具 aquasense_analyze/advice/ledger')
+    console.log('[aquasense-trace] 会话事件桥接已启动(方式B): 订阅 session/event + tools/result, 目标工具 aquasense_analyze/advice/ledger')
     return () => {
       offEvent?.()
       offDisposed?.()
+      offToolsResult?.()
     }
   }, 'aquasense-trace-bridge')
 }

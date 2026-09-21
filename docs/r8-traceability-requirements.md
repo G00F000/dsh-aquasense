@@ -3,7 +3,7 @@
 > **版本**: v1.8（v1.8 群聊场景新增「Agent 决策链」——方式 B 会话事件桥接（`session-trace-bridge.ts`）订阅 DSH 会话事件，采集 Agent 层 turn/step/工具调用/重试；详情态新增「Agent 决策链」区块、列表态新增「Agent链路/重试」角标。v1.7 详情态「现场照片」不变；v1.6 入口精简结论不变：H5 提交后仅「提交成功」反馈，查看统一到入口 C）
 > **基线日期**: 2026-09-17（v1.7 补充：2026-09-19；v1.8 补充：2026-09-20）
 > **总文档**: [requirements.md](./requirements.md)（本文为 R8 专题分文档）
-> **状态**: ✅ 已实现（v1.8 群聊「Agent 决策链」设计定稿待实施；实现细节见 [r8-traceability-architecture.md](./r8-traceability-architecture.md)）
+> **状态**: ✅ 已实现（v1.8 群聊「Agent 决策链」已上线；实现细节见 [r8-traceability-architecture.md](./r8-traceability-architecture.md)）
 > **设计参考**: Langfuse Trace/Span 模型、Arize Phoenix 嵌入可视化、MedgeClaw Dashboard 分步骤展开、SkillHub 插件广场页签式二级标题
 
 ---
