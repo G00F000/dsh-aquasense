@@ -14,6 +14,7 @@ import {
   formatPoolIds,
   getAquaSettings,
   getPoolIds,
+  getUserNameByOpenId,
   getValidPoolIds,
   MAX_POOL_LENGTH,
   MAX_POOLS,
@@ -120,5 +121,45 @@ describe('业务消费辅助', () => {
     expect(formatPoolIds(DEFAULT_POOLS)).toBe('池1/池2/池3/池4')
     saveAquaSettings({ pools: ['池1', '池5'] })
     expect(formatPoolIds()).toBe('池1/池5')
+  })
+
+  it('getUserNameByOpenId 精确匹配', () => {
+    saveAquaSettings({
+      pools: ['池1'],
+      userMap: { 'ou_abc123': '张三', 'ou_def456': '李四' }
+    })
+    expect(getUserNameByOpenId('ou_abc123')).toBe('张三')
+    expect(getUserNameByOpenId('ou_def456')).toBe('李四')
+    expect(getUserNameByOpenId('ou_unknown')).toBe('')
+    expect(getUserNameByOpenId('')).toBe('')
+  })
+
+  it('getUserNameByOpenId 前缀匹配(消息桥截断场景)', () => {
+    saveAquaSettings({
+      pools: ['池1'],
+      userMap: { 'ou_7706552303aeb5c031179054423d4571': '张三' }
+    })
+    // 传入截断的 open_id 前缀,唯一命中 → 采纳
+    expect(getUserNameByOpenId('ou_77065')).toBe('张三')
+    // 精确匹配不受影响
+    expect(getUserNameByOpenId('ou_7706552303aeb5c031179054423d4571')).toBe('张三')
+  })
+
+  it('getUserNameByOpenId 前缀匹配仅一条时采纳,多条时返回空', () => {
+    saveAquaSettings({
+      pools: ['池1'],
+      userMap: {
+        'ou_77065aaa': '张三',
+        'ou_77065bbb': '李四'
+      }
+    })
+    // ou_77065 前缀命中两条,歧义 → 空
+    expect(getUserNameByOpenId('ou_77065')).toBe('')
+    // 单独的前缀只命中一条 → 采纳
+    saveAquaSettings({
+      pools: ['池1'],
+      userMap: { 'ou_77065aaa': '张三' }
+    })
+    expect(getUserNameByOpenId('ou_77065')).toBe('张三')
   })
 })
