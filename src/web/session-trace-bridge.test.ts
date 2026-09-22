@@ -88,6 +88,28 @@ describe('SessionTraceBridge 状态机', () => {
     expect(record?.agent?.calls[1]).toMatchObject({ tool: 'aquasense_ledger', call_id: 'c2', attempt: 1, status: 'ok', duration_ms: 400 })
   })
 
+  it('兼容新版事件结构:tool/result 的 callId 位于 message.source 时正常闭合', async () => {
+    await seedRecord('RPT-20260920-1010', '池1')
+    const bridge = new SessionTraceBridge()
+    const session: object = {}
+
+    bridge.handleEvent(session, ev('turn/start', T0, { turn: 4 }))
+    bridge.handleEvent(session, ev('step/start', T0 + 200, { step: 1 }))
+    bridge.handleEvent(session, ev('tool/call', T0 + 500, { name: 'aquasense_analyze', callId: 'c1', arguments: '{"image":"a"}', turn: 4, step: 1 }))
+    // 新版 DSH:tool/result 顶层无 callId,位于 message.source.callId(ToolMessageSource)
+    bridge.handleEvent(session, ev('tool/result', T0 + 900, { message: { source: { kind: 'tool', callId: 'c1' } }, error: { name: 'RateLimitError', code: 'RATE_LIMIT' } }))
+    bridge.handleEvent(session, ev('tool/call', T0 + 1000, { name: 'aquasense_ledger', callId: 'c2', arguments: '{"pool_id":"池1"}', turn: 4, step: 1 }))
+    bridge.handleEvent(session, ev('tool/result', T0 + 1500, { message: { source: { kind: 'tool', callId: 'c2' } } }))
+
+    await sleep(100)
+
+    const record = await readReport('RPT-20260920-1010')
+    expect(record?.agent).toBeDefined()
+    expect(record?.agent?.calls).toHaveLength(2)
+    expect(record?.agent?.calls[0]).toMatchObject({ tool: 'aquasense_analyze', call_id: 'c1', status: 'error', error_code: 'RATE_LIMIT', duration_ms: 400 })
+    expect(record?.agent?.calls[1]).toMatchObject({ tool: 'aquasense_ledger', call_id: 'c2', status: 'ok', duration_ms: 500 })
+  })
+
   it('重试推导:同 step 同参数再次调用 attempt 递增;前次 error_code 保留', async () => {
     await seedRecord('RPT-20260920-1001', '池2')
     const bridge = new SessionTraceBridge()
@@ -172,6 +194,9 @@ describe('SessionTraceBridge 状态机', () => {
     expect(() => bridge.handleEvent(session, { type: 'tool/call', data: null })).not.toThrow()
     expect(() => bridge.handleEvent(session, { type: 'tool/call', data: { name: 42, callId: {} } })).not.toThrow()
     expect(() => bridge.handleEvent(session, { type: 'tool/result', data: null })).not.toThrow()
+    expect(() => bridge.handleEvent(session, { type: 'tool/result', data: { message: null } })).not.toThrow()
+    expect(() => bridge.handleEvent(session, { type: 'tool/result', data: { message: { source: null } } })).not.toThrow()
+    expect(() => bridge.handleEvent(session, { type: 'tool/result', data: { message: {} } })).not.toThrow()
     expect(() => bridge.handleEvent(session, { type: 'unknown/type' })).not.toThrow()
     expect(() => bridge.handleEvent(session, { type: 'turn/start', data: { turn: 'x' } })).not.toThrow()
   })

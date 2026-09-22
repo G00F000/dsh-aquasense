@@ -171,6 +171,22 @@ function poolOfArgs(argumentsJson: string): string {
   }
 }
 
+/**
+ * 从 tool/result 事件 data 提取 callId(兼容新旧两种事件结构):
+ *  - 旧版:callId 位于 data 顶层;
+ *  - 新版(DSH ≥0.0.1-rc.5):callId 位于 data.message.source(ToolMessageSource),
+ *    tool/result 顶层不再携带 callId,直接读 data.callId 将永远拿不到。
+ */
+function toolResultCallIdOf(data: Record<string, unknown>): string {
+  const direct = strOf(data.callId)
+  if (direct) return direct
+  const message = data.message
+  if (!message || typeof message !== 'object') return ''
+  const source = (message as Record<string, unknown>).source
+  if (!source || typeof source !== 'object') return ''
+  return strOf((source as Record<string, unknown>).callId)
+}
+
 // ========== 核心状态机(导出供测试) ==========
 
 export class SessionTraceBridge {
@@ -244,7 +260,7 @@ export class SessionTraceBridge {
     if (type === 'tool/result') {
       const data = event.data as Record<string, unknown> | undefined
       if (!data) return
-      const callId = strOf(data.callId)
+      const callId = toolResultCallIdOf(data)
       if (!callId) return
       const state = this.stateOf(session)
       const call = state.open.get(callId)
