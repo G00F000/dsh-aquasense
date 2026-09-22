@@ -84,4 +84,39 @@ describe('buildAdviceToolOutput', () => {
     const out = buildAdviceToolOutput(retrieval, BASE_ADVICE)
     expect(Object.keys(out.retrieve_excerpts[0])).toEqual(['title', 'text', 'from'])
   })
+
+  it('IMA API 返回非 string 类型的 title/from 时归一化为 string(防御 INVALID_TOOL_OUTPUT)', () => {
+    // IMA API 的 searchKnowledge 以 item: any 映射 title,可为 number/null
+    const retrieval: KnowledgeRetrieval = {
+      query: '测试',
+      knowledge: { items: [], total: 0 },
+      excerpts: [
+        { title: 12345 as unknown as string, text: '原文一', from: 'wiki' },
+        { title: null as unknown as string, text: '原文二', from: 'note' }
+      ]
+    }
+    const out = buildAdviceToolOutput(retrieval, BASE_ADVICE)
+    expect(out.retrieve_excerpts[0].title).toBe('12345')
+    expect(out.retrieve_excerpts[0].text).toBe('原文一')
+    expect(out.retrieve_excerpts[1].title).toBe('')
+    expect(out.retrieve_excerpts[1].text).toBe('原文二')
+    // 验证归一化后的字段均为 string 类型(DSH schema 要求)
+    for (const e of out.retrieve_excerpts) {
+      expect(typeof e.title).toBe('string')
+      expect(typeof e.text).toBe('string')
+    }
+  })
+
+  it('from/locator 为非 string 类型时归一化为 string', () => {
+    const retrieval: KnowledgeRetrieval = {
+      query: '测试',
+      knowledge: { items: [], total: 0 },
+      excerpts: [{ title: '正常标题', text: '原文', from: 42 as unknown as KnowledgeItem['from'], locator: 100 as unknown as string }]
+    }
+    const out = buildAdviceToolOutput(retrieval, BASE_ADVICE)
+    expect(out.retrieve_excerpts[0].from).toBe('42')
+    expect(out.retrieve_excerpts[0].locator).toBe('100')
+    expect(typeof out.retrieve_excerpts[0].from).toBe('string')
+    expect(typeof out.retrieve_excerpts[0].locator).toBe('string')
+  })
 })

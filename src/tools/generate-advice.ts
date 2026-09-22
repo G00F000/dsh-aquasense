@@ -363,13 +363,15 @@ async function extractExcerpts(
 
 /**
  * 构造摘录条目:可选字段(from/locator)缺省时省略键,避免 undefined 值进入 DSH 工具产出被判定为非 lossless JSON 而报错。
+ * String() 归一化:IMA API 返回的 title/from 可能为 number/null 等非 string 类型,DSH schema 严格校验 retrieve_excerpts 各字段须为 string,
+ * 未归一化的非 string 值会导致 INVALID_TOOL_OUTPUT 错误(见 p11 根因分析)。
  */
 function makeExcerpt(item: Pick<Excerpt, 'title' | 'from' | 'locator'>, text: string): Excerpt {
   return {
-    title: item.title,
+    title: String(item.title ?? ''),
     text,
-    ...(item.from ? { from: item.from } : {}),
-    ...(item.locator ? { locator: item.locator } : {})
+    ...(item.from ? { from: String(item.from) } : {}),
+    ...(item.locator ? { locator: String(item.locator) } : {})
   }
 }
 
