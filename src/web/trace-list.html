@@ -65,6 +65,15 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
 .trend{display:block;margin:20px 2px 0;color:var(--accent);text-decoration:none;font-size:14px}
 .err{margin:12px 2px;padding:10px 12px;border-radius:10px;background:var(--bg-card);
   border:1px solid var(--danger);color:var(--danger);font-size:13px}
+.filter-toggle{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--border);
+  border-radius:8px;background:var(--bg-card);color:var(--text-primary);font-size:12px;cursor:pointer;user-select:none}
+.filter-toggle.active{border-color:var(--accent);color:var(--accent);background:#e6f4ff}
+@media(prefers-color-scheme:dark){.filter-toggle.active{background:#11263f}}
+.retry-badge{display:inline-flex;align-items:center;gap:3px;padding:1px 8px;border-radius:999px;
+  background:#fff7e6;color:#d48806;font-size:11px;font-weight:600}
+@media(prefers-color-scheme:dark){.retry-badge{background:#2b2111;color:#d89614}}
+.err-bar{padding:4px 14px;font-size:12px;color:var(--danger);background:#fff2f0;border-bottom:1px solid var(--border)}
+@media(prefers-color-scheme:dark){.err-bar{background:#2b1216}}
 </style>
 </head>
 <body>
@@ -81,6 +90,8 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
       <option value="disease">发病</option>
       <option value="unknown">未知</option>
     </select>
+    <button type="button" class="filter-toggle" id="f-low-conf" aria-label="筛选低置信度">⚠ 低置信度</button>
+    <button type="button" class="filter-toggle" id="f-has-error" aria-label="筛选有错误">❌ 有错误</button>
   </div>
 </header>
 <main id="main"><p class="empty">加载中…</p></main>
@@ -91,10 +102,12 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
   // 被配置页面板 iframe 内嵌时(同源),隐藏本页标题避免与面板页签重复
   if (window.self !== window.top) document.documentElement.classList.add('embedded');
   var LIMIT = 50;
-  var state = { pool: '', cls: '', offset: 0, total: 0, loading: false };
+  var state = { pool: '', cls: '', low_confidence: false, has_error: false, offset: 0, total: 0, loading: false };
   var main = document.getElementById('main');
   var poolSel = document.getElementById('f-pool');
   var clsSel = document.getElementById('f-cls');
+  var lowConfBtn = document.getElementById('f-low-conf');
+  var hasErrBtn = document.getElementById('f-has-error');
   var trendLink = document.getElementById('trend-link');
 
   // 池号枚举由服务端按设置页「AquaSense 设置」注入,缺失时兜底默认 4 池
@@ -138,16 +151,30 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
     return '/aquasense-reports/report?id=' + encodeURIComponent(id);
   }
 
+  function errHtml(r) {
+    if (r.agent_retries === undefined || r.agent_retries <= 0) return '';
+    var toolMap = { aquasense_analyze: 'AI分析', aquasense_advice: '建议生成', aquasense_ledger: '台账写入' };
+    var tool = r.agent_retries_tool || 'agent';
+    var label = toolMap[tool] || tool;
+    return '<div class="err-bar">⚠️ ' + esc(label) + ' 失败 ' + r.agent_retries + ' 次</div>';
+  }
+
   function rowHtml(r) {
     var cls = r.cls || 'unknown';
     var sym = (r.symptoms && r.symptoms.length) ? r.symptoms.join('、') : '无异常';
+    var retryBadge = (r.agent_retries !== undefined && r.agent_retries > 0)
+      ? '<span class="retry-badge">🔁 ' + r.agent_retries + '次重试</span>' : '';
+    var agentTag = (r.agent_retries !== undefined)
+      ? '<span class="chip">Agent链路</span>' : '';
     return '<a class="row" href="' + esc(fileUrl(r.id)) + '">' +
+      errHtml(r) +
       '<div class="row-line1">' +
         '<span class="dot ' + esc(cls) + '"></span>' +
         '<span class="rid">' + esc(r.id) + '</span>' +
         '<span class="pool">' + esc(r.pool) + '</span>' +
         '<span class="cls ' + esc(cls) + '">' + esc(clsName(cls)) + '</span>' +
         '<span class="conf">' + esc((r.confidence || 0).toFixed(2)) + '</span>' +
+        retryBadge +
         '<span class="sym' + (cls === 'disease' ? ' warn' : '') + '">' + esc(sym) + '</span>' +
       '</div>' +
       '<div class="row-line2">' +
@@ -156,6 +183,7 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
         '<span>' + (r.alert_level ? 'AI视觉+知识库' : 'AI视觉') + '</span><span>·</span>' +
         '<span>' + esc(durationText(r.total_duration_ms)) + '</span><span>·</span>' +
         '<span>' + esc(tokenText(r.total_tokens)) + ' tokens</span>' +
+        agentTag +
       '</div>' +
     '</a>';
   }
@@ -197,6 +225,8 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
     var url = '/aquasense-reports/api/records?limit=' + LIMIT + '&offset=' + state.offset;
     if (state.pool) url += '&pool=' + encodeURIComponent(state.pool);
     if (state.cls) url += '&cls=' + encodeURIComponent(state.cls);
+    if (state.low_confidence) url += '&low_confidence=1';
+    if (state.has_error) url += '&has_error=1';
 
     fetch(url).then(function (resp) { return resp.json(); }).then(function (body) {
       state.loading = false;
@@ -226,6 +256,16 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 90px}
 
   poolSel.addEventListener('change', function () { state.pool = poolSel.value; load(true); });
   clsSel.addEventListener('change', function () { state.cls = clsSel.value; load(true); });
+  lowConfBtn.addEventListener('click', function () {
+    state.low_confidence = !state.low_confidence;
+    lowConfBtn.classList.toggle('active', state.low_confidence);
+    load(true);
+  });
+  hasErrBtn.addEventListener('click', function () {
+    state.has_error = !state.has_error;
+    hasErrBtn.classList.toggle('active', state.has_error);
+    load(true);
+  });
 
   // 趋势入口携带当前筛选池号
   trendLink.addEventListener('click', function (ev) {

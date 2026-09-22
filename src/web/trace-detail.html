@@ -150,20 +150,39 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
 
   function spanOf(record, key) { return record['span_' + key] || null; }
 
+  var AGENT_TOOL_MAP = {
+    upload: null,
+    analyze: 'aquasense_analyze',
+    retrieve: null,
+    advice: 'aquasense_advice',
+    ledger: 'aquasense_ledger'
+  };
+
+  function agentFailureFor(record, stepKey) {
+    var toolName = AGENT_TOOL_MAP[stepKey];
+    if (!toolName || !record.agent || !record.agent.calls) return null;
+    var failed = record.agent.calls.filter(function (c) { return c.tool === toolName && c.status === 'error'; });
+    if (failed.length === 0) return null;
+    var codes = failed.map(function (c) { return c.error_code; }).filter(Boolean).join(', ') || 'UNKNOWN';
+    return { count: failed.length, errorCode: codes };
+  }
+
   function waterfall(record) {
     var total = record.total_duration_ms > 0 ? record.total_duration_ms : 1;
     var html = '';
     STEPS.forEach(function (s) {
       var span = spanOf(record, s.key);
+      var failure = !span ? agentFailureFor(record, s.key) : null;
       var ms = span && typeof span.duration_ms === 'number' ? span.duration_ms : null;
       var pct = ms ? Math.max(3, Math.round(ms / total * 100)) : 0;
-      var st = span ? (span.error ? '❌' : '✅') : '·';
+      var st = span ? (span.error ? '❌' : '✅') : (failure ? '❌' : '·');
       var barCls = ms ? s.key : s.key + ' skipped';
+      var durText = span ? dur(ms) : (failure ? '失败' + failure.count + '次' : '未执行');
       html += '<div class="wf-row">' +
         '<span class="wf-icon">' + s.icon + '</span>' +
         '<span class="wf-name">' + esc(s.name) + '</span>' +
         '<span class="wf-track"><span class="wf-bar ' + barCls + '" style="width:' + pct + '%"></span></span>' +
-        '<span class="wf-dur">' + esc(span ? dur(ms) : '未执行') + '</span>' +
+        '<span class="wf-dur"' + (failure ? ' style="color:var(--danger)"' : '') + '>' + esc(durText) + '</span>' +
         '<span class="wf-st">' + st + '</span>' +
       '</div>';
     });
@@ -184,12 +203,24 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
       kv('耗时', esc(dur(span.duration_ms))) + errLine(span);
   }
 
-  function stepAnalyze(span) {
+  function stepAnalyze(span, record) {
     if (!span) return '<p style="color:var(--text-secondary)">该步骤未执行。</p>';
     var syms = (span.symptoms || []).map(function (s) { return '<span class="sym">' + esc(s) + '</span>'; }).join('');
     var organs = (span.organs || []).length ? kv('器官', esc(span.organs.join('、'))) : '';
-    return kv('模型', '<span class="mono">' + esc(span.scene_hint || '') + '</span>') +
+    var completeness = span.data_completeness;
+    var expectedImgs = span.expected_image_count;
+    var completenessHtml = '';
+    if (completeness === 'partial') {
+      completenessHtml = kv('数据完整性', '<span style="color:#d48806;background:#fffbe6;padding:2px 8px;border-radius:4px;font-weight:600">⚠️ 图片不完整（期望 ' + esc(expectedImgs != null ? expectedImgs : '?') + ' 张），结论可能不可靠</span>');
+    } else if (completeness === 'empty') {
+      completenessHtml = kv('数据完整性', '<span style="color:#ff4d4f;background:#fff2f0;padding:2px 8px;border-radius:4px;font-weight:600">❌ 全部图片丢失，结论不可信</span>');
+    } else if (completeness === 'complete') {
+      completenessHtml = kv('数据完整性', '<span style="color:#52c41a;background:#f6ffed;padding:2px 8px;border-radius:4px">✓ 图片齐全</span>');
+    }
+    return kv('模型', '<span class="mono">' + esc(record.model || '—') + '</span>') +
+      kv('场景', '<span class="mono">' + esc(span.scene_hint || '') + '</span>') +
       kv('输入', 'system prompt (' + esc(span.prompt_length) + ' 字符) + 图片') +
+      completenessHtml +
       kv('状态', '<b>' + esc(clsName(span.cls)) + '</b>（' + esc(span.cls) + '）') +
       kv('置信度', esc(span.confidence != null ? Number(span.confidence).toFixed(2) : '—')) +
       kv('严重度', esc(span.severity || '—')) +
@@ -303,13 +334,60 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
     var renderers = { upload: stepUpload, analyze: stepAnalyze, retrieve: stepRetrieve, advice: stepAdvice, ledger: stepLedger };
     return STEPS.map(function (s) {
       var span = spanOf(record, s.key);
-      var st = span ? (span.error ? '❌' : '✅') : '·';
+      var failure = !span ? agentFailureFor(record, s.key) : null;
+      var st = span ? (span.error ? '❌' : '✅') : (failure ? '❌' : '·');
+      var durText = span ? dur(span.duration_ms) : (failure ? '失败' + failure.count + '次' : '未执行');
+      var detailHtml = span
+        ? renderers[s.key](span, record)
+        : failure
+          ? '<div class="kv"><span class="k" style="color:var(--danger);font-weight:600">执行失败</span><span class="v" style="color:var(--danger)">该工具执行 ' + failure.count + ' 次均失败（' + esc(failure.errorCode) + '）</span></div>'
+          : '<p style="color:var(--text-secondary)">该步骤未执行。</p>';
       return '<details class="step"' + (span && !span.error && s.key === 'analyze' ? ' open' : '') + '>' +
         '<summary><span>' + s.icon + '</span><span class="st-name">' + esc(s.name) + '</span>' +
-        '<span class="st-dur">' + esc(span ? dur(span.duration_ms) : '未执行') + '</span><span>' + st + '</span></summary>' +
-        '<div class="step-detail">' + renderers[s.key](span, record) + '</div>' +
+        '<span class="st-dur"' + (failure ? ' style="color:var(--danger)"' : '') + '>' + esc(durText) + '</span><span>' + st + '</span></summary>' +
+        '<div class="step-detail">' + detailHtml + '</div>' +
       '</details>';
     }).join('');
+  }
+
+  function agentChainHtml(record) {
+    var agent = record.agent;
+    if (!agent || !agent.calls || agent.calls.length === 0) return '';
+    var TOOL_META = {
+      aquasense_analyze: { icon: '🧠', label: 'AI 视觉分析', color: 'var(--c-analyze)' },
+      aquasense_advice: { icon: '💡', label: '处置建议生成', color: 'var(--c-advice)' },
+      aquasense_ledger: { icon: '📝', label: '台账写入', color: 'var(--c-ledger)' }
+    };
+    var total = Math.max.apply(null, [agent.think_ms || 0].concat(agent.calls.map(function (c) { return c.duration_ms || 0; }))) || 1;
+    var html = '<h2>── Agent 决策链 ──</h2><div class="card">';
+    // Agent 思考
+    var thinkPct = Math.max(3, Math.round((agent.think_ms || 0) / total * 100));
+    html += '<div class="wf-row">' +
+      '<span class="wf-icon">🔄</span>' +
+      '<span class="wf-name">Agent 思考</span>' +
+      '<span class="wf-track"><span class="wf-bar" style="width:' + thinkPct + '%;background:#8c8c8c"></span></span>' +
+      '<span class="wf-dur">' + esc(dur(agent.think_ms)) + '</span>' +
+      '<span class="wf-st">—</span></div>';
+    // 工具调用
+    agent.calls.forEach(function (call) {
+      var meta = TOOL_META[call.tool] || { icon: '🔧', label: call.tool, color: '#9ca3af' };
+      var barPct = Math.max(3, Math.round((call.duration_ms || 0) / total * 100));
+      var barColor = call.status === 'error' ? 'var(--danger)' : meta.color;
+      var statusIcon = call.status === 'ok' ? '✅' : '❌';
+      html += '<div class="wf-row">' +
+        '<span class="wf-icon">' + meta.icon + '</span>' +
+        '<span class="wf-name">' + esc(meta.label) + '</span>' +
+        '<span class="wf-track"><span class="wf-bar" style="width:' + barPct + '%;background:' + barColor + '"></span></span>' +
+        '<span class="wf-dur">' + esc(dur(call.duration_ms)) + '</span>' +
+        '<span class="wf-st">' + statusIcon + '</span></div>';
+      if (call.attempt > 1) {
+        html += '<div style="margin:-2px 0 6px 128px;font-size:11px;color:var(--text-secondary)">' +
+          '🔁 第 ' + call.attempt + ' 次尝试' + (call.error_code ? '（前次失败: ' + esc(call.error_code) + '）' : '') +
+          ' · call ' + esc(call.call_id) + '</div>';
+      }
+    });
+    html += '<div style="margin-top:6px;font-size:11px;color:var(--text-secondary)">数据来源: DSH 会话事件边界</div></div>';
+    return html;
   }
 
   function render(record) {
@@ -335,6 +413,7 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
         (record.task ? '<div><span class="k">任务</span><b>' + esc(record.task) + '</b></div>' : '') +
         (record.status === 'error' ? '<div style="grid-column:1/-1"><span class="k">状态</span><b style="color:var(--danger)">中断：' + esc(record.error || '') + '</b></div>' : '') +
       '</div></div>' +
+      agentChainHtml(record) +
       photosHtml(record.images) +
       '<h2>── 瀑布图（Trace Timeline）──</h2>' +
       '<div class="card">' + waterfall(record) + '</div>' +

@@ -46,6 +46,10 @@ export interface SpanAnalyze {
   scene_hint: string
   /** 解剖场景可见器官(仅 scene_hint=dissection) */
   organs?: string[]
+  /** 图片数据完整性:complete=齐全/partial=有丢失/empty=全部丢失 */
+  data_completeness?: 'complete' | 'partial' | 'empty'
+  /** 工人发送的期望图片数(与 image_count 对比判断丢图) */
+  expected_image_count?: number
   duration_ms?: number
   error?: string
 }

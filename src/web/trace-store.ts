@@ -14,6 +14,13 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import type { AgentTraceData, AnalysisIndex, AnalysisRecord, RecordSummary, SpanRetrieve } from './trace-recorder.js'
 
+// ========== 工具函数 ==========
+
+/** 校验 data_completeness 枚举值 */
+function isValidCompleteness(value: unknown): value is 'complete' | 'partial' | 'empty' {
+  return value === 'complete' || value === 'partial' || value === 'empty'
+}
+
 // ========== 路径(延迟解析 env,便于测试注入 AQUASENSE_CACHE_DIR) ==========
 
 /** 报告目录 */
@@ -297,6 +304,23 @@ export async function patchReportAgent(id: string, agent: AgentTraceData): Promi
       record.span_advice.knowledge_refs_count = metaRefs
     }
   }
+  // 回填 analyze 工具的审计字段(data_completeness/expected_image_count/output_raw)
+  // 桥接层 computeToolMeta 已从工具原始产出提取这些字段,此处透传到 span_analyze
+  const analyzeCall = agent.calls.find(
+    (c) => c.tool === 'aquasense_analyze' && c.status === 'ok' && c.meta
+  )
+  if (analyzeCall?.meta && record.span_analyze) {
+    const meta = analyzeCall.meta
+    if (!record.span_analyze.data_completeness && isValidCompleteness(meta.data_completeness)) {
+      record.span_analyze.data_completeness = meta.data_completeness as 'complete' | 'partial' | 'empty'
+    }
+    if (!record.span_analyze.expected_image_count && typeof meta.expected_image_count === 'number') {
+      record.span_analyze.expected_image_count = meta.expected_image_count
+    }
+    if (!record.span_analyze.output_raw && typeof meta.output_raw === 'string' && meta.output_raw) {
+      record.span_analyze.output_raw = String(meta.output_raw).slice(0, 500)
+    }
+  }
   await writeReport(record)
   await refreshIndexSummary(record)
   const retries = agent.calls.reduce((n, c) => n + Math.max(0, c.attempt - 1), 0)
@@ -383,6 +407,10 @@ export interface RecordQuery {
   cls?: string
   /** 本地日期 YYYY-MM-DD(按记录 ID 的日期段匹配) */
   date?: string
+  /** 低置信度筛选(confidence < 0.8) */
+  low_confidence?: boolean
+  /** 有错误记录筛选(agent_retries > 0 或 cls=unknown) */
+  has_error?: boolean
   limit?: number
   offset?: number
 }
@@ -412,6 +440,8 @@ export async function queryIndex(query: RecordQuery): Promise<RecordQueryResult>
     if (query.cls && r.cls !== query.cls) return false
     // ID 形如 RPT-20260917-100532,第 4..12 位为本地日期
     if (dateKey && r.id.slice(4, 12) !== dateKey) return false
+    if (query.low_confidence && r.confidence >= 0.8) return false
+    if (query.has_error && !((r.agent_retries !== undefined && r.agent_retries > 0) || r.cls === 'unknown')) return false
     return true
   })
 

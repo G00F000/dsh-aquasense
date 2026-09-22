@@ -104,6 +104,11 @@ function operationOf(message: string): 'create' | 'update' {
   return message.includes('已更新') ? 'update' : 'create'
 }
 
+/** 校验 data_completeness 枚举值 */
+function isValidCompleteness(value: unknown): value is 'complete' | 'partial' | 'empty' {
+  return value === 'complete' || value === 'partial' || value === 'empty'
+}
+
 // ========== retrieve span 合成(Agent 转抄可能丢字段,结构化透传优先、字符串反解降级) ==========
 
 /** 从 unknown 读取数字(非 number 返回 undefined,避免缺数据时误报 0 命中) */
@@ -264,12 +269,14 @@ export async function recordChatTrace(args: unknown, result: unknown, ledgerDura
         prompt_length: 0,
         input_tokens: 0,
         output_tokens: 0,
-        output_raw: '',
+        output_raw: typeof analysis.output_raw === 'string' ? String(analysis.output_raw).slice(0, 500) : '',
         cls: String(analysis.cls ?? 'unknown'),
         symptoms: toStringArray(analysis.symptoms),
         severity: String(analysis.severity ?? 'low'),
         confidence: typeof analysis.confidence === 'number' ? analysis.confidence : 0,
-        scene_hint: String(analysis.scene_hint ?? input.scene)
+        scene_hint: String(analysis.scene_hint ?? input.scene),
+        data_completeness: isValidCompleteness(analysis['data_completeness']) ? (analysis['data_completeness'] as 'complete' | 'partial' | 'empty') : undefined,
+        expected_image_count: typeof analysis.expected_image_count === 'number' ? analysis.expected_image_count : undefined
       })
     }
 

@@ -476,6 +476,23 @@ function WaterfallChart({ record }: { record: AnalysisRecord }): ReactNode {
   )
 }
 
+/** span 字段 → agent 工具名映射(upload/retrieve 无对应 agent 工具) */
+const SPAN_TO_AGENT_TOOL: Record<string, string> = {
+  span_analyze: 'aquasense_analyze',
+  span_advice: 'aquasense_advice',
+  span_ledger: 'aquasense_ledger'
+}
+
+/** 查询 agent.calls 中某工具的失败信息(无 agent 或无失败时返回 null) */
+function agentFailureInfo(record: AnalysisRecord, spanField: string): { count: number; errorCode: string } | null {
+  const toolName = SPAN_TO_AGENT_TOOL[spanField]
+  if (!toolName || !record.agent?.calls) return null
+  const failedCalls = record.agent.calls.filter((c) => c.tool === toolName && c.status === 'error')
+  if (failedCalls.length === 0) return null
+  const errorCode = failedCalls.map((c) => c.error_code).filter(Boolean).join(', ') || 'UNKNOWN'
+  return { count: failedCalls.length, errorCode }
+}
+
 /** 单个步骤 Accordion */
 function StepAccordion({
   def,
@@ -490,6 +507,7 @@ function StepAccordion({
 }): ReactNode {
   const data = record[def.field]
   const dur = data?.duration_ms ?? 0
+  const failure = !data ? agentFailureInfo(record, def.field) : null
 
   return (
     <div className="trc-step">
@@ -497,14 +515,26 @@ function StepAccordion({
         <span className="trc-step-icon" style={S.iconBg(def.color)}>{def.icon}</span>
         <span style={{ fontWeight: 600 }}>{def.label}</span>
         <span className="trc-step-right">
-          <span>{durationText(dur)}</span>
-          <span>{data?.error ? '❌' : (dur > 0 ? '✅' : '—')}</span>
+          <span>{failure ? `失败${failure.count}次` : durationText(dur)}</span>
+          <span>{data?.error ? '❌' : failure ? '❌' : (dur > 0 ? '✅' : '—')}</span>
           <span className="trc-step-arrow" style={{ transform: isOpen ? 'rotate(90deg)' : undefined }}>▶</span>
         </span>
       </button>
-      {isOpen && data && (
+      {isOpen && (
         <div className="trc-step-body">
-          {renderStepContent(def.key, data, record)}
+          {data
+            ? renderStepContent(def.key, data, record)
+            : failure
+              ? (
+                <div className="trc-step-field">
+                  <span className="trc-step-label" style={{ color: '#ff4d4f', fontWeight: 600 }}>执行失败</span>
+                  <span className="trc-step-value" style={{ color: '#ff4d4f' }}>
+                    该工具执行 {failure.count} 次均失败（{failure.errorCode}）
+                  </span>
+                </div>
+                )
+              : null
+          }
         </div>
       )}
     </div>
@@ -566,6 +596,16 @@ function renderAnalyzeStep(data: Record<string, unknown>, record?: AnalysisRecor
   const outputTok = data.output_tokens as number ?? 0
   const raw = data.output_raw as string ?? ''
   const err = data.error as string | undefined
+  const completeness = data.data_completeness as string | undefined
+  const expectedImgs = data.expected_image_count as number | undefined
+
+  const completenessDisplay = completeness === 'partial'
+    ? { color: '#d48806', bg: '#fffbe6', icon: '⚠️', text: `图片不完整（期望 ${expectedImgs ?? '?'} 张），结论可能不可靠` }
+    : completeness === 'empty'
+      ? { color: '#ff4d4f', bg: '#fff2f0', icon: '❌', text: '全部图片丢失，结论不可信' }
+      : completeness === 'complete'
+        ? { color: '#52c41a', bg: '#f6ffed', icon: '✓', text: '图片齐全' }
+        : null
 
   return (
     <div className="trc-step-field">
@@ -573,6 +613,14 @@ function renderAnalyzeStep(data: Record<string, unknown>, record?: AnalysisRecor
       <span className="trc-step-value">{record?.model || '—'} (temperature=0.1)</span>
       <span className="trc-step-label">输入</span>
       <span className="trc-step-value">system prompt ({promptLen} chars) + 图片</span>
+      {completenessDisplay && (
+        <>
+          <span className="trc-step-label" style={{ color: completenessDisplay.color, fontWeight: 600 }}>数据完整性</span>
+          <span className="trc-step-value" style={{ color: completenessDisplay.color, background: completenessDisplay.bg, padding: '2px 8px', borderRadius: 4, fontWeight: 500 }}>
+            {completenessDisplay.icon} {completenessDisplay.text}
+          </span>
+        </>
+      )}
       <span className="trc-step-label">输出</span>
       <span className="trc-step-value">
         状态: {CLS_LABEL[cls] || cls}（{cls}）
@@ -750,6 +798,8 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
   const [error, setError] = useState<string | null>(null)
   const [pool, setPool] = useState('')
   const [cls, setCls] = useState('')
+  const [lowConfidence, setLowConfidence] = useState(false)
+  const [hasError, setHasError] = useState(false)
   /** 池号枚举(设置页「AquaSense 设置」配置;/api/pools 拉取失败时兜底默认 4 池) */
   const [pools, setPools] = useState<string[]>(FALLBACK_POOLS)
 
@@ -772,6 +822,8 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
       let url = `${apiBase}/api/records?limit=${PAGE_LIMIT}&offset=${off}`
       if (pool) url += `&pool=${encodeURIComponent(pool)}`
       if (cls) url += `&cls=${encodeURIComponent(cls)}`
+      if (lowConfidence) url += '&low_confidence=1'
+      if (hasError) url += '&has_error=1'
       let resp: Response
       try {
         resp = await fetch(url)
@@ -793,11 +845,13 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
     } finally {
       setLoading(false)
     }
-  }, [loading, offset, pool, cls, records, apiBase])
+  }, [loading, offset, pool, cls, lowConfidence, hasError, records, apiBase])
 
   const applyFilter = useCallback((newPool: string, newCls: string): void => {
     setPool(newPool)
     setCls(newCls)
+    setLowConfidence(false)
+    setHasError(false)
     setRecords([])
     setOffset(0)
     setHasMore(false)
@@ -810,7 +864,7 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
     if (records.length === 0 && offset === 0 && !loading) {
       void fetchPage(true)
     }
-  }, [pool, cls]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pool, cls, lowConfidence, hasError]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     void fetchPage(true)
@@ -1096,6 +1150,32 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
           </select>
           <span className="trc-select-caret">▾</span>
         </span>
+        <button
+          type="button"
+          className="trc-toggle"
+          style={{
+            padding: '4px 10px', borderRadius: 8, border: '1px solid var(--dsw-alias-border,#d9d9d9)',
+            background: lowConfidence ? '#fff7e6' : 'var(--dsw-alias-bg-card,#fff)',
+            color: lowConfidence ? '#d48806' : 'var(--dsw-alias-label-secondary,#7b8088)',
+            fontSize: 12, fontWeight: lowConfidence ? 600 : 400, cursor: 'pointer', whiteSpace: 'nowrap'
+          }}
+          onClick={() => { setLowConfidence((v) => !v); setRecords([]); setOffset(0); setHasMore(false); setError(null); setDetailId(null); setDetailRecord(null) }}
+        >
+          {lowConfidence ? '🔍 低置信度 ✓' : '🔍 低置信度'}
+        </button>
+        <button
+          type="button"
+          className="trc-toggle"
+          style={{
+            padding: '4px 10px', borderRadius: 8, border: '1px solid var(--dsw-alias-border,#d9d9d9)',
+            background: hasError ? '#fff2f0' : 'var(--dsw-alias-bg-card,#fff)',
+            color: hasError ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)',
+            fontSize: 12, fontWeight: hasError ? 600 : 400, cursor: 'pointer', whiteSpace: 'nowrap'
+          }}
+          onClick={() => { setHasError((v) => !v); setRecords([]); setOffset(0); setHasMore(false); setError(null); setDetailId(null); setDetailRecord(null) }}
+        >
+          {hasError ? '⚠️ 有错误 ✓' : '⚠️ 有错误'}
+        </button>
         <span className="trc-count">{total} 条记录</span>
         <button
           type="button"
@@ -1162,6 +1242,11 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend }:
                     {r.agent_retries !== undefined && (
                       <span className="trc-badge" style={{ background: '#4d6bfe1a', color: '#4d6bfe', fontWeight: 600 }}>
                         Agent链路
+                      </span>
+                    )}
+                    {r.agent_retries !== undefined && r.agent_retries > 0 && (
+                      <span className="trc-badge" style={{ background: '#fff2f0', color: '#ff4d4f', fontWeight: 600 }}>
+                        ⚠️ {(r.agent_retry_tool || 'tool').replace(/^aquasense_/, '')} 失败 {r.agent_retries} 次
                       </span>
                     )}
                     <span>{r.alert_level ? 'AI视觉+知识库' : 'AI视觉'}</span><span>·</span>

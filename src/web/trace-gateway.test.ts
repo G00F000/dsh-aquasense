@@ -134,14 +134,16 @@ describe('parseRecordQuery', () => {
       pool: undefined,
       cls: undefined,
       date: undefined,
+      low_confidence: false,
+      has_error: false,
       limit: 50,
       offset: 0
     })
   })
 
   it('合法过滤条件透传', () => {
-    const query = parseRecordQuery(new URLSearchParams('pool=池2&cls=early&date=2026-09-17&limit=10&offset=5'))
-    expect(query).toEqual({ pool: '池2', cls: 'early', date: '2026-09-17', limit: 10, offset: 5 })
+    const query = parseRecordQuery(new URLSearchParams('pool=池2&cls=early&date=2026-09-17&limit=10&offset=5&low_confidence=1&has_error=1'))
+    expect(query).toEqual({ pool: '池2', cls: 'early', date: '2026-09-17', low_confidence: true, has_error: true, limit: 10, offset: 5 })
   })
 
   it('非法 cls/date/limit/pool 超长 → 400 invalid-param', () => {

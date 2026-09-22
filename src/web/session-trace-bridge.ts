@@ -78,7 +78,10 @@ export function computeToolMeta(toolName: string, value: unknown): Record<string
         confidence: typeof v.confidence === 'number' ? v.confidence : 0,
         severity: String(v.severity ?? ''),
         image_count: typeof v.image_count === 'number' ? v.image_count : 0,
-        scene_hint: String(v.scene_hint ?? '')
+        scene_hint: String(v.scene_hint ?? ''),
+        data_completeness: isValidCompleteness(v.data_completeness) ? v.data_completeness : undefined,
+        expected_image_count: typeof v.expected_image_count === 'number' ? v.expected_image_count : undefined,
+        output_raw: typeof v.output_raw === 'string' ? String(v.output_raw).slice(0, 500) : ''
       }
     }
     if (toolName === 'aquasense_advice') {
@@ -186,6 +189,11 @@ function optNum(value: unknown): number | undefined {
 /** 从 unknown 中读取字符串(非 string 返回 fallback) */
 function strOf(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback
+}
+
+/** 校验 data_completeness 枚举值 */
+function isValidCompleteness(value: unknown): value is 'complete' | 'partial' | 'empty' {
+  return value === 'complete' || value === 'partial' || value === 'empty'
 }
 
 /** 从 ledger 工具 arguments JSON 中提取池号(解析失败返回 '') */

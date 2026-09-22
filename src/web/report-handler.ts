@@ -481,7 +481,9 @@ export async function runReportPipeline(
         severity: analysis.severity,
         confidence: analysis.confidence,
         scene_hint: analysis.scene_hint,
-        organs: analysis.organs
+        organs: analysis.organs,
+        data_completeness: analysis.data_completeness,
+        expected_image_count: input.images.length
       })
     } catch (error) {
       // 分析失败:记录 span 错误后中断管线(仍 flush,保证失败可追溯)
