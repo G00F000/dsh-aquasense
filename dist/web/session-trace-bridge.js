@@ -31,8 +31,8 @@ const FILL_DELAYS = [0, 3_000, 10_000, 30_000];
 // 解决方案:订阅 tools/result registry 事件(在 session 事件之前触发),从 result.value 自行计算
 // metadata 存入 Map;bridge 处理 tool/result session 事件时查表补充 call.meta。
 const toolsMetaCache = new Map();
-/** 从工具 result.value 计算结构化元数据(供 UI Agent 决策链摘要) */
-function computeToolMeta(toolName, value) {
+/** 从工具 result.value 计算结构化元数据(供 UI Agent 决策链摘要);导出供测试 */
+export function computeToolMeta(toolName, value) {
     if (!value || typeof value !== 'object')
         return undefined;
     const v = value;
@@ -48,11 +48,17 @@ function computeToolMeta(toolName, value) {
         }
         if (toolName === 'aquasense_advice') {
             const refs = Array.isArray(v.knowledge_refs) ? v.knowledge_refs : [];
-            return {
+            const meta = {
                 alert_level: String(v.alert_level ?? ''),
                 knowledge_refs_count: refs.length,
                 diagnosis_summary: String(v.diagnosis_summary ?? '').slice(0, 200)
             };
+            // 检索元数据:桥接层拿得到 Agent 未转抄失真的原始产出,
+            // 透出供 patchReportAgent 合成 span_retrieve(工具输出含 query 时才附上)
+            const retrieve = retrieveMetaOf(v);
+            if (retrieve)
+                meta.retrieve = retrieve;
+            return meta;
         }
         if (toolName === 'aquasense_ledger') {
             return {
@@ -64,12 +70,41 @@ function computeToolMeta(toolName, value) {
     catch { /* 防御:解析失败不阻断主链路 */ }
     return undefined;
 }
+/** 从 advice 工具原始产出提取 retrieve 元数据(SpanRetrieve 形态,供回填合成 span_retrieve);无 query 时返回 undefined */
+function retrieveMetaOf(v) {
+    const query = strOf(v.query);
+    if (!query)
+        return undefined;
+    const excerpts = Array.isArray(v.retrieve_excerpts)
+        ? v.retrieve_excerpts
+            .filter((e) => !!e && typeof e === 'object' && !Array.isArray(e))
+            .map((e) => ({
+            title: strOf(e.title),
+            from: strOf(e.from) || undefined,
+            locator: strOf(e.locator) || undefined,
+            excerpt_preview: strOf(e.text)
+        }))
+            .filter((e) => e.title || e.excerpt_preview)
+        : [];
+    return {
+        query,
+        channel_a_wiki: optNum(v.channel_a_wiki),
+        channel_b_note: optNum(v.channel_b_note),
+        channel_c_pdf: optNum(v.channel_c_pdf),
+        merged_count: optNum(v.merged_count),
+        excerpts
+    };
+}
 /** 悬挂兜底原因码(turn/end 或 session/disposed 时未闭合的调用) */
 const ABORTED_CODE = 'ABORTED';
 // ========== 数据读取辅助 ==========
 /** 从 unknown 中读取数字(非 number 返回 fallback) */
 function numOf(value, fallback = 0) {
     return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+/** 从 unknown 中读取数字(非 number 返回 undefined,供可选字段;与 numOf 的 0 回退区分,避免缺数据时误报 0 命中) */
+function optNum(value) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 /** 从 unknown 中读取字符串(非 string 返回 fallback) */
 function strOf(value, fallback = '') {
@@ -94,6 +129,24 @@ function poolOfArgs(argumentsJson) {
     catch {
         return '';
     }
+}
+/**
+ * 从 tool/result 事件 data 提取 callId(兼容新旧两种事件结构):
+ *  - 旧版:callId 位于 data 顶层;
+ *  - 新版(DSH ≥0.0.1-rc.5):callId 位于 data.message.source(ToolMessageSource),
+ *    tool/result 顶层不再携带 callId,直接读 data.callId 将永远拿不到。
+ */
+function toolResultCallIdOf(data) {
+    const direct = strOf(data.callId);
+    if (direct)
+        return direct;
+    const message = data.message;
+    if (!message || typeof message !== 'object')
+        return '';
+    const source = message.source;
+    if (!source || typeof source !== 'object')
+        return '';
+    return strOf(source.callId);
 }
 // ========== 核心状态机(导出供测试) ==========
 export class SessionTraceBridge {
@@ -170,7 +223,7 @@ export class SessionTraceBridge {
             const data = event.data;
             if (!data)
                 return;
-            const callId = strOf(data.callId);
+            const callId = toolResultCallIdOf(data);
             if (!callId)
                 return;
             const state = this.stateOf(session);

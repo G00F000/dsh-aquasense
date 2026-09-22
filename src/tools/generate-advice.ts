@@ -14,6 +14,7 @@ import {
   searchKnowledgeMerged,
   getMediaContent,
   getNoteContentByNoteId,
+  countChannel,
   type SearchResult,
   type KnowledgeItem
 } from '../ima/ima-api.js'
@@ -46,6 +47,20 @@ export interface AdviceResult {
   reasoning: string
 }
 
+/** 工具最终产出(AdviceResult + 检索元数据):让检索数据走出工具边界,供 R8 埋点与桥接层合成 span_retrieve */
+export interface AdviceToolOutput extends AdviceResult {
+  /** 知识库查询词 */
+  query: string
+  /** 三通道合并后命中数(按 item.from 归属计数,与 R8 span_retrieve 语义一致) */
+  channel_a_wiki: number
+  channel_b_note: number
+  channel_c_pdf: number
+  /** 合并去重后条目总数 */
+  merged_count: number
+  /** 检索原文摘录结构化数据(比 knowledge_excerpt 字符串多保留通道归属 from,供审计埋点) */
+  retrieve_excerpts: Excerpt[]
+}
+
 /** 知识检索结果(retrieve 步骤产出:查询词 + 三通道命中 + 原文摘录) */
 export interface KnowledgeRetrieval {
   query: string
@@ -71,7 +86,26 @@ export const generateAdvice = defineTool({
         alert_level: { type: 'string', enum: ['P0', 'P1', 'P2'] },
         knowledge_refs: { type: 'array', items: { type: 'string' }, description: '知识库参考来源' },
         knowledge_excerpt: { type: 'array', items: { type: 'string' }, description: '知识库正文原文引用(三段式之"原文引用",格式:《标题》[定位]:「摘录」;定位为 PDF 页码,可定位时透出)' },
-        reasoning: { type: 'string', description: '逻辑推理说明(三段式之"逻辑推理",含结论边界声明)' }
+        reasoning: { type: 'string', description: '逻辑推理说明(三段式之"逻辑推理",含结论边界声明)' },
+        query: { type: 'string', description: '知识库查询词(供审计)' },
+        channel_a_wiki: { type: 'number', description: '通道A(wiki)合并后命中数(供审计)' },
+        channel_b_note: { type: 'number', description: '通道B(note)合并后命中数(供审计)' },
+        channel_c_pdf: { type: 'number', description: '通道C(pdf_content)合并后命中数(供审计)' },
+        merged_count: { type: 'number', description: '三通道合并去重后条目总数(供审计)' },
+        retrieve_excerpts: {
+          type: 'array',
+          description: '知识库原文摘录结构化数据(标题/通道/定位/原文,供审计埋点)',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              title: { type: 'string' },
+              text: { type: 'string' },
+              from: { type: 'string' },
+              locator: { type: 'string' }
+            }
+          }
+        }
       }
     },
     render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
@@ -84,9 +118,26 @@ export const generateAdvice = defineTool({
   async execute(args) {
     const analysis = args.analysis as AnalysisInput
     const retrieval = await retrieveKnowledge(analysis)
-    return generateAdviceInternal(analysis, retrieval.knowledge, retrieval.excerpts)
+    const advice = await generateAdviceInternal(analysis, retrieval.knowledge, retrieval.excerpts)
+    return buildAdviceToolOutput(retrieval, advice)
   }
 })
+
+/**
+ * 组装工具最终产出:处置建议 + 检索元数据(让检索数据走出工具边界,供埋点/桥接层合成 span_retrieve)。
+ * 导出供测试(纯函数,不依赖 IMA 网络)。
+ */
+export function buildAdviceToolOutput(retrieval: KnowledgeRetrieval, advice: AdviceResult): AdviceToolOutput {
+  return {
+    ...advice,
+    query: retrieval.query,
+    channel_a_wiki: countChannel(retrieval.knowledge, 'wiki'),
+    channel_b_note: countChannel(retrieval.knowledge, 'note'),
+    channel_c_pdf: countChannel(retrieval.knowledge, 'pdf_content'),
+    merged_count: retrieval.knowledge?.items.length ?? 0,
+    retrieve_excerpts: retrieval.excerpts
+  }
+}
 
 /**
  * 步骤 1-2:查询 IMA 知识库(三通道合并)并读取命中条目正文摘取原文片段。

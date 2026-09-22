@@ -33,6 +33,19 @@ export interface AdviceResult {
     knowledge_excerpt: string[];
     reasoning: string;
 }
+/** 工具最终产出(AdviceResult + 检索元数据):让检索数据走出工具边界,供 R8 埋点与桥接层合成 span_retrieve */
+export interface AdviceToolOutput extends AdviceResult {
+    /** 知识库查询词 */
+    query: string;
+    /** 三通道合并后命中数(按 item.from 归属计数,与 R8 span_retrieve 语义一致) */
+    channel_a_wiki: number;
+    channel_b_note: number;
+    channel_c_pdf: number;
+    /** 合并去重后条目总数 */
+    merged_count: number;
+    /** 检索原文摘录结构化数据(比 knowledge_excerpt 字符串多保留通道归属 from,供审计埋点) */
+    retrieve_excerpts: Excerpt[];
+}
 /** 知识检索结果(retrieve 步骤产出:查询词 + 三通道命中 + 原文摘录) */
 export interface KnowledgeRetrieval {
     query: string;
@@ -40,6 +53,11 @@ export interface KnowledgeRetrieval {
     excerpts: Excerpt[];
 }
 export declare const generateAdvice: import("@deepseek-ai/dsh-tools").ToolDefinition;
+/**
+ * 组装工具最终产出:处置建议 + 检索元数据(让检索数据走出工具边界,供埋点/桥接层合成 span_retrieve)。
+ * 导出供测试(纯函数,不依赖 IMA 网络)。
+ */
+export declare function buildAdviceToolOutput(retrieval: KnowledgeRetrieval, advice: AdviceResult): AdviceToolOutput;
 /**
  * 步骤 1-2:查询 IMA 知识库(三通道合并)并读取命中条目正文摘取原文片段。
  * 导出供 R8 H5 管线分段埋点(retrieve span)复用;任何失败降级不抛异常。

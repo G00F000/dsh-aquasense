@@ -53,10 +53,11 @@ export interface SpanAnalyze {
 /** Span: 知识库检索 */
 export interface SpanRetrieve {
   query: string
-  channel_a_wiki: number
-  channel_b_note: number
-  channel_c_pdf: number
-  merged_count: number
+  /** 三通道命中数(H5 全量埋点必有;群聊 degraded 反解时缺通道数据,缺省不写) */
+  channel_a_wiki?: number
+  channel_b_note?: number
+  channel_c_pdf?: number
+  merged_count?: number
   excerpts: Array<{ title: string; from?: string; locator?: string; excerpt_preview: string }>
   duration_ms?: number
   error?: string
@@ -69,6 +70,8 @@ export interface SpanAdvice {
   knowledge_refs_count: number
   diagnosis_summary: string
   reasoning_preview: string
+  /** 知识库原文引用(群聊后置收集透传,供详情页 retrieve 兜底展示) */
+  knowledge_excerpt?: string[]
   duration_ms?: number
   error?: string
 }

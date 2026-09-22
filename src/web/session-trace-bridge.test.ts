@@ -200,6 +200,79 @@ describe('SessionTraceBridge 状态机', () => {
     expect(() => bridge.handleEvent(session, { type: 'unknown/type' })).not.toThrow()
     expect(() => bridge.handleEvent(session, { type: 'turn/start', data: { turn: 'x' } })).not.toThrow()
   })
+
+  it('合成 span_retrieve:advice tool/result 携带 meta.retrieve → 回填后落盘检索 span 并修正 refs 计数', async () => {
+    const record = makeGroupRecord('RPT-20260920-1020', '池1', new Date(T0 + 5000).toISOString())
+    record.span_advice = {
+      input_cls: 'disease',
+      alert_level: 'P1',
+      knowledge_refs_count: 0,
+      diagnosis_summary: '状态:disease',
+      reasoning_preview: ''
+    }
+    await writeReport(record)
+    await updateIndex(record)
+    const bridge = new SessionTraceBridge()
+    const session: object = {}
+
+    bridge.handleEvent(session, ev('turn/start', T0, { turn: 11 }))
+    bridge.handleEvent(session, ev('step/start', T0 + 100, { step: 1 }))
+    bridge.handleEvent(session, ev('tool/call', T0 + 200, { name: 'aquasense_advice', callId: 'v1', arguments: '{"analysis":{}}', turn: 11, step: 1 }))
+    bridge.handleEvent(session, ev('tool/result', T0 + 800, {
+      callId: 'v1',
+      meta: {
+        alert_level: 'P1',
+        knowledge_refs_count: 3,
+        diagnosis_summary: '状态:disease',
+        retrieve: {
+          query: '烂鳃 疾病 治疗 鲈鱼',
+          channel_a_wiki: 0,
+          channel_b_note: 0,
+          channel_c_pdf: 3,
+          merged_count: 3,
+          excerpts: [{ title: '大口黑鲈.pdf', from: 'pdf_content', locator: '第126页', excerpt_preview: '原文一' }]
+        }
+      }
+    }))
+    bridge.handleEvent(session, ev('tool/call', T0 + 900, { name: 'aquasense_ledger', callId: 'l1', arguments: '{"pool_id":"池1"}', turn: 11, step: 1 }))
+    bridge.handleEvent(session, ev('tool/result', T0 + 1300, { callId: 'l1' }))
+
+    await sleep(100)
+
+    const after = await readReport('RPT-20260920-1020')
+    expect(after?.span_retrieve).toMatchObject({
+      query: '烂鳃 疾病 治疗 鲈鱼',
+      channel_a_wiki: 0,
+      channel_c_pdf: 3,
+      merged_count: 3
+    })
+    expect(after?.span_retrieve?.excerpts).toEqual([{ title: '大口黑鲈.pdf', from: 'pdf_content', locator: '第126页', excerpt_preview: '原文一' }])
+    expect(after?.span_advice?.knowledge_refs_count).toBe(3)
+  })
+
+  it('已有完整 span_retrieve(query 非空)不被桥接覆盖', async () => {
+    const record = makeGroupRecord('RPT-20260920-1021', '池1', new Date(T0 + 5000).toISOString())
+    record.span_retrieve = { query: '已有查询', channel_c_pdf: 1, excerpts: [] }
+    await writeReport(record)
+    await updateIndex(record)
+    const bridge = new SessionTraceBridge()
+    const session: object = {}
+
+    bridge.handleEvent(session, ev('turn/start', T0, { turn: 12 }))
+    bridge.handleEvent(session, ev('step/start', T0 + 100, { step: 1 }))
+    bridge.handleEvent(session, ev('tool/call', T0 + 200, { name: 'aquasense_advice', callId: 'v2', arguments: '{}', turn: 12, step: 1 }))
+    bridge.handleEvent(session, ev('tool/result', T0 + 800, {
+      callId: 'v2',
+      meta: { alert_level: 'P1', knowledge_refs_count: 2, diagnosis_summary: 'x', retrieve: { query: '新查询', channel_c_pdf: 2, excerpts: [] } }
+    }))
+    bridge.handleEvent(session, ev('tool/call', T0 + 900, { name: 'aquasense_ledger', callId: 'l2', arguments: '{"pool_id":"池1"}', turn: 12, step: 1 }))
+    bridge.handleEvent(session, ev('tool/result', T0 + 1300, { callId: 'l2' }))
+
+    await sleep(100)
+
+    const after = await readReport('RPT-20260920-1021')
+    expect(after?.span_retrieve?.query).toBe('已有查询')
+  })
 })
 
 describe('installSessionTraceBridge 宿主安全', () => {

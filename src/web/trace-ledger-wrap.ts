@@ -17,7 +17,7 @@
 
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { getFeishuUserName, parseDataUrl } from '../feishu/token.js'
-import { AnalysisTracer } from './trace-recorder.js'
+import { AnalysisTracer, type SpanRetrieve } from './trace-recorder.js'
 import { saveReportImages } from './trace-store.js'
 
 // ========== 常量 ==========
@@ -102,6 +102,58 @@ function toStringArray(value: unknown): string[] {
 /** 操作类型判定:recordLedger 以消息文案区分更新/新增 */
 function operationOf(message: string): 'create' | 'update' {
   return message.includes('已更新') ? 'update' : 'create'
+}
+
+// ========== retrieve span 合成(Agent 转抄可能丢字段,结构化透传优先、字符串反解降级) ==========
+
+/** 从 unknown 读取数字(非 number 返回 undefined,避免缺数据时误报 0 命中) */
+function optNum(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * 反解 knowledge_excerpt 字符串(格式《标题》[定位]:「原文」)为结构化摘录;
+ * 降级路径拿不到通道归属(from),逐条容错(解析失败跳过)。导出供测试。
+ */
+export function parseExcerpts(list: string[]): Array<{ title: string; locator?: string; excerpt_preview: string }> {
+  const out: Array<{ title: string; locator?: string; excerpt_preview: string }> = []
+  for (const raw of list) {
+    const m = /^《(.+?)》(.*?):「([\s\S]*)」$/.exec(raw.trim())
+    if (!m) continue
+    const title = m[1].trim()
+    const text = m[3].trim()
+    if (!title || !text) continue
+    const locator = m[2].trim()
+    out.push({ title, ...(locator ? { locator } : {}), excerpt_preview: text })
+  }
+  return out
+}
+
+/** 从 Agent 透传的 advice 对象合成 span_retrieve;无任何检索数据时返回 null(不写 span) */
+function buildRetrieveSpan(advice: Record<string, unknown>): Partial<SpanRetrieve> | null {
+  const query = typeof advice.query === 'string' ? advice.query : ''
+  const rawStructured = Array.isArray(advice.retrieve_excerpts) ? advice.retrieve_excerpts : undefined
+  const excerpts = rawStructured
+    ? (rawStructured as unknown[])
+        .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object' && !Array.isArray(e))
+        .map((e) => ({
+          title: String(e.title ?? ''),
+          from: typeof e.from === 'string' && e.from ? e.from : undefined,
+          locator: typeof e.locator === 'string' && e.locator ? e.locator : undefined,
+          excerpt_preview: String(e.text ?? '')
+        }))
+        .filter((e) => e.title || e.excerpt_preview)
+    : parseExcerpts(toStringArray(advice.knowledge_excerpt))
+  if (excerpts.length === 0 && !query) return null
+  const span: Partial<SpanRetrieve> = { query, excerpts }
+  // 通道计数仅结构化透传时可信(降级反解无通道数据,缺省不写,详情页显示「—」)
+  if (rawStructured) {
+    span.channel_a_wiki = optNum(advice.channel_a_wiki)
+    span.channel_b_note = optNum(advice.channel_b_note)
+    span.channel_c_pdf = optNum(advice.channel_c_pdf)
+    span.merged_count = optNum(advice.merged_count)
+  }
+  return span
 }
 
 // ========== 图片下载(群聊发图,详情页展示) ==========
@@ -225,13 +277,20 @@ export async function recordChatTrace(args: unknown, result: unknown, ledgerDura
     const advice = input.advice
     if (advice) {
       const refs = toStringArray(advice.knowledge_refs)
+      const excerpts = toStringArray(advice.knowledge_excerpt)
       tracer.recordSpan('advice', {
         input_cls: String(analysis?.cls ?? input.scene),
         alert_level: String(advice.alert_level ?? 'P2'),
         knowledge_refs_count: refs.length,
         diagnosis_summary: String(advice.diagnosis_summary ?? ''),
-        reasoning_preview: String(advice.reasoning ?? '').slice(0, REASONING_PREVIEW_LENGTH)
+        reasoning_preview: String(advice.reasoning ?? '').slice(0, REASONING_PREVIEW_LENGTH),
+        ...(excerpts.length > 0 ? { knowledge_excerpt: excerpts } : {})
       })
+
+      // retrieve:结构化透传优先(工具原始产出),降级反解 knowledge_excerpt 字符串;
+      // 桥接层会以未失真产出权威覆盖(见 trace-store.patchReportAgent)
+      const retrieveSpan = buildRetrieveSpan(advice)
+      if (retrieveSpan) tracer.recordSpan('retrieve', retrieveSpan)
     }
 
     // ledger:真实耗时来自包装器测量

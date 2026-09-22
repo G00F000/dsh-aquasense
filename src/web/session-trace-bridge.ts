@@ -67,8 +67,8 @@ const FILL_DELAYS = [0, 3_000, 10_000, 30_000] as const
 // metadata 存入 Map;bridge 处理 tool/result session 事件时查表补充 call.meta。
 const toolsMetaCache = new Map<string, Record<string, unknown>>()
 
-/** 从工具 result.value 计算结构化元数据(供 UI Agent 决策链摘要) */
-function computeToolMeta(toolName: string, value: unknown): Record<string, unknown> | undefined {
+/** 从工具 result.value 计算结构化元数据(供 UI Agent 决策链摘要);导出供测试 */
+export function computeToolMeta(toolName: string, value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object') return undefined
   const v = value as Record<string, unknown>
   try {
@@ -83,11 +83,16 @@ function computeToolMeta(toolName: string, value: unknown): Record<string, unkno
     }
     if (toolName === 'aquasense_advice') {
       const refs = Array.isArray(v.knowledge_refs) ? v.knowledge_refs : []
-      return {
+      const meta: Record<string, unknown> = {
         alert_level: String(v.alert_level ?? ''),
         knowledge_refs_count: refs.length,
         diagnosis_summary: String(v.diagnosis_summary ?? '').slice(0, 200)
       }
+      // 检索元数据:桥接层拿得到 Agent 未转抄失真的原始产出,
+      // 透出供 patchReportAgent 合成 span_retrieve(工具输出含 query 时才附上)
+      const retrieve = retrieveMetaOf(v)
+      if (retrieve) meta.retrieve = retrieve
+      return meta
     }
     if (toolName === 'aquasense_ledger') {
       return {
@@ -97,6 +102,31 @@ function computeToolMeta(toolName: string, value: unknown): Record<string, unkno
     }
   } catch { /* 防御:解析失败不阻断主链路 */ }
   return undefined
+}
+
+/** 从 advice 工具原始产出提取 retrieve 元数据(SpanRetrieve 形态,供回填合成 span_retrieve);无 query 时返回 undefined */
+function retrieveMetaOf(v: Record<string, unknown>): Record<string, unknown> | undefined {
+  const query = strOf(v.query)
+  if (!query) return undefined
+  const excerpts = Array.isArray(v.retrieve_excerpts)
+    ? (v.retrieve_excerpts as unknown[])
+        .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object' && !Array.isArray(e))
+        .map((e) => ({
+          title: strOf(e.title),
+          from: strOf(e.from) || undefined,
+          locator: strOf(e.locator) || undefined,
+          excerpt_preview: strOf(e.text)
+        }))
+        .filter((e) => e.title || e.excerpt_preview)
+    : []
+  return {
+    query,
+    channel_a_wiki: optNum(v.channel_a_wiki),
+    channel_b_note: optNum(v.channel_b_note),
+    channel_c_pdf: optNum(v.channel_c_pdf),
+    merged_count: optNum(v.merged_count),
+    excerpts
+  }
 }
 
 /** 悬挂兜底原因码(turn/end 或 session/disposed 时未闭合的调用) */
@@ -146,6 +176,11 @@ interface BridgeState {
 /** 从 unknown 中读取数字(非 number 返回 fallback) */
 function numOf(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+/** 从 unknown 中读取数字(非 number 返回 undefined,供可选字段;与 numOf 的 0 回退区分,避免缺数据时误报 0 命中) */
+function optNum(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 /** 从 unknown 中读取字符串(非 string 返回 fallback) */

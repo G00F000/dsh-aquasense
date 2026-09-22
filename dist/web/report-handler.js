@@ -21,6 +21,7 @@ import { pushAbnormalAlert } from '../scheduler/s9-reminder.js';
 import { buildPrompt, callVisionModelWithUsage, parseAnalysisResponse } from '../tools/analyze-image.js';
 import { generateAdviceInternal, retrieveKnowledge } from '../tools/generate-advice.js';
 import { recordLedger } from '../tools/record-ledger.js';
+import { countChannel } from '../ima/ima-api.js';
 import { saveReportImages } from './trace-store.js';
 // ========== 常量 ==========
 /** H5 提交/进度接口路径(remind-gateway 分流用) */
@@ -258,10 +259,6 @@ function pickLedgerOutcome(result) {
         };
     }
     return { success: false, message: '台账工具返回结果非法' };
-}
-/** 统计某检索通道的命中数 */
-function countChannel(knowledge, from) {
-    return knowledge ? knowledge.items.filter((item) => item.from === from).length : 0;
 }
 /**
  * 启动一次 H5 提交处理:创建 job → 异步跑管线 → 立即返回 job。

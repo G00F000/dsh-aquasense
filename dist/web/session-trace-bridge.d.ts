@@ -32,6 +32,8 @@ interface TraceEvent {
     time?: unknown;
     data?: unknown;
 }
+/** 从工具 result.value 计算结构化元数据(供 UI Agent 决策链摘要);导出供测试 */
+export declare function computeToolMeta(toolName: string, value: unknown): Record<string, unknown> | undefined;
 export declare class SessionTraceBridge {
     private readonly states;
     /** 会话事件入口(纪律4:调用方已包 try-catch,此处仍防御) */

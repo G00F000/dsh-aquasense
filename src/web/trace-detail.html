@@ -200,8 +200,17 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
       errLine(span);
   }
 
-  function stepRetrieve(span) {
-    if (!span) return '<p style="color:var(--text-secondary)">该步骤未执行（状态为正常时无需检索知识库）。</p>';
+  function stepRetrieve(span, record) {
+    if (!span) {
+      var adv = record && record.span_advice;
+      var refs = adv && adv.knowledge_refs_count ? adv.knowledge_refs_count : 0;
+      var exs = adv && adv.knowledge_excerpt ? adv.knowledge_excerpt : [];
+      if (refs > 0 || exs.length > 0) {
+        var list = exs.map(function (t) { return '<div class="q">「' + esc(t) + '」</div>'; }).join('');
+        return '<p style="color:var(--text-secondary)">该步骤已执行，但检索明细未落盘：知识来源 ' + esc(refs) + ' 条（未记录原文）。</p>' + list;
+      }
+      return '<p style="color:var(--text-secondary)">该步骤未执行（状态为正常时无需检索知识库）。</p>';
+    }
     var hits = (span.excerpts || []).map(function (e) {
       return '<div class="hit">' +
         '<div class="t">📄 ' + esc(e.title) + ' <span class="chip">' + esc(fromName(e.from)) + '</span>' +
@@ -210,10 +219,10 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
       '</div>';
     }).join('');
     return kv('查询', '<span class="mono">' + esc(span.query || '—') + '</span>') +
-      kv('通道A', 'wiki 命中 ' + esc(span.channel_a_wiki || 0) + ' 条') +
-      kv('通道B', 'note 命中 ' + esc(span.channel_b_note || 0) + ' 条') +
-      kv('通道C', 'PDF 命中 ' + esc(span.channel_c_pdf || 0) + ' 条') +
-      kv('合并去重', esc(span.merged_count || 0) + ' 条') +
+      kv('通道A', span.channel_a_wiki == null ? '未记录' : 'wiki 命中 ' + esc(span.channel_a_wiki) + ' 条') +
+      kv('通道B', span.channel_b_note == null ? '未记录' : 'note 命中 ' + esc(span.channel_b_note) + ' 条') +
+      kv('通道C', span.channel_c_pdf == null ? '未记录' : 'PDF 命中 ' + esc(span.channel_c_pdf) + ' 条') +
+      kv('合并去重', span.merged_count == null ? '未记录' : esc(span.merged_count) + ' 条') +
       hits +
       kv('耗时', esc(dur(span.duration_ms))) + errLine(span);
   }
@@ -298,7 +307,7 @@ details.step[open] summary{border-bottom:1px solid var(--border)}
       return '<details class="step"' + (span && !span.error && s.key === 'analyze' ? ' open' : '') + '>' +
         '<summary><span>' + s.icon + '</span><span class="st-name">' + esc(s.name) + '</span>' +
         '<span class="st-dur">' + esc(span ? dur(span.duration_ms) : '未执行') + '</span><span>' + st + '</span></summary>' +
-        '<div class="step-detail">' + renderers[s.key](span) + '</div>' +
+        '<div class="step-detail">' + renderers[s.key](span, record) + '</div>' +
       '</details>';
     }).join('');
   }

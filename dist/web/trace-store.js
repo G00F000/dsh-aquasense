@@ -254,6 +254,20 @@ export async function patchReportAgent(id, agent) {
             span.duration_ms = call.duration_ms;
         }
     }
+    // 合成 span_retrieve:桥接层持有 advice 工具的未失真产出(Agent 转抄可能丢字段),
+    // 这里以 meta.retrieve 权威覆盖缺失或 degraded(query 为空)的检索 span
+    const adviceCall = agent.calls.find((c) => c.tool === 'aquasense_advice' && c.status === 'ok' && c.meta && typeof c.meta.retrieve === 'object');
+    if (adviceCall?.meta) {
+        const retrieve = adviceCall.meta.retrieve;
+        if (retrieve && (!record.span_retrieve || (!record.span_retrieve.query && retrieve.query))) {
+            record.span_retrieve = retrieve;
+        }
+        // 修正 agent 转抄丢失的知识来源计数(如 RPT-20260922-161145 refs=0 vs meta=3)
+        const metaRefs = typeof adviceCall.meta.knowledge_refs_count === 'number' ? adviceCall.meta.knowledge_refs_count : 0;
+        if (record.span_advice && metaRefs > record.span_advice.knowledge_refs_count) {
+            record.span_advice.knowledge_refs_count = metaRefs;
+        }
+    }
     await writeReport(record);
     await refreshIndexSummary(record);
     const retries = agent.calls.reduce((n, c) => n + Math.max(0, c.attempt - 1), 0);

@@ -9,7 +9,7 @@
  * 容错原则:知识库不可用不阻断主流程,降级为内置通用建议模板。
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { searchKnowledgeMerged, getMediaContent, getNoteContentByNoteId } from '../ima/ima-api.js';
+import { searchKnowledgeMerged, getMediaContent, getNoteContentByNoteId, countChannel } from '../ima/ima-api.js';
 import { normalizeOcrText } from '../ima/pdf-content-search.js';
 export const generateAdvice = defineTool({
     name: 'aquasense_advice',
@@ -29,7 +29,26 @@ export const generateAdvice = defineTool({
                 alert_level: { type: 'string', enum: ['P0', 'P1', 'P2'] },
                 knowledge_refs: { type: 'array', items: { type: 'string' }, description: '知识库参考来源' },
                 knowledge_excerpt: { type: 'array', items: { type: 'string' }, description: '知识库正文原文引用(三段式之"原文引用",格式:《标题》[定位]:「摘录」;定位为 PDF 页码,可定位时透出)' },
-                reasoning: { type: 'string', description: '逻辑推理说明(三段式之"逻辑推理",含结论边界声明)' }
+                reasoning: { type: 'string', description: '逻辑推理说明(三段式之"逻辑推理",含结论边界声明)' },
+                query: { type: 'string', description: '知识库查询词(供审计)' },
+                channel_a_wiki: { type: 'number', description: '通道A(wiki)合并后命中数(供审计)' },
+                channel_b_note: { type: 'number', description: '通道B(note)合并后命中数(供审计)' },
+                channel_c_pdf: { type: 'number', description: '通道C(pdf_content)合并后命中数(供审计)' },
+                merged_count: { type: 'number', description: '三通道合并去重后条目总数(供审计)' },
+                retrieve_excerpts: {
+                    type: 'array',
+                    description: '知识库原文摘录结构化数据(标题/通道/定位/原文,供审计埋点)',
+                    items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                            title: { type: 'string' },
+                            text: { type: 'string' },
+                            from: { type: 'string' },
+                            locator: { type: 'string' }
+                        }
+                    }
+                }
             }
         },
         render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
@@ -42,9 +61,25 @@ export const generateAdvice = defineTool({
     async execute(args) {
         const analysis = args.analysis;
         const retrieval = await retrieveKnowledge(analysis);
-        return generateAdviceInternal(analysis, retrieval.knowledge, retrieval.excerpts);
+        const advice = await generateAdviceInternal(analysis, retrieval.knowledge, retrieval.excerpts);
+        return buildAdviceToolOutput(retrieval, advice);
     }
 });
+/**
+ * 组装工具最终产出:处置建议 + 检索元数据(让检索数据走出工具边界,供埋点/桥接层合成 span_retrieve)。
+ * 导出供测试(纯函数,不依赖 IMA 网络)。
+ */
+export function buildAdviceToolOutput(retrieval, advice) {
+    return {
+        ...advice,
+        query: retrieval.query,
+        channel_a_wiki: countChannel(retrieval.knowledge, 'wiki'),
+        channel_b_note: countChannel(retrieval.knowledge, 'note'),
+        channel_c_pdf: countChannel(retrieval.knowledge, 'pdf_content'),
+        merged_count: retrieval.knowledge?.items.length ?? 0,
+        retrieve_excerpts: retrieval.excerpts
+    };
+}
 /**
  * 步骤 1-2:查询 IMA 知识库(三通道合并)并读取命中条目正文摘取原文片段。
  * 导出供 R8 H5 管线分段埋点(retrieve span)复用;任何失败降级不抛异常。

@@ -46,7 +46,14 @@ export declare function formatPoolIds(pools?: string[]): string;
 export declare function sanitizeUserMap(raw: unknown): Record<string, string>;
 /** 当前生效用户映射表(业务消费:台账自动填充上报人) */
 export declare function getUserMap(): Record<string, string>;
-/** 根据 open_id 获取用户名(优先映射表,未命中返回空字符串) */
+/** 根据 open_id 获取用户名(优先映射表,未命中返回空字符串)
+ *
+ * 匹配策略(应对 dsh-lark 消息桥截断 open_id 的情况):
+ *  1. 精确匹配(快速路径)
+ *  2. 前缀匹配:若传入的 open_id 是映射表某 key 的前缀,且仅命中一条,则采纳(高置信度)
+ *  3. 映射表 key 以传入 open_id 开头:同上前缀方向反转(映射表 key 被截断的场景)
+ *  4. 以上均未命中则返回空字符串
+ */
 export declare function getUserNameByOpenId(openId: string): string;
 /**
  * 保存池号配置(设置页「保存配置」;sanitize 后写盘并刷新缓存)。

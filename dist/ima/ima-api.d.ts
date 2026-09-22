@@ -93,3 +93,5 @@ export declare function getMediaContent(mediaId: string): Promise<string>;
  * 去重须同时比对标题:同一篇笔记/同一本书可能被多路命中(媒体标识不同但标题相同)。
  */
 export declare function searchKnowledgeMerged(rawQuery: string): Promise<SearchResult>;
+/** 统计合并结果中某检索通道的命中数(按 item.from 归属计数,与 R8 span_retrieve 埋点语义一致) */
+export declare function countChannel(knowledge: SearchResult | null, from: KnowledgeItem['from']): number;

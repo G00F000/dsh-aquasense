@@ -38,7 +38,8 @@ import {
   type KnowledgeRetrieval
 } from '../tools/generate-advice.js'
 import { recordLedger } from '../tools/record-ledger.js'
-import type { KnowledgeItem, SearchResult } from '../ima/ima-api.js'
+import type { SearchResult } from '../ima/ima-api.js'
+import { countChannel } from '../ima/ima-api.js'
 import { saveReportImages } from './trace-store.js'
 
 // ========== 常量 ==========
@@ -387,11 +388,6 @@ function pickLedgerOutcome(result: unknown): LedgerOutcome {
     }
   }
   return { success: false, message: '台账工具返回结果非法' }
-}
-
-/** 统计某检索通道的命中数 */
-function countChannel(knowledge: SearchResult | null, from: KnowledgeItem['from']): number {
-  return knowledge ? knowledge.items.filter((item) => item.from === from).length : 0
 }
 
 /**

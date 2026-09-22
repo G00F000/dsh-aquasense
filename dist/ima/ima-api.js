@@ -502,3 +502,7 @@ export async function searchKnowledgeMerged(rawQuery) {
     console.log(`[ima] 三通道检索:note=${noteHits.size}, pdf=${pdfHits.length}, wiki=${wikiHits.size}, 合并后=${merged.length}`);
     return { items: merged.slice(0, MERGE_CONFIG.totalLimit), total: merged.length };
 }
+/** 统计合并结果中某检索通道的命中数(按 item.from 归属计数,与 R8 span_retrieve 埋点语义一致) */
+export function countChannel(knowledge, from) {
+    return knowledge ? knowledge.items.filter((item) => item.from === from).length : 0;
+}

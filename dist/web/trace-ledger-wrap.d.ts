@@ -16,6 +16,15 @@
  */
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 /**
+ * 反解 knowledge_excerpt 字符串(格式《标题》[定位]:「原文」)为结构化摘录;
+ * 降级路径拿不到通道归属(from),逐条容错(解析失败跳过)。导出供测试。
+ */
+export declare function parseExcerpts(list: string[]): Array<{
+    title: string;
+    locator?: string;
+    excerpt_preview: string;
+}>;
+/**
  * 组装并写入一条简化分析记录;全量捕获异常,不向调用方抛出。
  */
 export declare function recordChatTrace(args: unknown, result: unknown, ledgerDurationMs: number): Promise<void>;

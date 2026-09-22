@@ -601,7 +601,8 @@ tool/result (callId=X)         ──────►   calls[].duration_ms / sta
 - H5 链路（`report-handler.ts` 直调埋点）不接桥接，无 agent 字段
 
 **边界（诚实声明）**：
-- 视觉模型 Token/知识库命中数在 agent 层拿不到——仍需工具内埋点（H5 已有 `callVisionModelWithUsage`；群聊维持「—」展示）
+- 视觉模型 Token 在 agent 层拿不到——仍需工具内埋点（H5 已有 `callVisionModelWithUsage`；群聊维持「—」展示）
+- 知识库检索数据（查询词/三通道命中/原文摘录）经 `aquasense_advice` 输出透出工具边界，由桥接层回填 `span_retrieve`（见 §4.1）
 - 桥接不读日志文件（`~/.dsh/sessions/*.jsonl`），只订阅进程内实时事件；插件晚挂载/中途重启的历史事件不可回溯（记录缺失 agent 字段，UI 自动隐藏该区块）
 
 **许可说明**：dsh-observe 为 Apache-2.0——本模块为原创实现，仅借鉴其事件配对/悬挂兜底/WeakMap 设计模式，不复制代码、无许可证义务。
@@ -658,6 +659,8 @@ Agent 调用 aquasense_ledger:
 **实际实现**：群聊场景用「注册期包装（后置收集）」的 `trace-ledger-wrap.ts`——透传台账工具定义、仅在 execute 后追加简化记录（零修改 record-ledger.ts；耗时取包装器实测、无 Token 数据）；H5 场景由 `report-handler.ts` 直调底层导出函数（`callVisionModelWithUsage`/`retrieveKnowledge`/`generateAdviceInternal`/`recordLedger.execute`），精确收集每个 Span 的耗时与 Token。
 
 **方式 B 升级（v1.8 ⏳ 待实施）**：群聊链路改为「会话事件桥接」——新增 `session-trace-bridge.ts` 订阅 `ctx.on('session/event')`，对 `aquasense_analyze/advice/ledger` 的 tool/call ↔ tool/result 配对采集精确耗时/错误/重试（attempt 计数），turn/end 或三工具收齐后回填 `AnalysisRecord.agent`（详见 §3.6）；`trace-ledger-wrap.ts` 职责收缩为图片下载落盘 + upload Span 补记，写入以 `chat_id + turn` 去重键幂等合并。H5 链路不变。
+
+**群聊 retrieve span 合成**：群聊无独立检索工具调用，`span_retrieve` 分两层合成——① `recordChatTrace` 从 Agent 透传的 advice 参数合成（优先结构化 `retrieve_excerpts`，降级反解 `knowledge_excerpt` 字符串，通道计数缺省不臆造）；② 桥接层持有 advice 工具的未失真产出（Agent 转抄可能丢字段），回填时以 `meta.retrieve` 权威覆盖缺失或 degraded（query 为空）的 `span_retrieve`，并修正 `span_advice.knowledge_refs_count`。详情页在无 retrieve span 但 advice 有引用时展示「知识来源 N 条（未记录原文）」而非「该步骤未执行」。
 
 **图片素材落盘（两路）**：群聊侧 `saveChatImages` 下载工人图片（data URL 直解析／http(s) URL 走网络，30s 超时，逐张容错）→ `saveReportImages` 落盘并补记 upload Span（image_count/image_names/image_sizes）；H5 侧管线收到 base64 后直接 `saveReportImages` 落盘。落盘失败仅 warn，不影响 trace 与主链路。
 
