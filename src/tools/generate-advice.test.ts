@@ -73,4 +73,15 @@ describe('buildAdviceToolOutput', () => {
     expect(out.merged_count).toBe(0)
     expect(out.retrieve_excerpts).toEqual([])
   })
+
+  it('摘录可选字段(locator/from)为 undefined 时从产出省略键(避免 DSH 非 lossless JSON 报错)', () => {
+    const retrieval: KnowledgeRetrieval = {
+      query: '烂鳃',
+      knowledge: { items: [], total: 0 },
+      // wiki 命中无 locator、无页码 PDF 命中 locator 为 undefined,构造时不得残留 undefined 键
+      excerpts: [{ title: '图谱.pdf', text: '原文二', from: 'pdf_content', locator: undefined }]
+    }
+    const out = buildAdviceToolOutput(retrieval, BASE_ADVICE)
+    expect(Object.keys(out.retrieve_excerpts[0])).toEqual(['title', 'text', 'from'])
+  })
 })

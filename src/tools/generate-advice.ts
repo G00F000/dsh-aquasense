@@ -135,7 +135,8 @@ export function buildAdviceToolOutput(retrieval: KnowledgeRetrieval, advice: Adv
     channel_b_note: countChannel(retrieval.knowledge, 'note'),
     channel_c_pdf: countChannel(retrieval.knowledge, 'pdf_content'),
     merged_count: retrieval.knowledge?.items.length ?? 0,
-    retrieve_excerpts: retrieval.excerpts
+    // 返回前统一去 undefined 化:可选字段缺省时省略键,undefined 值会被 DSH 判定为非 lossless JSON 报错
+    retrieve_excerpts: retrieval.excerpts.map((e) => makeExcerpt(e, e.text))
   }
 }
 
@@ -339,7 +340,7 @@ async function extractExcerpts(
       // 1. note/pdf_content 命中带高亮:高亮即接口/索引给出的命中处原文,直接作引用
       if (item.highlight) {
         const quote = cleanHighlight(item.highlight, keywords)
-        if (quote) results.push({ title: item.title, text: quote, from: item.from, locator: item.locator })
+        if (quote) results.push(makeExcerpt(item, quote))
         continue
       }
       // 2. 无高亮:读正文摘取(note 命中走 note_id 直读,标识与 media_id 不同)
@@ -352,12 +353,24 @@ async function extractExcerpts(
         continue
       }
       const text = extractRelevantSnippet(content, keywords)
-      if (text) results.push({ title: item.title, text, from: item.from, locator: item.locator })
+      if (text) results.push(makeExcerpt(item, text))
     } catch (error) {
       console.warn(`[aquasense] 正文读取失败(《${item.title}》):`, error instanceof Error ? error.message : error)
     }
   }
   return results
+}
+
+/**
+ * 构造摘录条目:可选字段(from/locator)缺省时省略键,避免 undefined 值进入 DSH 工具产出被判定为非 lossless JSON 而报错。
+ */
+function makeExcerpt(item: Pick<Excerpt, 'title' | 'from' | 'locator'>, text: string): Excerpt {
+  return {
+    title: item.title,
+    text,
+    ...(item.from ? { from: item.from } : {}),
+    ...(item.locator ? { locator: item.locator } : {})
+  }
 }
 
 /**
