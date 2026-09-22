@@ -227,3 +227,45 @@ function sceneHintToScene(hint?: string): Scene | null {
     default: return null // inspection 或无效值:不改变路由,保持兜底
   }
 }
+
+// ─── 多场景文本检测 ───
+
+/** 可被文本解析器拆分的场景关键词(与 detectIntent 的匹配规则对齐) */
+const SCENE_DETECT_PATTERNS: Array<{ scene: Scene; pattern: RegExp }> = [
+  { scene: 'temperature', pattern: /水温|棚温|温度|摄氏/ },
+  { scene: 'feeding', pattern: /喂食|投喂|吃料|摄食|饲料|喂了|吃了/ },
+  { scene: 'medication', pattern: /用药|药品|药量|泼洒|拌料|消毒|药物|拌药/ },
+  { scene: 'water_quality', pattern: /水质|溶氧|氨氮|ph|亚硝酸|水色|透明度/ },
+  { scene: 'death', pattern: /死亡|死了|死鱼|浮尸|翻白/ },
+  { scene: 'dissection', pattern: /解剖|解开了|内脏|器官|肝|胆|肠|鳃|脾|鳔|肾/ },
+]
+
+/**
+ * 检测文本是否包含多个场景类型(日报合并文本)
+ *
+ * 返回命中的场景列表(去重,按优先级排序)。
+ * 仅 temperature/feeding/medication 支持程序化拆分;
+ * 其他场景(如 death+temperature)返回单场景,由 Agent 正常编排。
+ *
+ * @returns 命中的可拆分场景列表,0 或 1 个元素表示单场景文本
+ */
+export function detectMultiScene(content: string): Scene[] {
+  const text = content.toLowerCase()
+  const hitScenes = new Set<Scene>()
+
+  for (const { scene, pattern } of SCENE_DETECT_PATTERNS) {
+    if (pattern.test(text)) {
+      hitScenes.add(scene)
+    }
+  }
+
+  // 仅 temperature/feeding/medication 支持程序化拆分
+  const splittable: Scene[] = []
+  for (const s of hitScenes) {
+    if (s === 'temperature' || s === 'feeding' || s === 'medication') {
+      splittable.push(s)
+    }
+  }
+
+  return splittable
+}

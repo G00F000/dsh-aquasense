@@ -167,7 +167,48 @@ Agent: 按 worker 回复确定 scene → 补充描述后调用 ledger 落对应�
 3. 如果 `scene_hint` 为 `inspection` 且无文字描述 → 执行追问流程(3.2 追问流程)
 4. 如果 `scene_hint` 为具体场景(非 inspection) → 直接落对应表
 5. 用判断后的 scene 调用 `aquasense_ledger` 落对应表
-6. 如果 `scene_hint` 与文字关键词冲突(如文字说"水质"但图片是死鱼),以文字为准——工人自己知道在汇报什么
+6. 如果 `scene_hint` 与文字关键词冲突(如文字说“水质”但图片是死鱼),以文字为准——工人自己知道在汇报什么
+
+### 3.3 多场景日报文本(程序化拆分)
+
+工人可能在一条消息中汇报多种数据(如“水温+喂食+拌药”),此时 `detectMultiScene(text)` 返回多个场景,触发程序化拆分流程。
+
+**支持拆分的场景**:temperature / feeding / medication
+**不支持拆分的场景**:death / dissection / water_quality / inspection(这些场景保持单场景路由,由 Agent 正常编排)
+
+**拆分流程**:
+```
+Worker: “水温23℃ 喂食:1号池3.2kg 吃食情况:秒光 拌药情况:1.金莲清毒康:280g 拌药的第三天”
+    │
+    ▼
+detectMultiScene(text) → [temperature, feeding, medication]
+    │ (多个可拆分场景)
+    ▼
+parseDailyReport(text) → entries[]
+    │ [
+    │   { scene: temperature, fields: {池号: 池1, 水温(℃): 23} },
+    │   { scene: feeding, fields: {池号: 池1, 投喂量(kg): 3.2, 摄食情况: 秒光} },
+    │   { scene: medication, fields: {池号: 全塘, 药品名称: 金莲清毒康, 用药剂量: 280g, 用药方式: 拌料, 备注: 拌药第3天} }
+    │ ]
+    ▼
+逐条调用 aquasense_ledger(scene + fields + open_id)
+```
+
+**拆分规则**:
+- 池号未指定时默认“全塘”(展开为所有配置池,如池1-池4各一条)
+- 药品标记“暂无”时跳过该条
+- “吃食情况/摄食情况”归入最近的喂食块
+- “拌药的第N天”类上下文归入最近的用药块作为备注
+- 上报人由 open_id 自动解析,拆分器不填充
+
+**识别多场景的关键词匹配**:
+| 场景 | 触发关键词 |
+|------|-----------|
+| temperature | 水温/棚温/温度/摄氏 |
+| feeding | 喂食/投喂/吃料/摄食/饲料 |
+| medication | 用药/药品/药量/泼洒/拌料/消毒/拌药 |
+
+当文本命中 2 个及以上可拆分场景时,Agent 应优先使用 `parseDailyReport` 拆分后逐条落表,而非手动解析。
 
 ## 4. 工具编排规范
 
@@ -196,7 +237,7 @@ Agent: 按 worker 回复确定 scene → 补充描述后调用 ledger 落对应�
 - 池号缺失时必须追问(以设置页「AquaSense 设置」配置的枚举为准,默认池1/池2/池3/池4),不写无池号记录。
 - 上报人必须取"发消息的人"(消息发送者 open_id 自动解析),不得沿用记忆中的姓名或替他人署名。
 - 口语/错别字先按语义补全:"溶养"→溶氧,"蔫/没精神"→活动减少,"死了2条"→死亡数量 2。
-- 多信息混杂(如"池3水温26度喂了20kg")→ 拆成温度表 + 喂食表两条记录,分别落表。
+- 多信息混杂(如“池3水温26度喂了20kg”)→ 调用 `parseDailyReport` 拆分为温度表 + 喂食表两条记录,逐条调用 `aquasense_ledger` 落表。
 - 工人发"池3死了3条鱼"+ 图:完整链 = analyze → advice → ledger(death 表,fields 含死亡数量 3,预警级别取 advice.alert_level)。
 
 ## 6. 回复风格
