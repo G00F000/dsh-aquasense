@@ -16,7 +16,7 @@
  */
 
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
-import { getFeishuUserName, parseDataUrl } from '../feishu/token.js'
+import { getFeishuUserName, parseDataUrl, downloadImageWithFallback, isImageUrlExpired, isFeishuInternalUrl } from '../feishu/token.js'
 import { AnalysisTracer, type SpanRetrieve } from './trace-recorder.js'
 import { saveReportImages } from './trace-store.js'
 
@@ -163,7 +163,7 @@ function buildRetrieveSpan(advice: Record<string, unknown>): Partial<SpanRetriev
 
 // ========== 图片下载(群聊发图,详情页展示) ==========
 
-/** 下载一张工人发送的图片(data URL 直接解析;http(s) URL 走网络);失败返回 null */
+/** 下载一张工人发送的图片(data URL 直接解析;http(s) URL 和飞书内部URL 走网络);失败返回 null */
 async function downloadChatImage(url: string): Promise<{ data: string; mimeType: string; name: string } | null> {
   try {
     if (url.startsWith('data:')) {
@@ -175,17 +175,25 @@ async function downloadChatImage(url: string): Promise<{ data: string; mimeType:
         name: `image-${Date.now()}${parsed.mimeType === 'image/png' ? '.png' : '.jpg'}`
       }
     }
-    if (!url.startsWith('http://') && !url.startsWith('https://')) return null
-    const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) })
-    if (!resp.ok) return null
-    const buffer = Buffer.from(await resp.arrayBuffer())
-    const ct = resp.headers.get('content-type') || ''
-    let mimeType = 'image/jpeg'
-    if (ct.includes('png')) mimeType = 'image/png'
-    else if (ct.includes('webp')) mimeType = 'image/webp'
-    else if (ct.includes('gif')) mimeType = 'image/gif'
+    
+    // 方案4: 检查URL是否可能已过期
+    if (isImageUrlExpired(url)) {
+      console.warn(`[aquasense-trace] 群聊图片URL可能已过期: ${url.slice(0, 80)}`)
+      // 继续尝试下载，但记录警告
+    }
+    
+    // 方案2&3: 使用带回退逻辑的下载函数(支持HTTP/HTTPS URL和飞书内部URL)
+    const result = await downloadImageWithFallback(url, 1)
+    if (!result) {
+      const errorMsg = isFeishuInternalUrl(url) 
+        ? `飞书内部URL下载失败: ${url.slice(0, 80)}`
+        : `图片下载失败: ${url.slice(0, 80)}`
+      console.warn(`[aquasense-trace] ${errorMsg}`)
+      return null
+    }
+    
     const name = url.split('/').pop()?.split('?')[0] || `image-${Date.now()}`
-    return { data: buffer.toString('base64'), mimeType, name }
+    return { data: result.data, mimeType: result.mimeType, name }
   } catch (error) {
     console.warn(`[aquasense-trace] 群聊图片下载失败(跳过): ${url.slice(0, 80)}`, error instanceof Error ? error.message : error)
     return null

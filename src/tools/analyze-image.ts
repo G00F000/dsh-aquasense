@@ -9,6 +9,7 @@
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { pushAbnormalAlert } from '../scheduler/s9-reminder.js'
+import { downloadImageWithFallback, isImageUrlExpired, isFeishuInternalUrl } from '../feishu/token.js'
 
 export type SceneHint = 'inspection' | 'death' | 'water_quality' | 'medication' | 'feeding' | 'temperature' | 'dissection'
 
@@ -223,36 +224,29 @@ export interface VisionModelResult {
 }
 
 async function downloadImage(url: string): Promise<ImageDownloadResult> {
-  // 仅接受 HTTP/HTTPS URL
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    throw new Error(`[aquasense] 图片 URL 必须是 http(s) 协议: ${url}`)
-  }
   // 可观测日志:下载前打印 URL 摘要(前80字符),便于排查飞书 fileKey 配错
   const urlPreview = url.length > 80 ? url.slice(0, 80) + '...' : url
   console.log(`[aquasense] downloading image: ${urlPreview}`)
 
-  const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
-  if (!response.ok) {
-    const errBody = await response.text().catch(() => '')
-    // 飞书 API 234003 File not in msg:file_key 不属于该 message(messageId 配错)
-    // 该错误由 DSH harness inbound 层的 message.resources 聚合错误导致
-    // 防御:记录详细诊断信息,不吞掉错误
-    console.error(`[aquasense] image download failed: HTTP ${response.status}, url=${urlPreview}, body=${errBody.slice(0, 200)}`)
-    throw new Error(`图片下载失败: HTTP ${response.status} — ${errBody.slice(0, 120)}`)
+  // 方案4: 检查URL是否可能已过期
+  if (isImageUrlExpired(url)) {
+    console.warn(`[aquasense] 图片URL可能已过期: ${urlPreview}`)
+    // 继续尝试下载，但记录警告
   }
-  const buffer = await response.arrayBuffer()
-  const data = Buffer.from(buffer).toString('base64')
 
-  // 从 Content-Type 推断 MIME 类型,无法识别时降级 image/png
-  const ct = response.headers.get('content-type') || ''
-  let mimeType = 'image/png'
-  if (ct.includes('jpeg') || ct.includes('jpg')) mimeType = 'image/jpeg'
-  else if (ct.includes('png')) mimeType = 'image/png'
-  else if (ct.includes('gif')) mimeType = 'image/gif'
-  else if (ct.includes('webp')) mimeType = 'image/webp'
+  // 方案2&3: 使用带回退逻辑的下载函数(支持HTTP/HTTPS URL和飞书内部URL)
+  const result = await downloadImageWithFallback(url, 1)
+  if (!result) {
+    // 所有下载方式都失败
+    const errorMsg = isFeishuInternalUrl(url) 
+      ? `飞书内部URL下载失败: ${urlPreview}`
+      : `图片下载失败: ${urlPreview}`
+    console.error(`[aquasense] ${errorMsg}`)
+    throw new Error(errorMsg)
+  }
 
-  console.log(`[aquasense] image downloaded OK: ${urlPreview} (${buffer.byteLength} bytes, ${mimeType})`)
-  return { data, mimeType }
+  console.log(`[aquasense] image downloaded OK: ${urlPreview} (${result.data.length} bytes, ${result.mimeType})`)
+  return result
 }
 
 /**
