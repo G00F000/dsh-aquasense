@@ -45,9 +45,8 @@ export function apply(ctx: Context) {
   console.log('[aquasense] 加载水产养殖工具...')
 
   // 注入 DSH Attachment store:供飞书图片直传(attachment-store 模块级引用)
-  // ctx.attachments 来自 @deepseek-ai/dsh-attachment 服务,宿主未挂载时为 undefined
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  setAttachmentStore((ctx as any).attachments)
+  // ctx.get() 不需要 inject 声明,宿主未挂载 dsh-attachment 时安全返回 undefined
+  setAttachmentStore(ctx.get('attachments'))
 
   // 注册 4 个业务工具
   ctx.tools.register(analyzeImage)
