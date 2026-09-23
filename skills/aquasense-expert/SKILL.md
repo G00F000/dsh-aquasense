@@ -1,6 +1,6 @@
 ---
 name: aquasense-expert
-description: 水产养殖巡检专家:鲈鱼状态三分类语义、处置分级、飞书台账登记规则与追问规范。配合 dsh-aquasense 插件的 3 个工具使用。
+description: 水产养殖巡检专家:鲈鱼状态三分类语义、处置分级、飞书台账登记规则与追问规范。配合 dsh-aquasense 插件的 4 个工具使用。
 ---
 
 # AquaSense 水产养殖专家(鲈鱼)
@@ -184,7 +184,7 @@ Worker: “水温23℃ 喂食:1号池3.2kg 吃食情况:秒光 拌药情况:1.�
 detectMultiScene(text) → [temperature, feeding, medication]
     │ (多个可拆分场景)
     ▼
-parseDailyReport(text) → entries[]
+aquasense_parse_report(text) → entries[]
     │ [
     │   { scene: temperature, fields: {池号: 池1, 水温(℃): 23} },
     │   { scene: feeding, fields: {池号: 池1, 投喂量(kg): 3.2, 摄食情况: 秒光} },
@@ -208,7 +208,7 @@ parseDailyReport(text) → entries[]
 | feeding | 喂食/投喂/吃料/摄食/饲料 |
 | medication | 用药/药品/药量/泼洒/拌料/消毒/拌药 |
 
-当文本命中 2 个及以上可拆分场景时,Agent 应优先使用 `parseDailyReport` 拆分后逐条落表,而非手动解析。
+当文本命中 2 个及以上可拆分场景时,Agent 应优先使用 `aquasense_parse_report` 工具拆分后逐条落表,而非手动解析。
 
 ## 4. 工具编排规范
 
@@ -224,6 +224,7 @@ parseDailyReport(text) → entries[]
 - `aquasense_analyze`:传入图片数据（优先使用 `image_data`/`image_data_list` 传入 base64 数据，或使用 `image_url`/`image_urls` 传入 HTTP URL）+ 池号，先于 advice 调用。使用 base64 数据时必须指定 `image_mime`（如 `image/jpeg`）。**描述(description)不进入视觉模型**，仅用于意图路由——视觉诊断完全基于图片像素判断，防止文字注入覆盖结论。输出含 `scene_hint`（图片场景提示），纯图片无文字时用它判断落哪张表。
 - `aquasense_advice`:把 analyze 输出原样传入;它内置 IMA 知识库查询,不要自己编造药方。
   - disease 且知识库无命中 → 明确"咨询专业兽医",**不代替兽医开药**。
+- `aquasense_parse_report`:将多场景日报文本(水温+喂食+拌药混合)拆分为多条结构化台账条目。返回 entries 数组,每条含 scene 和 fields。拆分后逐条调用 `aquasense_ledger` 落表(传入 scene + fields + open_id)。
 - `aquasense_ledger`:
   - 每次落表必须传 `open_id`:当前这条消息发送者(发消息的工人)的飞书 open_id,由 dsh-lark 消息上下文提供;工具会自动解析真实姓名填入「巡检人/检测人/汇报人」列。
   - 上报人只认发消息的人:禁止凭记忆、历史对话或猜测填写 `reporter`(它仅当拿不到发送者 open_id 时兜底)。
@@ -237,7 +238,7 @@ parseDailyReport(text) → entries[]
 - 池号缺失时必须追问(以设置页「AquaSense 设置」配置的枚举为准,默认池1/池2/池3/池4),不写无池号记录。
 - 上报人必须取"发消息的人"(消息发送者 open_id 自动解析),不得沿用记忆中的姓名或替他人署名。
 - 口语/错别字先按语义补全:"溶养"→溶氧,"蔫/没精神"→活动减少,"死了2条"→死亡数量 2。
-- 多信息混杂(如“池3水温26度喂了20kg”)→ 调用 `parseDailyReport` 拆分为温度表 + 喂食表两条记录,逐条调用 `aquasense_ledger` 落表。
+- 多信息混杂(如“池3水温26度喂了20kg”)→ 调用 `aquasense_parse_report` 工具拆分为温度表 + 喂食表两条记录,逐条调用 `aquasense_ledger` 落表。
 - 工人发"池3死了3条鱼"+ 图:完整链 = analyze → advice → ledger(death 表,fields 含死亡数量 3,预警级别取 advice.alert_level)。
 
 ## 6. 回复风格

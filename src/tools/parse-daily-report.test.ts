@@ -15,6 +15,7 @@ import { parseDailyReport } from './parse-daily-report.js'
 vi.mock('../config/aqua-settings.js', () => ({
   getPoolIds: () => ['池1', '池2', '池3', '池4'],
   getValidPoolIds: () => new Set(['池1', '池2', '池3', '池4']),
+  formatPoolIds: (pools?: string[]) => (pools ?? ['池1', '池2', '池3', '池4']).join('/'),
 }))
 
 const POOLS = ['池1', '池2', '池3', '池4']

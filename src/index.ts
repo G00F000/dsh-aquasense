@@ -5,6 +5,7 @@
  *  - aquasense_analyze   :视觉模型分析养殖照片(鲈鱼三分类)
  *  - aquasense_advice    :内置 IMA 知识库查询,生成分级处置建议
  *  - aquasense_ledger    :写入飞书多维表格台账(S1-S8 落表)
+ *  - aquasense_parse_report:多场景日报文本拆分(水温+喂食+拌药混合→结构化条目)
  *
  * 意图路由(intent-router)为纯函数模块,由消息宿主/Agent 技能调用,不注册为 Tool;
  * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。
@@ -27,6 +28,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { analyzeImage } from './tools/analyze-image.js'
 import { generateAdvice } from './tools/generate-advice.js'
 import { recordLedger } from './tools/record-ledger.js'
+import { parseReport } from './tools/parse-daily-report.js'
 import { setupS9Reminder } from './scheduler/s9-reminder.js'
 import { installRemindWeb } from './web/remind-gateway.js'
 import { installTraceWeb } from './web/trace-gateway.js'
@@ -41,11 +43,13 @@ export const inject = ['tools']
 export function apply(ctx: Context) {
   console.log('[aquasense] 加载水产养殖工具...')
 
-  // 注册 3 个业务工具
+  // 注册 4 个业务工具
   ctx.tools.register(analyzeImage)
   ctx.tools.register(generateAdvice)
   // 台账工具经 R8 trace 包装:写入成功后自动后置收集简化分析记录(群聊场景)
   ctx.tools.register(wrapLedgerWithTrace(recordLedger))
+  // 多场景日报文本拆分:将混合文本(水温+喂食+拌药)拆分为多条台账记录
+  ctx.tools.register(parseReport)
 
   // S9 每日任务提醒(插件内调度,enabled=false 时内部直接跳过)
   setupS9Reminder(ctx)

@@ -18,8 +18,9 @@
  *  - 按行块拆分,逐场景提取数值,不做 AI 推断
  */
 
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { type Scene } from '../router/intent-router.js'
-import { getPoolIds } from '../config/aqua-settings.js'
+import { formatPoolIds, getPoolIds } from '../config/aqua-settings.js'
 
 // ─── 输出类型 ───
 
@@ -335,3 +336,48 @@ export function parseDailyReport(text: string, pools?: string[]): ParseResult {
 
   return { entries, warnings }
 }
+
+// ─── DSH 工具定义 ───
+
+/** 多场景日报文本拆分工具:将自由格式日报文本拆分为多条结构化台账记录 */
+export const parseReport = defineTool({
+  name: 'aquasense_parse_report',
+  description: '将工人发送的多场景日报文本(如水温+喂食+拌药混合)拆分为多条结构化台账记录。拆分后逐条调用 aquasense_ledger 落表。仅 temperature/feeding/medication 三个场景支持拆分。',
+  parameters: {
+    text: {
+      type: 'string',
+      description: '工人发送的原始日报文本(自由格式,可能包含多个场景)'},
+    pools: {
+      type: 'array',
+      items: { type: 'string' },
+      description: `当前配置的池号列表(可选,缺省从 AquaSense 设置读取,如 ${formatPoolIds()})`}
+  },
+  output: {
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        warnings: { type: 'array', items: { type: 'string' }, description: '解析警告' }
+      }
+    },
+    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }]
+  },
+  async execute(args) {
+    const text = String(args.text ?? '').trim()
+    if (!text) {
+      return { entries: [], warnings: ['输入文本为空'] }
+    }
+    const pools = Array.isArray(args.pools) && args.pools.length > 0
+      ? (args.pools as string[])
+      : undefined
+    const result = parseDailyReport(text, pools)
+    // JSON 序列化归一化:确保所有字段值为 JSON 兼容类型(数字/字符串/布尔/数组/对象/null)
+    return {
+      entries: result.entries.map(e => ({
+        scene: e.scene,
+        fields: JSON.parse(JSON.stringify(e.fields))
+      })),
+      warnings: result.warnings
+    }
+  }
+})

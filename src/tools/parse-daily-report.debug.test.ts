@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 vi.mock('../config/aqua-settings.js', () => ({
   getPoolIds: () => ['池1', '池2', '池3', '池4'],
+  formatPoolIds: (pools?: string[]) => (pools ?? ['池1', '池2', '池3', '池4']).join('/'),
 }))
 import { parseDailyReport } from './parse-daily-report.js'
 
