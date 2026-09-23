@@ -13,6 +13,7 @@
  * 群聊场景(后置收集,无耗时/Token)用 recordSpan 直接落数据,见 §4.1 方案 A。
  */
 import { writeReport, updateIndex } from './trace-store.js';
+import { getVisionModelConfig } from '../config/aqua-settings.js';
 // ========== 工具函数 ==========
 const pad2 = (n) => String(n).padStart(2, '0');
 /** 同秒冲突序号(lastBase 记录上一次的秒级前缀) */
@@ -49,6 +50,9 @@ export class AnalysisTracer {
     record;
     spans = new Map();
     constructor(params) {
+        // 优先使用设置文件中的视觉模型配置,其次使用环境变量,最后使用默认值
+        const visionConfig = getVisionModelConfig();
+        const model = visionConfig?.modelName || process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash';
         this.record = {
             id: generateReportId(),
             pool: params.pool,
@@ -58,7 +62,7 @@ export class AnalysisTracer {
             task: params.task,
             chat_id: params.chat_id,
             created_at: new Date().toISOString(),
-            model: process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash',
+            model,
             total_duration_ms: 0,
             total_tokens: 0,
             status: 'success'

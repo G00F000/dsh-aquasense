@@ -14,6 +14,7 @@
  */
 
 import { writeReport, updateIndex } from './trace-store.js'
+import { getVisionModelConfig } from '../config/aqua-settings.js'
 
 // ========== 数据模型(需求 R8 §5.1) ==========
 
@@ -254,6 +255,10 @@ export class AnalysisTracer {
   private readonly spans = new Map<SpanName, SpanState>()
 
   constructor(params: TracerParams) {
+    // 优先使用设置文件中的视觉模型配置,其次使用环境变量,最后使用默认值
+    const visionConfig = getVisionModelConfig()
+    const model = visionConfig?.modelName || process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash'
+    
     this.record = {
       id: generateReportId(),
       pool: params.pool,
@@ -263,7 +268,7 @@ export class AnalysisTracer {
       task: params.task,
       chat_id: params.chat_id,
       created_at: new Date().toISOString(),
-      model: process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash',
+      model,
       total_duration_ms: 0,
       total_tokens: 0,
       status: 'success'

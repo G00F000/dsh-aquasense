@@ -10,6 +10,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { pushAbnormalAlert } from '../scheduler/s9-reminder.js'
 import { downloadImageWithFallback, isImageUrlExpired, isFeishuInternalUrl } from '../feishu/token.js'
+import { getVisionModelConfig } from '../config/aqua-settings.js'
 
 export type SceneHint = 'inspection' | 'death' | 'water_quality' | 'medication' | 'feeding' | 'temperature' | 'dissection'
 
@@ -299,13 +300,15 @@ async function callVisionModel(images: ImageDownloadResult[], prompt: string): P
  * callVisionModel 为其薄包装,行为不变)。
  */
 export async function callVisionModelWithUsage(images: ImageDownloadResult[], prompt: string): Promise<VisionModelResult> {
-  const apiKey = process.env.DEEPSEEK_API_KEY
+  // 优先使用设置文件中的视觉模型配置,其次使用环境变量,最后使用默认值
+  const visionConfig = getVisionModelConfig()
+  const apiKey = visionConfig?.apiKey || process.env.DEEPSEEK_API_KEY
   if (!apiKey) {
     throw new Error('[aquasense] DEEPSEEK_API_KEY 未配置')
   }
 
-  const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
-  const model = process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash'
+  const baseUrl = visionConfig?.baseUrl || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
+  const model = visionConfig?.modelName || process.env.DEEPSEEK_VISION_MODEL || 'deepseek-flash'
 
   // 构建多图内容:每张图作为独立的 image_url 段,视觉模型可同时分析
   const content: Array<{ type: string; image_url?: { url: string }; text?: string }> = images.map((img) => ({
