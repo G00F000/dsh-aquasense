@@ -37,6 +37,7 @@ import { installAquaSettingsWeb } from './web/aqua-settings-gateway.js'
 import { wrapLedgerWithTrace } from './web/trace-ledger-wrap.js'
 import { installSessionTraceBridge } from './web/session-trace-bridge.js'
 import { setAttachmentStore } from './tools/attachment-store.js'
+import { attachmentInjectPreExecute } from './tools/attachment-inject.js'
 
 export const name = 'aquasense-plugin'
 export const inject = ['tools']
@@ -47,6 +48,17 @@ export function apply(ctx: Context) {
   // 注入 DSH Attachment store:供飞书图片直传(attachment-store 模块级引用)
   // ctx.get() 不需要 inject 声明,宿主未挂载 dsh-attachment 时安全返回 undefined
   setAttachmentStore(ctx.get('attachments'))
+
+  // 图片附件自动注入:拦截 aquasense_analyze 的 tools/pre-execute,
+  // 当 Agent 未传 image_attachment 时从会话上下文中自动提取填入
+  // (解决 LLM 看到 [image] 但不知道 attachmentId 导致图片参数为空的问题)
+  ctx.effect(() => {
+    const host = ctx as unknown as { on?: (name: string, cb: (...args: unknown[]) => unknown) => (() => void) }
+    if (typeof host.on !== 'function') return () => {}
+    const off = host.on('tools/pre-execute', attachmentInjectPreExecute as (...args: unknown[]) => unknown)
+    console.log('[aquasense] 图片附件自动注入已注册(tools/pre-execute)')
+    return () => { off() }
+  }, 'aquasense-attachment-inject')
 
   // 注册 4 个业务工具
   ctx.tools.register(analyzeImage)
