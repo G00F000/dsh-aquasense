@@ -105,6 +105,18 @@ export interface AquaSettings {
   pools: string[]
   /** 用户映射表:open_id → 姓名 */
   userMap: Record<string, string>
+  /** 视觉模型配置 */
+  visionModel?: VisionModelConfig
+}
+
+/** 视觉模型配置 */
+export interface VisionModelConfig {
+  /** DeepSeek API Key */
+  apiKey: string
+  /** 视觉模型名称 */
+  modelName: string
+  /** API 基础 URL */
+  baseUrl: string
 }
 
 /** 飞书群成员信息 */
@@ -119,11 +131,13 @@ export interface AquaSettingsApi {
   get(): Promise<{ settings: AquaSettings }>
   save(input: AquaSettings): Promise<{ settings: AquaSettings }>
   listChatMembers(chatId: string): Promise<{ members: FeishuChatMember[] }>
+  testVisionModel(config: VisionModelConfig): Promise<{ success: boolean; message: string }>
 }
 
 /** 设置页 API 客户端 */
 export const aquaSettingsApi: AquaSettingsApi = {
   get: () => call(AQUA_SETTINGS_API_PREFIX, 'get'),
   save: (input) => call(AQUA_SETTINGS_API_PREFIX, 'save', { settings: input }),
-  listChatMembers: (chatId) => call(AQUA_SETTINGS_API_PREFIX, 'list-members', { chat_id: chatId })
+  listChatMembers: (chatId) => call(AQUA_SETTINGS_API_PREFIX, 'list-members', { chat_id: chatId }),
+  testVisionModel: (config) => call(AQUA_SETTINGS_API_PREFIX, 'test-vision-model', { config })
 }

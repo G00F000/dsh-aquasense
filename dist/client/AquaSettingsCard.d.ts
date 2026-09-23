@@ -12,7 +12,7 @@
  */
 import type { ReactNode } from 'react';
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots';
-import type { AquaSettingsApi, FeishuChatMember } from './api.js';
+import type { AquaSettingsApi, FeishuChatMember, VisionModelConfig } from './api.js';
 /** 词典翻译函数(命名空间 aquasense-settings) */
 export type AquaSettingsTranslate = PropsLocale<'aquasense-settings'>['t'];
 /** 卡片注入面(注册时提供,见 index.ts) */
@@ -48,8 +48,24 @@ interface AquaSettingsModel {
     savedUserMap: Record<string, string> | null;
     /** 用户映射草稿(编辑中) */
     draftUserMap: Record<string, string> | null;
+    /** 已保存视觉模型配置快照 */
+    savedVisionModel: VisionModelConfig | null;
+    /** 视觉模型配置草稿(编辑中) */
+    draftVisionModel: VisionModelConfig | null;
     dirty: boolean;
     applyState: ApplyState;
+    /** 视觉模型测试状态 */
+    testState: {
+        kind: 'idle';
+    } | {
+        kind: 'testing';
+    } | {
+        kind: 'success';
+        message: string;
+    } | {
+        kind: 'error';
+        message: string;
+    };
     /** 飞书群成员列表(用于自动填充 open_id) */
     chatMembers: FeishuChatMember[];
     /** 加载群成员中 */
@@ -64,6 +80,10 @@ interface AquaSettingsModel {
     removeUserMap(openId: string): void;
     /** 加载飞书群成员 */
     loadChatMembers(chatId: string): Promise<void>;
+    /** 编辑视觉模型配置 */
+    editVisionModel(field: keyof VisionModelConfig, value: string): void;
+    /** 测试视觉模型配置 */
+    testVisionModel(): Promise<void>;
     save(): Promise<void>;
     discard(): void;
 }

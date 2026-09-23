@@ -25,8 +25,17 @@ export interface AquaSettingsApiDeps {
     saveSettings(input: {
         pools: unknown;
         userMap?: Record<string, unknown>;
+        visionModel?: unknown;
     }): AquaSettings;
     listChatMembers(chatId: string): Promise<FeishuChatMember[]>;
+    testVisionModel(config: {
+        apiKey: string;
+        modelName: string;
+        baseUrl: string;
+    }): Promise<{
+        success: boolean;
+        message: string;
+    }>;
 }
 /**
  * 注册 settings 命名空间。
@@ -37,14 +46,21 @@ export interface AquaSettingsApiDeps {
 export declare function registerAquaSettingsNamespace(ctx: Context): void;
 /**
  * 校验并归一化「保存设置」请求体(导出供测试)。
- * body 形如 { settings: { pools: [...], userMap: { ... } } }。
+ * body 形如 { settings: { pools: [...], userMap: { ... }, visionModel: { ... } } }。
  */
 export declare function parseAquaSettingsInput(body: unknown): {
     pools: unknown;
     userMap?: Record<string, unknown>;
+    visionModel?: unknown;
 };
 /** 获取群成员请求体校验 */
 export declare function parseChatId(body: unknown): string;
+/** 视觉模型测试请求体校验 */
+export declare function parseVisionModelTestInput(body: unknown): {
+    apiKey: string;
+    modelName: string;
+    baseUrl: string;
+};
 /**
  * 创建设置页 API 分发函数(注入依赖便于测试)。
  * 返回 (method, body) => ApiResult;HTTP 层负责信封序列化。

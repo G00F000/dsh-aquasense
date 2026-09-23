@@ -39,6 +39,19 @@ export declare const zh: {
     readonly 'field.userMap.remove': "删除";
     readonly 'field.userMap.empty': "暂无映射记录,请通过上方加载群成员或手动添加";
     readonly 'field.userMap.chatMembersHint': "群内共 {count} 人,以下为未添加的成员:";
+    readonly 'field.visionModel.label': "视觉模型配置";
+    readonly 'field.visionModel.hint': "配置整个养鱼系统的视觉模型,用于图片分析";
+    readonly 'field.visionModel.apiKey.label': "API Key";
+    readonly 'field.visionModel.apiKey.placeholder': "输入 DeepSeek API Key";
+    readonly 'field.visionModel.modelName.label': "模型名称";
+    readonly 'field.visionModel.modelName.placeholder': "如:deepseek-flash";
+    readonly 'field.visionModel.baseUrl.label': "API 基础 URL";
+    readonly 'field.visionModel.baseUrl.placeholder': "如:https://api.deepseek.com";
+    readonly 'field.visionModel.test': "测试连接";
+    readonly 'field.visionModel.testing': "测试中…";
+    readonly 'field.visionModel.testSuccess': "视觉模型配置测试成功";
+    readonly 'field.visionModel.testFailed': "视觉模型配置测试失败:{message}";
+    readonly 'field.visionModel.testHint': "点击测试按钮验证 API Key 和模型配置是否正确";
 };
 /** 英文字典(与中文 key 一一对应) */
 export declare const en: Record<keyof typeof zh, string>;

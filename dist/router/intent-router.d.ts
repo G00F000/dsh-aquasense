@@ -57,3 +57,13 @@ export declare function detectIntent(content: string, hasImage: boolean): Intent
  *  - 视觉 scene_hint 缺失或无效 → 保持巡检兜底
  */
 export declare function detectIntentWithVision(content: string, hasImage: boolean, sceneHint?: string): IntentResult;
+/**
+ * 检测文本是否包含多个场景类型(日报合并文本)
+ *
+ * 返回命中的场景列表(去重,按优先级排序)。
+ * 仅 temperature/feeding/medication 支持程序化拆分;
+ * 其他场景(如 death+temperature)返回单场景,由 Agent 正常编排。
+ *
+ * @returns 命中的可拆分场景列表,0 或 1 个元素表示单场景文本
+ */
+export declare function detectMultiScene(content: string): Scene[];

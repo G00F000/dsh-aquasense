@@ -5,6 +5,7 @@
  *  - aquasense_analyze   :视觉模型分析养殖照片(鲈鱼三分类)
  *  - aquasense_advice    :内置 IMA 知识库查询,生成分级处置建议
  *  - aquasense_ledger    :写入飞书多维表格台账(S1-S8 落表)
+ *  - aquasense_parse_report:多场景日报文本拆分(水温+喂食+拌药混合→结构化条目)
  *
  * 意图路由(intent-router)为纯函数模块,由消息宿主/Agent 技能调用,不注册为 Tool;
  * S9 每日任务提醒由插件内模块 s9-reminder 托管(apply() 启动,见 docs/s9-daily-reminder-architecture.md)。

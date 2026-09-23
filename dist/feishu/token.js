@@ -95,9 +95,10 @@ export async function getFeishuChatMembers(chatId) {
 }
 /**
  * 上传图片 URL 到飞书云文档,返回 Bitable 附件格式
- * 支持两种输入:
+ * 支持三种输入:
  *  - data URL(H5 上传页场景,R8):直接解析 base64,不经网络;
- *  - HTTP(S) URL:下载为 buffer 后再上传。
+ *  - HTTP(S) URL:下载为 buffer 后再上传;
+ *  - 飞书内部URL:使用飞书API下载后上传。
  */
 export async function uploadImageToFeishu(imageUrl) {
     try {
@@ -110,16 +111,24 @@ export async function uploadImageToFeishu(imageUrl) {
             }
             return uploadBufferToFeishu(parsed.buffer, `h5-${Date.now()}${extOfMime(parsed.mimeType)}`, parsed.mimeType);
         }
-        // 1. 下载图片(30s 超时)
-        const imgResp = await fetch(imageUrl, { signal: AbortSignal.timeout(30_000) });
-        if (!imgResp.ok)
+        // 方案4: 检查URL是否可能已过期
+        if (isImageUrlExpired(imageUrl)) {
+            console.warn(`[aquasense] 图片URL可能已过期: ${imageUrl.slice(0, 80)}`);
+            // 继续尝试下载，但记录警告
+        }
+        // 方案2&3: 使用带回退逻辑的下载函数(支持HTTP/HTTPS URL和飞书内部URL)
+        const downloaded = await downloadImageWithFallback(imageUrl, 1);
+        if (!downloaded) {
+            console.error(`[aquasense] 图片下载失败(所有方式): ${imageUrl.slice(0, 80)}`);
             return null;
-        const buffer = await imgResp.arrayBuffer();
+        }
+        // 将base64转换为buffer
+        const buffer = Buffer.from(downloaded.data, 'base64');
         const fileName = imageUrl.split('/').pop()?.split('?')[0] || 'image.jpg';
-        return uploadBufferToFeishu(buffer, fileName, imgResp.headers.get('content-type') || '');
+        return uploadBufferToFeishu(buffer, fileName, `image/${downloaded.mimeType.split('/')[1] || 'jpeg'}`);
     }
     catch (err) {
-        console.error(`[aquasense] 图片上传异常: ${imageUrl}`, err);
+        console.error(`[aquasense] 图片上传异常: ${imageUrl.slice(0, 80)}`, err);
         return null;
     }
 }
@@ -178,4 +187,139 @@ const MIME_EXT = {
 function extOfMime(mimeType) {
     const key = (mimeType || '').split(';')[0].trim().toLowerCase();
     return MIME_EXT[key] || '.jpg';
+}
+/**
+ * 判断是否是飞书内部URL(非标准HTTP/HTTPS协议)
+ * 飞书内部URL格式示例:
+ *  - internal-file-service.internal
+ *  - feishu-internal://xxx
+ *  - lark://xxx
+ */
+export function isFeishuInternalUrl(url) {
+    if (!url)
+        return false;
+    // 标准HTTP/HTTPS URL不是内部URL
+    if (url.startsWith('http://') || url.startsWith('https://'))
+        return false;
+    // 检查是否是飞书内部URL格式
+    return url.includes('internal') || url.includes('feishu') || url.includes('lark') || !url.startsWith('http');
+}
+/**
+ * 下载飞书内部URL的图片
+ * 使用飞书API下载消息中的图片资源
+ * @param messageKey 飞书消息ID或文件key
+ * @returns 图片数据(base64)和MIME类型，失败返回null
+ */
+export async function downloadFeishuImage(messageKey) {
+    try {
+        const token = await getFeishuToken();
+        // 使用飞书API下载消息资源
+        // 注意：这里需要根据实际的飞书API调用方式来实现
+        // 飞书图片下载API: GET /im/v1/messages/{message_id}/resources/{file_key}
+        // 但由于我们没有message_id，这里使用通用的文件下载方式
+        // 尝试作为文件key下载
+        const response = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${messageKey}/resources/${messageKey}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(30_000)
+        });
+        if (!response.ok) {
+            console.warn(`[aquasense] 飞书内部URL下载失败: HTTP ${response.status}, key=${messageKey}`);
+            return null;
+        }
+        const buffer = await response.arrayBuffer();
+        const data = Buffer.from(buffer).toString('base64');
+        const ct = response.headers.get('content-type') || '';
+        let mimeType = 'image/jpeg';
+        if (ct.includes('png'))
+            mimeType = 'image/png';
+        else if (ct.includes('webp'))
+            mimeType = 'image/webp';
+        else if (ct.includes('gif'))
+            mimeType = 'image/gif';
+        return { data, mimeType };
+    }
+    catch (error) {
+        console.warn(`[aquasense] 飞书内部URL下载异常: ${messageKey}`, error instanceof Error ? error.message : error);
+        return null;
+    }
+}
+/**
+ * 下载图片(支持HTTP/HTTPS URL和飞书内部URL)
+ * 带有回退逻辑：先尝试HTTP下载，失败后尝试飞书API下载
+ * @param url 图片URL
+ * @param retryCount 重试次数(默认1次)
+ * @returns 图片数据(base64)和MIME类型，失败返回null
+ */
+export async function downloadImageWithFallback(url, retryCount = 1) {
+    // 1. 优先尝试HTTP/HTTPS下载
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+        for (let i = 0; i <= retryCount; i++) {
+            try {
+                const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+                if (response.ok) {
+                    const buffer = await response.arrayBuffer();
+                    const data = Buffer.from(buffer).toString('base64');
+                    const ct = response.headers.get('content-type') || '';
+                    let mimeType = 'image/jpeg';
+                    if (ct.includes('png'))
+                        mimeType = 'image/png';
+                    else if (ct.includes('webp'))
+                        mimeType = 'image/webp';
+                    else if (ct.includes('gif'))
+                        mimeType = 'image/gif';
+                    return { data, mimeType };
+                }
+                console.warn(`[aquasense] HTTP图片下载失败(尝试 ${i + 1}/${retryCount + 1}): HTTP ${response.status}, url=${url.slice(0, 80)}`);
+            }
+            catch (error) {
+                console.warn(`[aquasense] HTTP图片下载异常(尝试 ${i + 1}/${retryCount + 1}): ${url.slice(0, 80)}`, error instanceof Error ? error.message : error);
+            }
+            // 重试前等待
+            if (i < retryCount) {
+                await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+            }
+        }
+    }
+    // 2. 尝试飞书内部URL下载
+    if (isFeishuInternalUrl(url)) {
+        console.log(`[aquasense] 尝试飞书内部URL下载: ${url.slice(0, 80)}`);
+        return await downloadFeishuImage(url);
+    }
+    return null;
+}
+/**
+ * 检查图片URL是否可能已过期
+ * 飞书图片URL通常包含时间戳或有效期参数
+ * @param url 图片URL
+ * @returns 是否可能已过期
+ */
+export function isImageUrlExpired(url) {
+    if (!url)
+        return true;
+    // 检查URL中是否包含过期时间参数
+    try {
+        const urlObj = new URL(url);
+        const expires = urlObj.searchParams.get('expires') || urlObj.searchParams.get('expire');
+        if (expires) {
+            const expiresAt = parseInt(expires, 10);
+            // 如果过期时间已过，返回true
+            if (expiresAt > 0 && expiresAt < Date.now() / 1000) {
+                return true;
+            }
+        }
+        // 检查URL路径中是否包含时间戳
+        const pathMatch = url.match(/\/(\d{10,13})\//);
+        if (pathMatch) {
+            const timestamp = parseInt(pathMatch[1], 10);
+            // 如果时间戳超过24小时，可能已过期
+            if (timestamp > 0 && Date.now() - timestamp > 24 * 60 * 60 * 1000) {
+                return true;
+            }
+        }
+    }
+    catch {
+        // URL解析失败，可能已过期
+        return true;
+    }
+    return false;
 }

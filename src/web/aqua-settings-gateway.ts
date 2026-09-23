@@ -22,6 +22,7 @@ import {
   type AquaSettings
 } from '../config/aqua-settings.js'
 import { getFeishuChatMembers, type FeishuChatMember } from '../feishu/token.js'
+import { DEFAULT_VISION_MODEL, DEFAULT_BASE_URL } from '../config/aqua-settings.js'
 
 // ========== 常量 ==========
 
@@ -38,8 +39,9 @@ const MAX_BODY_BYTES = 16 * 1024
 /** 设置页 API 数据依赖(注入以便独立测试) */
 export interface AquaSettingsApiDeps {
   getSettings(): AquaSettings
-  saveSettings(input: { pools: unknown; userMap?: Record<string, unknown> }): AquaSettings
+  saveSettings(input: { pools: unknown; userMap?: Record<string, unknown>; visionModel?: unknown }): AquaSettings
   listChatMembers(chatId: string): Promise<FeishuChatMember[]>
+  testVisionModel(config: { apiKey: string; modelName: string; baseUrl: string }): Promise<{ success: boolean; message: string }>
 }
 
 /** webServer 服务最小鸭子类型(仅用到 register) */
@@ -93,9 +95,9 @@ export function registerAquaSettingsNamespace(ctx: Context): void {
 
 /**
  * 校验并归一化「保存设置」请求体(导出供测试)。
- * body 形如 { settings: { pools: [...], userMap: { ... } } }。
+ * body 形如 { settings: { pools: [...], userMap: { ... }, visionModel: { ... } } }。
  */
-export function parseAquaSettingsInput(body: unknown): { pools: unknown; userMap?: Record<string, unknown> } {
+export function parseAquaSettingsInput(body: unknown): { pools: unknown; userMap?: Record<string, unknown>; visionModel?: unknown } {
   const raw = (body as { settings?: unknown } | null)?.settings
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new HttpError(400, 'invalid-config', '请求体缺少 settings 对象')
@@ -104,7 +106,7 @@ export function parseAquaSettingsInput(body: unknown): { pools: unknown; userMap
   if (!Array.isArray(input.pools)) {
     throw new HttpError(400, 'invalid-config', 'pools 必须为数组')
   }
-  return { pools: input.pools, userMap: input.userMap as Record<string, unknown> | undefined }
+  return { pools: input.pools, userMap: input.userMap as Record<string, unknown> | undefined, visionModel: input.visionModel }
 }
 
 /** 获取群成员请求体校验 */
@@ -114,6 +116,23 @@ export function parseChatId(body: unknown): string {
     throw new HttpError(400, 'invalid-chat-id', '请求体缺少 chat_id 字符串')
   }
   return raw.trim()
+}
+
+/** 视觉模型测试请求体校验 */
+export function parseVisionModelTestInput(body: unknown): { apiKey: string; modelName: string; baseUrl: string } {
+  const raw = (body as { config?: unknown } | null)?.config
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new HttpError(400, 'invalid-config', '请求体缺少 config 对象')
+  }
+  const input = raw as Record<string, unknown>
+  if (typeof input.apiKey !== 'string' || !input.apiKey.trim()) {
+    throw new HttpError(400, 'invalid-api-key', 'API Key 不能为空')
+  }
+  return {
+    apiKey: input.apiKey.trim(),
+    modelName: typeof input.modelName === 'string' ? input.modelName.trim() : DEFAULT_VISION_MODEL,
+    baseUrl: typeof input.baseUrl === 'string' ? input.baseUrl.trim() : DEFAULT_BASE_URL
+  }
 }
 
 // ========== API 分发 ==========
@@ -138,6 +157,12 @@ export function createAquaSettingsApi(deps: AquaSettingsApiDeps): (method: strin
           const chatId = parseChatId(body)
           const members = await deps.listChatMembers(chatId)
           return ok({ members })
+        }
+
+        case 'test-vision-model': {
+          const config = parseVisionModelTestInput(body)
+          const result = await deps.testVisionModel(config)
+          return ok(result)
         }
 
         default:
@@ -262,6 +287,51 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+// ========== 视觉模型测试 ==========
+
+/**
+ * 测试视觉模型配置(使用提供的配置调用 DeepSeek API)。
+ * 发送一个简单的文本请求来验证 API Key 和模型是否有效。
+ */
+async function testVisionModel(config: { apiKey: string; modelName: string; baseUrl: string }): Promise<{ success: boolean; message: string }> {
+  try {
+    const { apiKey, modelName, baseUrl } = config
+    const model = modelName || DEFAULT_VISION_MODEL
+    const url = baseUrl || DEFAULT_BASE_URL
+
+    // 发送一个简单的文本请求来测试 API 连接
+    const response = await fetch(`${url}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Hello, this is a test message.' }],
+        max_tokens: 10
+      })
+    })
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '')
+      return { success: false, message: `API 调用失败: HTTP ${response.status} - ${errBody}` }
+    }
+
+    const result = (await response.json()) as {
+      choices?: Array<{ message?: { content?: unknown } }>
+    }
+
+    if (result.choices && result.choices.length > 0) {
+      return { success: true, message: '视觉模型配置测试成功' }
+    } else {
+      return { success: false, message: 'API 返回数据格式异常' }
+    }
+  } catch (error) {
+    return { success: false, message: `测试失败: ${messageOf(error)}` }
+  }
+}
+
 // ========== 插件接线 ==========
 
 /**
@@ -274,7 +344,8 @@ export function installAquaSettingsWeb(ctx: Context): void {
   const dispatch = createAquaSettingsApi({
     getSettings: getAquaSettings,
     saveSettings: saveAquaSettings,
-    listChatMembers: getFeishuChatMembers
+    listChatMembers: getFeishuChatMembers,
+    testVisionModel
   })
 
   ctx.inject(['webServer'], (sctx) => {

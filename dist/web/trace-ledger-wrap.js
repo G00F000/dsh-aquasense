@@ -14,7 +14,7 @@
  *  - 追问类失败(missing 非空)不记录(高频且无分析价值,避免噪声);
  *  - H5 场景调用原始 recordLedger(未包装),由 report-handler 全量埋点,不重复记录。
  */
-import { getFeishuUserName, parseDataUrl } from '../feishu/token.js';
+import { getFeishuUserName, parseDataUrl, downloadImageWithFallback, isImageUrlExpired, isFeishuInternalUrl } from '../feishu/token.js';
 import { AnalysisTracer } from './trace-recorder.js';
 import { saveReportImages } from './trace-store.js';
 // ========== 常量 ==========
@@ -78,6 +78,10 @@ function toStringArray(value) {
 function operationOf(message) {
     return message.includes('已更新') ? 'update' : 'create';
 }
+/** 校验 data_completeness 枚举值 */
+function isValidCompleteness(value) {
+    return value === 'complete' || value === 'partial' || value === 'empty';
+}
 // ========== retrieve span 合成(Agent 转抄可能丢字段,结构化透传优先、字符串反解降级) ==========
 /** 从 unknown 读取数字(非 number 返回 undefined,避免缺数据时误报 0 命中) */
 function optNum(value) {
@@ -130,7 +134,7 @@ function buildRetrieveSpan(advice) {
     return span;
 }
 // ========== 图片下载(群聊发图,详情页展示) ==========
-/** 下载一张工人发送的图片(data URL 直接解析;http(s) URL 走网络);失败返回 null */
+/** 下载一张工人发送的图片(data URL 直接解析;http(s) URL 和飞书内部URL 走网络);失败返回 null */
 async function downloadChatImage(url) {
     try {
         if (url.startsWith('data:')) {
@@ -143,22 +147,22 @@ async function downloadChatImage(url) {
                 name: `image-${Date.now()}${parsed.mimeType === 'image/png' ? '.png' : '.jpg'}`
             };
         }
-        if (!url.startsWith('http://') && !url.startsWith('https://'))
+        // 方案4: 检查URL是否可能已过期
+        if (isImageUrlExpired(url)) {
+            console.warn(`[aquasense-trace] 群聊图片URL可能已过期: ${url.slice(0, 80)}`);
+            // 继续尝试下载，但记录警告
+        }
+        // 方案2&3: 使用带回退逻辑的下载函数(支持HTTP/HTTPS URL和飞书内部URL)
+        const result = await downloadImageWithFallback(url, 1);
+        if (!result) {
+            const errorMsg = isFeishuInternalUrl(url)
+                ? `飞书内部URL下载失败: ${url.slice(0, 80)}`
+                : `图片下载失败: ${url.slice(0, 80)}`;
+            console.warn(`[aquasense-trace] ${errorMsg}`);
             return null;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-        if (!resp.ok)
-            return null;
-        const buffer = Buffer.from(await resp.arrayBuffer());
-        const ct = resp.headers.get('content-type') || '';
-        let mimeType = 'image/jpeg';
-        if (ct.includes('png'))
-            mimeType = 'image/png';
-        else if (ct.includes('webp'))
-            mimeType = 'image/webp';
-        else if (ct.includes('gif'))
-            mimeType = 'image/gif';
+        }
         const name = url.split('/').pop()?.split('?')[0] || `image-${Date.now()}`;
-        return { data: buffer.toString('base64'), mimeType, name };
+        return { data: result.data, mimeType: result.mimeType, name };
     }
     catch (error) {
         console.warn(`[aquasense-trace] 群聊图片下载失败(跳过): ${url.slice(0, 80)}`, error instanceof Error ? error.message : error);
@@ -240,12 +244,14 @@ export async function recordChatTrace(args, result, ledgerDurationMs) {
                 prompt_length: 0,
                 input_tokens: 0,
                 output_tokens: 0,
-                output_raw: '',
+                output_raw: typeof analysis.output_raw === 'string' ? String(analysis.output_raw).slice(0, 500) : '',
                 cls: String(analysis.cls ?? 'unknown'),
                 symptoms: toStringArray(analysis.symptoms),
                 severity: String(analysis.severity ?? 'low'),
                 confidence: typeof analysis.confidence === 'number' ? analysis.confidence : 0,
-                scene_hint: String(analysis.scene_hint ?? input.scene)
+                scene_hint: String(analysis.scene_hint ?? input.scene),
+                data_completeness: isValidCompleteness(analysis['data_completeness']) ? analysis['data_completeness'] : undefined,
+                expected_image_count: typeof analysis.expected_image_count === 'number' ? analysis.expected_image_count : undefined
             });
         }
         // advice:数据来自 Agent 透传的处置建议

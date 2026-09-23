@@ -107,6 +107,8 @@ export function parseRecordQuery(params) {
         pool,
         cls,
         date,
+        low_confidence: params.get('low_confidence') === '1' || params.get('low_confidence') === 'true',
+        has_error: params.get('has_error') === '1' || params.get('has_error') === 'true',
         limit: parsePositiveInt(params.get('limit'), 'limit', 50),
         offset: parsePositiveInt(params.get('offset'), 'offset', 0)
     };

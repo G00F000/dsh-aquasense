@@ -68,7 +68,8 @@ function readSettingsFile() {
         if (parsed && typeof parsed === 'object') {
             return {
                 pools: sanitizePools(parsed.pools),
-                userMap: sanitizeUserMap(parsed.userMap)
+                userMap: sanitizeUserMap(parsed.userMap),
+                visionModel: sanitizeVisionModel(parsed.visionModel)
             };
         }
         return null;
@@ -137,6 +138,28 @@ export function sanitizeUserMap(raw) {
 export function getUserMap() {
     return getAquaSettings().userMap;
 }
+// ========== 视觉模型配置 ==========
+/** 默认视觉模型名称 */
+export const DEFAULT_VISION_MODEL = 'deepseek-flash';
+/** 默认 API 基础 URL */
+export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
+/** 归一化视觉模型配置 */
+export function sanitizeVisionModel(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+        return undefined;
+    const config = raw;
+    const apiKey = typeof config.apiKey === 'string' ? config.apiKey.trim() : '';
+    const modelName = typeof config.modelName === 'string' ? config.modelName.trim() : DEFAULT_VISION_MODEL;
+    const baseUrl = typeof config.baseUrl === 'string' ? config.baseUrl.trim() : DEFAULT_BASE_URL;
+    // 如果 API Key 为空,返回 undefined
+    if (!apiKey)
+        return undefined;
+    return { apiKey, modelName, baseUrl };
+}
+/** 当前生效视觉模型配置 */
+export function getVisionModelConfig() {
+    return getAquaSettings().visionModel;
+}
 /** 根据 open_id 获取用户名(优先映射表,未命中返回空字符串)
  *
  * 匹配策略(应对 dsh-lark 消息桥截断 open_id 的情况):
@@ -183,7 +206,8 @@ export function getUserNameByOpenId(openId) {
 export function saveAquaSettings(input) {
     const pools = sanitizePools(input.pools);
     const userMap = sanitizeUserMap(input.userMap);
-    const settings = { pools, userMap };
+    const visionModel = sanitizeVisionModel(input.visionModel);
+    const settings = { pools, userMap, visionModel };
     mkdirSync(settingsDirPath(), { recursive: true });
     writeFileSync(settingsFile(), JSON.stringify(settings, null, 2), 'utf8');
     return settings;

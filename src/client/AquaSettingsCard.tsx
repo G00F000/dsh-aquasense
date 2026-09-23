@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { AquaSettings, AquaSettingsApi, FeishuChatMember } from './api.js'
+import type { AquaSettings, AquaSettingsApi, FeishuChatMember, VisionModelConfig } from './api.js'
 
 /** 词典翻译函数(命名空间 aquasense-settings) */
 export type AquaSettingsTranslate = PropsLocale<'aquasense-settings'>['t']
@@ -358,8 +358,14 @@ interface AquaSettingsModel {
   savedUserMap: Record<string, string> | null
   /** 用户映射草稿(编辑中) */
   draftUserMap: Record<string, string> | null
+  /** 已保存视觉模型配置快照 */
+  savedVisionModel: VisionModelConfig | null
+  /** 视觉模型配置草稿(编辑中) */
+  draftVisionModel: VisionModelConfig | null
   dirty: boolean
   applyState: ApplyState
+  /** 视觉模型测试状态 */
+  testState: { kind: 'idle' } | { kind: 'testing' } | { kind: 'success'; message: string } | { kind: 'error'; message: string }
   /** 飞书群成员列表(用于自动填充 open_id) */
   chatMembers: FeishuChatMember[]
   /** 加载群成员中 */
@@ -374,6 +380,10 @@ interface AquaSettingsModel {
   removeUserMap(openId: string): void
   /** 加载飞书群成员 */
   loadChatMembers(chatId: string): Promise<void>
+  /** 编辑视觉模型配置 */
+  editVisionModel(field: keyof VisionModelConfig, value: string): void
+  /** 测试视觉模型配置 */
+  testVisionModel(): Promise<void>
   save(): Promise<void>
   discard(): void
 }
@@ -390,7 +400,10 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
   const [draft, setDraft] = useState<string[] | null>(null)
   const [savedUserMap, setSavedUserMap] = useState<Record<string, string> | null>(null)
   const [draftUserMap, setDraftUserMap] = useState<Record<string, string> | null>(null)
+  const [savedVisionModel, setSavedVisionModel] = useState<VisionModelConfig | null>(null)
+  const [draftVisionModel, setDraftVisionModel] = useState<VisionModelConfig | null>(null)
   const [applyState, setApplyState] = useState<ApplyState>({ kind: 'idle' })
+  const [testState, setTestState] = useState<{ kind: 'idle' } | { kind: 'testing' } | { kind: 'success'; message: string } | { kind: 'error'; message: string }>({ kind: 'idle' })
   const [chatMembers, setChatMembers] = useState<FeishuChatMember[]>([])
   const [loadingMembers, setLoadingMembers] = useState(false)
 
@@ -400,11 +413,15 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
       const result = await api.get()
       const pools = [...result.settings.pools]
       const userMap = { ...result.settings.userMap }
+      const visionModel = result.settings.visionModel ? { ...result.settings.visionModel } : null
       setSaved(pools)
       setDraft(pools)
       setSavedUserMap(userMap)
       setDraftUserMap(userMap)
+      setSavedVisionModel(visionModel)
+      setDraftVisionModel(visionModel)
       setApplyState({ kind: 'idle' })
+      setTestState({ kind: 'idle' })
       setPhase('ready')
     } catch {
       setPhase('unavailable')
@@ -415,7 +432,7 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
     void load()
   }, [load])
 
-  const dirty = draft !== null && saved !== null && (JSON.stringify(draft) !== JSON.stringify(saved) || JSON.stringify(draftUserMap) !== JSON.stringify(savedUserMap))
+  const dirty = draft !== null && saved !== null && (JSON.stringify(draft) !== JSON.stringify(saved) || JSON.stringify(draftUserMap) !== JSON.stringify(savedUserMap) || JSON.stringify(draftVisionModel) !== JSON.stringify(savedVisionModel))
   const saving = applyState.kind === 'saving'
 
   /** 编辑后回到 idle(清除「已保存」提示,由 dirty 徽标接管) */
@@ -474,6 +491,34 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
     }
   }, [api])
 
+  const editVisionModel = (field: keyof VisionModelConfig, value: string): void => {
+    setDraftVisionModel((current) => {
+      const next = current ? { ...current } : { apiKey: '', modelName: '', baseUrl: '' }
+      next[field] = value
+      return next
+    })
+    markEdited()
+  }
+
+  const testVisionModel = async (): Promise<void> => {
+    if (!draftVisionModel || !draftVisionModel.apiKey.trim()) {
+      setTestState({ kind: 'error', message: '请先填写 API Key' })
+      return
+    }
+
+    setTestState({ kind: 'testing' })
+    try {
+      const result = await api.testVisionModel(draftVisionModel)
+      if (result.success) {
+        setTestState({ kind: 'success', message: result.message })
+      } else {
+        setTestState({ kind: 'error', message: result.message })
+      }
+    } catch (error) {
+      setTestState({ kind: 'error', message: messageOf(error) })
+    }
+  }
+
   const save = async (): Promise<void> => {
     if (!draft || saving) return
 
@@ -491,13 +536,16 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
 
     setApplyState({ kind: 'saving' })
     try {
-      const result = await api.save({ pools: trimmed, userMap: draftUserMap || {} })
+      const result = await api.save({ pools: trimmed, userMap: draftUserMap || {}, visionModel: draftVisionModel || undefined })
       const pools = [...result.settings.pools]
       const userMap = { ...result.settings.userMap }
+      const visionModel = result.settings.visionModel ? { ...result.settings.visionModel } : null
       setSaved(pools)
       setDraft(pools)
       setSavedUserMap(userMap)
       setDraftUserMap(userMap)
+      setSavedVisionModel(visionModel)
+      setDraftVisionModel(visionModel)
       setApplyState({ kind: 'saved' })
     } catch (error) {
       setApplyState({ kind: 'error', message: messageOf(error) })
@@ -507,10 +555,12 @@ export function useAquaSettings(api: AquaSettingsApi, t: AquaSettingsTranslate):
   const discard = (): void => {
     setDraft(saved ? [...saved] : null)
     setDraftUserMap(savedUserMap ? { ...savedUserMap } : null)
+    setDraftVisionModel(savedVisionModel ? { ...savedVisionModel } : null)
     setApplyState({ kind: 'idle' })
+    setTestState({ kind: 'idle' })
   }
 
-  return { phase, saved, draft, savedUserMap, draftUserMap, dirty, applyState, chatMembers, loadingMembers, load, editPool, addPool, removePool, editUserMap, removeUserMap, loadChatMembers, save, discard }
+  return { phase, saved, draft, savedUserMap, draftUserMap, savedVisionModel, draftVisionModel, dirty, applyState, testState, chatMembers, loadingMembers, load, editPool, addPool, removePool, editUserMap, removeUserMap, loadChatMembers, editVisionModel, testVisionModel, save, discard }
 }
 
 // ========== 表单组件 ==========
@@ -657,6 +707,71 @@ function PoolsForm({ model, t }: { model: AquaSettingsModel; t: AquaSettingsTran
           </div>
         </div>
       )}
+
+      {/* 分隔线 */}
+      <div style={dividerStyle} />
+
+      {/* 视觉模型配置 */}
+      <div>
+        <p style={labelStyle}>{t('field.visionModel.label')}</p>
+        <p style={hintStyle}>{t('field.visionModel.hint')}</p>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <div style={{ marginBottom: 8 }}>
+          <p style={labelStyle}>{t('field.visionModel.apiKey.label')}</p>
+          <input
+            style={inputStyle}
+            type="password"
+            value={model.draftVisionModel?.apiKey || ''}
+            placeholder={t('field.visionModel.apiKey.placeholder')}
+            onChange={(e) => model.editVisionModel('apiKey', e.target.value)}
+          />
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <p style={labelStyle}>{t('field.visionModel.modelName.label')}</p>
+          <input
+            style={inputStyle}
+            value={model.draftVisionModel?.modelName || ''}
+            placeholder={t('field.visionModel.modelName.placeholder')}
+            onChange={(e) => model.editVisionModel('modelName', e.target.value)}
+          />
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <p style={labelStyle}>{t('field.visionModel.baseUrl.label')}</p>
+          <input
+            style={inputStyle}
+            value={model.draftVisionModel?.baseUrl || ''}
+            placeholder={t('field.visionModel.baseUrl.placeholder')}
+            onChange={(e) => model.editVisionModel('baseUrl', e.target.value)}
+          />
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <button
+            type="button"
+            style={addBtnStyle}
+            disabled={model.testState.kind === 'testing'}
+            onClick={() => void model.testVisionModel()}
+          >
+            {model.testState.kind === 'testing' ? t('field.visionModel.testing') : t('field.visionModel.test')}
+          </button>
+          <p style={hintStyle}>{t('field.visionModel.testHint')}</p>
+        </div>
+
+        {model.testState.kind === 'success' && (
+          <p style={{ ...savedStyle, marginTop: 8 }} role="status">
+            {model.testState.message}
+          </p>
+        )}
+        {model.testState.kind === 'error' && (
+          <p style={{ ...errorStyle, marginTop: 8 }} role="status">
+            {model.testState.message}
+          </p>
+        )}
+      </div>
 
       {/* 底部操作区 */}
       <div style={footerStyle}>

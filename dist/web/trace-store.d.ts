@@ -88,6 +88,10 @@ export interface RecordQuery {
     cls?: string;
     /** 本地日期 YYYY-MM-DD(按记录 ID 的日期段匹配) */
     date?: string;
+    /** 低置信度筛选(confidence < 0.8) */
+    low_confidence?: boolean;
+    /** 有错误记录筛选(agent_retries > 0 或 cls=unknown) */
+    has_error?: boolean;
     limit?: number;
     offset?: number;
 }

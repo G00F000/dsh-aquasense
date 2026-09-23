@@ -77,7 +77,8 @@ export function buildAdviceToolOutput(retrieval, advice) {
         channel_b_note: countChannel(retrieval.knowledge, 'note'),
         channel_c_pdf: countChannel(retrieval.knowledge, 'pdf_content'),
         merged_count: retrieval.knowledge?.items.length ?? 0,
-        retrieve_excerpts: retrieval.excerpts
+        // 返回前统一去 undefined 化:可选字段缺省时省略键,undefined 值会被 DSH 判定为非 lossless JSON 报错
+        retrieve_excerpts: retrieval.excerpts.map((e) => makeExcerpt(e, e.text))
     };
 }
 /**
@@ -260,7 +261,7 @@ async function extractExcerpts(items, keywords) {
             if (item.highlight) {
                 const quote = cleanHighlight(item.highlight, keywords);
                 if (quote)
-                    results.push({ title: item.title, text: quote, from: item.from, locator: item.locator });
+                    results.push(makeExcerpt(item, quote));
                 continue;
             }
             // 2. 无高亮:读正文摘取(note 命中走 note_id 直读,标识与 media_id 不同)
@@ -273,13 +274,26 @@ async function extractExcerpts(items, keywords) {
             }
             const text = extractRelevantSnippet(content, keywords);
             if (text)
-                results.push({ title: item.title, text, from: item.from, locator: item.locator });
+                results.push(makeExcerpt(item, text));
         }
         catch (error) {
             console.warn(`[aquasense] 正文读取失败(《${item.title}》):`, error instanceof Error ? error.message : error);
         }
     }
     return results;
+}
+/**
+ * 构造摘录条目:可选字段(from/locator)缺省时省略键,避免 undefined 值进入 DSH 工具产出被判定为非 lossless JSON 而报错。
+ * String() 归一化:IMA API 返回的 title/from 可能为 number/null 等非 string 类型,DSH schema 严格校验 retrieve_excerpts 各字段须为 string,
+ * 未归一化的非 string 值会导致 INVALID_TOOL_OUTPUT 错误(见 p11 根因分析)。
+ */
+function makeExcerpt(item, text) {
+    return {
+        title: String(item.title ?? ''),
+        text,
+        ...(item.from ? { from: String(item.from) } : {}),
+        ...(item.locator ? { locator: String(item.locator) } : {})
+    };
 }
 /**
  * 清理 note 高亮为可展示的引用原文:去 <em> 标记、压缩空白,

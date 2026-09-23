@@ -273,11 +273,33 @@ function WaterfallChart({ record }) {
         return null;
     return (_jsxs("div", { style: { marginBottom: 20 }, children: [_jsx("div", { className: "trc-section-title", children: "\u7011\u5E03\u56FE \u00B7 Trace Timeline" }), _jsx("div", { className: "trc-wf", children: spans.map((s) => (_jsxs("div", { className: "trc-wf-row", children: [_jsx("span", { className: "trc-wf-icon", style: S.iconBg(s.color), children: s.icon }), _jsx("span", { className: "trc-wf-label", children: s.label }), _jsx("div", { className: "trc-wf-track", children: _jsx("div", { className: "trc-wf-bar", style: S.wfBar(s.color, (s.duration / total) * 100) }) }), _jsx("span", { className: "trc-wf-dur", children: durationText(s.duration) }), _jsx("span", { className: "trc-wf-status", children: s.data?.error ? '❌' : (s.duration > 0 ? '✅' : '—') })] }, s.key))) })] }));
 }
+/** span 字段 → agent 工具名映射(upload/retrieve 无对应 agent 工具) */
+const SPAN_TO_AGENT_TOOL = {
+    span_analyze: 'aquasense_analyze',
+    span_advice: 'aquasense_advice',
+    span_ledger: 'aquasense_ledger'
+};
+/** 查询 agent.calls 中某工具的失败信息(无 agent 或无失败时返回 null) */
+function agentFailureInfo(record, spanField) {
+    const toolName = SPAN_TO_AGENT_TOOL[spanField];
+    if (!toolName || !record.agent?.calls)
+        return null;
+    const failedCalls = record.agent.calls.filter((c) => c.tool === toolName && c.status === 'error');
+    if (failedCalls.length === 0)
+        return null;
+    const errorCode = failedCalls.map((c) => c.error_code).filter(Boolean).join(', ') || 'UNKNOWN';
+    return { count: failedCalls.length, errorCode };
+}
 /** 单个步骤 Accordion */
 function StepAccordion({ def, record, isOpen, onToggle }) {
     const data = record[def.field];
     const dur = data?.duration_ms ?? 0;
-    return (_jsxs("div", { className: "trc-step", children: [_jsxs("button", { type: "button", className: "trc-step-head", onClick: onToggle, children: [_jsx("span", { className: "trc-step-icon", style: S.iconBg(def.color), children: def.icon }), _jsx("span", { style: { fontWeight: 600 }, children: def.label }), _jsxs("span", { className: "trc-step-right", children: [_jsx("span", { children: durationText(dur) }), _jsx("span", { children: data?.error ? '❌' : (dur > 0 ? '✅' : '—') }), _jsx("span", { className: "trc-step-arrow", style: { transform: isOpen ? 'rotate(90deg)' : undefined }, children: "\u25B6" })] })] }), isOpen && data && (_jsx("div", { className: "trc-step-body", children: renderStepContent(def.key, data, record) }))] }));
+    const failure = !data ? agentFailureInfo(record, def.field) : null;
+    return (_jsxs("div", { className: "trc-step", children: [_jsxs("button", { type: "button", className: "trc-step-head", onClick: onToggle, children: [_jsx("span", { className: "trc-step-icon", style: S.iconBg(def.color), children: def.icon }), _jsx("span", { style: { fontWeight: 600 }, children: def.label }), _jsxs("span", { className: "trc-step-right", children: [_jsx("span", { children: failure ? `失败${failure.count}次` : durationText(dur) }), _jsx("span", { children: data?.error ? '❌' : failure ? '❌' : (dur > 0 ? '✅' : '—') }), _jsx("span", { className: "trc-step-arrow", style: { transform: isOpen ? 'rotate(90deg)' : undefined }, children: "\u25B6" })] })] }), isOpen && (_jsx("div", { className: "trc-step-body", children: data
+                    ? renderStepContent(def.key, data, record)
+                    : failure
+                        ? (_jsxs("div", { className: "trc-step-field", children: [_jsx("span", { className: "trc-step-label", style: { color: '#ff4d4f', fontWeight: 600 }, children: "\u6267\u884C\u5931\u8D25" }), _jsxs("span", { className: "trc-step-value", style: { color: '#ff4d4f' }, children: ["\u8BE5\u5DE5\u5177\u6267\u884C ", failure.count, " \u6B21\u5747\u5931\u8D25\uFF08", failure.errorCode, "\uFF09"] })] }))
+                        : null }))] }));
 }
 /** 根据步骤类型渲染不同内容 */
 function renderStepContent(key, data, record) {
@@ -309,7 +331,16 @@ function renderAnalyzeStep(data, record) {
     const outputTok = data.output_tokens ?? 0;
     const raw = data.output_raw ?? '';
     const err = data.error;
-    return (_jsxs("div", { className: "trc-step-field", children: [_jsx("span", { className: "trc-step-label", children: "\u6A21\u578B" }), _jsxs("span", { className: "trc-step-value", children: [record?.model || '—', " (temperature=0.1)"] }), _jsx("span", { className: "trc-step-label", children: "\u8F93\u5165" }), _jsxs("span", { className: "trc-step-value", children: ["system prompt (", promptLen, " chars) + \u56FE\u7247"] }), _jsx("span", { className: "trc-step-label", children: "\u8F93\u51FA" }), _jsxs("span", { className: "trc-step-value", children: ["\u72B6\u6001: ", CLS_LABEL[cls] || cls, "\uFF08", cls, "\uFF09", '\n', "\u7F6E\u4FE1\u5EA6: ", confidence.toFixed(2), '\n', "\u75C7\u72B6: ", symptoms.length > 0 ? symptoms.join('、') : '无异常', severity ? `\n严重度: ${severity}` : '', organs.length > 0 ? `\n器官: ${organs.join('、')}` : ''] }), _jsx("span", { className: "trc-step-label", children: "Token" }), _jsxs("span", { className: "trc-step-value", children: ["input=", tokenText(inputTok), " output=", tokenText(outputTok)] }), raw && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", children: "\u539F\u59CB\u8F93\u51FA" }), _jsx("span", { className: "trc-step-value", children: raw })] })), err && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", style: { color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { className: "trc-step-value", style: { color: '#ff4d4f' }, children: err })] }))] }));
+    const completeness = data.data_completeness;
+    const expectedImgs = data.expected_image_count;
+    const completenessDisplay = completeness === 'partial'
+        ? { color: '#d48806', bg: '#fffbe6', icon: '⚠️', text: `图片不完整（期望 ${expectedImgs ?? '?'} 张），结论可能不可靠` }
+        : completeness === 'empty'
+            ? { color: '#ff4d4f', bg: '#fff2f0', icon: '❌', text: '全部图片丢失，结论不可信' }
+            : completeness === 'complete'
+                ? { color: '#52c41a', bg: '#f6ffed', icon: '✓', text: '图片齐全' }
+                : null;
+    return (_jsxs("div", { className: "trc-step-field", children: [_jsx("span", { className: "trc-step-label", children: "\u6A21\u578B" }), _jsxs("span", { className: "trc-step-value", children: [record?.model || '—', " (temperature=0.1)"] }), _jsx("span", { className: "trc-step-label", children: "\u8F93\u5165" }), _jsxs("span", { className: "trc-step-value", children: ["system prompt (", promptLen, " chars) + \u56FE\u7247"] }), completenessDisplay && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", style: { color: completenessDisplay.color, fontWeight: 600 }, children: "\u6570\u636E\u5B8C\u6574\u6027" }), _jsxs("span", { className: "trc-step-value", style: { color: completenessDisplay.color, background: completenessDisplay.bg, padding: '2px 8px', borderRadius: 4, fontWeight: 500 }, children: [completenessDisplay.icon, " ", completenessDisplay.text] })] })), _jsx("span", { className: "trc-step-label", children: "\u8F93\u51FA" }), _jsxs("span", { className: "trc-step-value", children: ["\u72B6\u6001: ", CLS_LABEL[cls] || cls, "\uFF08", cls, "\uFF09", '\n', "\u7F6E\u4FE1\u5EA6: ", confidence.toFixed(2), '\n', "\u75C7\u72B6: ", symptoms.length > 0 ? symptoms.join('、') : '无异常', severity ? `\n严重度: ${severity}` : '', organs.length > 0 ? `\n器官: ${organs.join('、')}` : ''] }), _jsx("span", { className: "trc-step-label", children: "Token" }), _jsxs("span", { className: "trc-step-value", children: ["input=", tokenText(inputTok), " output=", tokenText(outputTok)] }), raw && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", children: "\u539F\u59CB\u8F93\u51FA" }), _jsx("span", { className: "trc-step-value", children: raw })] })), err && (_jsxs(_Fragment, { children: [_jsx("span", { className: "trc-step-label", style: { color: '#ff4d4f' }, children: "\u9519\u8BEF" }), _jsx("span", { className: "trc-step-value", style: { color: '#ff4d4f' }, children: err })] }))] }));
 }
 function renderRetrieveStep(data) {
     const query = data.query ?? '';
@@ -365,6 +396,8 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
     const [error, setError] = useState(null);
     const [pool, setPool] = useState('');
     const [cls, setCls] = useState('');
+    const [lowConfidence, setLowConfidence] = useState(false);
+    const [hasError, setHasError] = useState(false);
     /** 池号枚举(设置页「AquaSense 设置」配置;/api/pools 拉取失败时兜底默认 4 池) */
     const [pools, setPools] = useState(FALLBACK_POOLS);
     // --- 详情状态 ---
@@ -387,6 +420,10 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
                 url += `&pool=${encodeURIComponent(pool)}`;
             if (cls)
                 url += `&cls=${encodeURIComponent(cls)}`;
+            if (lowConfidence)
+                url += '&low_confidence=1';
+            if (hasError)
+                url += '&has_error=1';
             let resp;
             try {
                 resp = await fetch(url);
@@ -413,10 +450,12 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
         finally {
             setLoading(false);
         }
-    }, [loading, offset, pool, cls, records, apiBase]);
+    }, [loading, offset, pool, cls, lowConfidence, hasError, records, apiBase]);
     const applyFilter = useCallback((newPool, newCls) => {
         setPool(newPool);
         setCls(newCls);
+        setLowConfidence(false);
+        setHasError(false);
         setRecords([]);
         setOffset(0);
         setHasMore(false);
@@ -428,7 +467,7 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
         if (records.length === 0 && offset === 0 && !loading) {
             void fetchPage(true);
         }
-    }, [pool, cls]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [pool, cls, lowConfidence, hasError]); // eslint-disable-line react-hooks/exhaustive-deps
     useEffect(() => {
         void fetchPage(true);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -523,13 +562,23 @@ export function TraceRecordList({ apiBase = '/aquasense-reports', onOpenTrend })
         }
         groups[groups.length - 1].items.push(r);
     }
-    return (_jsxs(_Fragment, { children: [_jsxs("div", { className: "trc-filterbar", children: [_jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: pool, onChange: (e) => { applyFilter(e.target.value, cls); }, "aria-label": "\u6309\u6C60\u53F7\u7B5B\u9009", children: ['', ...pools].map((p) => _jsx("option", { value: p, children: p || '全部池号' }, p)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: cls, onChange: (e) => { applyFilter(pool, e.target.value); }, "aria-label": "\u6309\u72B6\u6001\u7B5B\u9009", children: CLS_OPTIONS.map(([v, l]) => _jsx("option", { value: v, children: l }, v)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-count", children: [total, " \u6761\u8BB0\u5F55"] }), _jsx("button", { type: "button", className: "trc-trend-btn", onClick: () => {
+    return (_jsxs(_Fragment, { children: [_jsxs("div", { className: "trc-filterbar", children: [_jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: pool, onChange: (e) => { applyFilter(e.target.value, cls); }, "aria-label": "\u6309\u6C60\u53F7\u7B5B\u9009", children: ['', ...pools].map((p) => _jsx("option", { value: p, children: p || '全部池号' }, p)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsxs("span", { className: "trc-select-wrap", children: [_jsx("select", { className: "trc-select", value: cls, onChange: (e) => { applyFilter(pool, e.target.value); }, "aria-label": "\u6309\u72B6\u6001\u7B5B\u9009", children: CLS_OPTIONS.map(([v, l]) => _jsx("option", { value: v, children: l }, v)) }), _jsx("span", { className: "trc-select-caret", children: "\u25BE" })] }), _jsx("button", { type: "button", className: "trc-toggle", style: {
+                            padding: '4px 10px', borderRadius: 8, border: '1px solid var(--dsw-alias-border,#d9d9d9)',
+                            background: lowConfidence ? '#fff7e6' : 'var(--dsw-alias-bg-card,#fff)',
+                            color: lowConfidence ? '#d48806' : 'var(--dsw-alias-label-secondary,#7b8088)',
+                            fontSize: 12, fontWeight: lowConfidence ? 600 : 400, cursor: 'pointer', whiteSpace: 'nowrap'
+                        }, onClick: () => { setLowConfidence((v) => !v); setRecords([]); setOffset(0); setHasMore(false); setError(null); setDetailId(null); setDetailRecord(null); }, children: lowConfidence ? '🔍 低置信度 ✓' : '🔍 低置信度' }), _jsx("button", { type: "button", className: "trc-toggle", style: {
+                            padding: '4px 10px', borderRadius: 8, border: '1px solid var(--dsw-alias-border,#d9d9d9)',
+                            background: hasError ? '#fff2f0' : 'var(--dsw-alias-bg-card,#fff)',
+                            color: hasError ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)',
+                            fontSize: 12, fontWeight: hasError ? 600 : 400, cursor: 'pointer', whiteSpace: 'nowrap'
+                        }, onClick: () => { setHasError((v) => !v); setRecords([]); setOffset(0); setHasMore(false); setError(null); setDetailId(null); setDetailRecord(null); }, children: hasError ? '⚠️ 有错误 ✓' : '⚠️ 有错误' }), _jsxs("span", { className: "trc-count", children: [total, " \u6761\u8BB0\u5F55"] }), _jsx("button", { type: "button", className: "trc-trend-btn", onClick: () => {
                             const targetPool = pool || pools[0] || '池1';
                             onOpenTrend?.(targetPool);
                         }, children: "\uD83D\uDCC8 \u6C60\u53F7\u8D8B\u52BF\u5206\u6790 \u2192" })] }), _jsxs("div", { className: "trc-list", children: [error && (_jsxs("div", { className: "trc-err", children: [_jsx("div", { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' }, children: error }), _jsx("button", { type: "button", className: "trc-more-btn", style: { marginTop: 8, width: 'auto', display: 'inline-block', padding: '6px 14px', fontSize: 13 }, onClick: () => { void fetchPage(true); }, children: "\u91CD\u8BD5" })] })), !error && records.length === 0 && !loading && (_jsxs("div", { className: "trc-empty", children: [_jsx("span", { className: "trc-empty-icon", children: "\uD83D\uDC1F" }), _jsx("span", { children: "\u6682\u65E0\u5206\u6790\u8BB0\u5F55" })] })), loading && records.length === 0 && (_jsxs("div", { className: "trc-empty", children: [_jsx("span", { className: "trc-spin" }), _jsx("span", { children: "\u52A0\u8F7D\u4E2D\u2026" })] })), groups.map((g) => (_jsxs("div", { children: [_jsx("div", { className: "trc-group-title", children: g.title }), g.items.map((r) => {
                                 const clsName = CLS_LABEL[r.cls] || r.cls || '未知';
                                 const sym = r.symptoms?.length ? r.symptoms.join('、') : '无异常';
-                                return (_jsxs("button", { type: "button", className: "trc-row", onClick: () => { void openDetail(r.id); }, children: [_jsxs("div", { className: "trc-line1", children: [_jsx("span", { className: "trc-dot", style: S.dot(r.cls) }), _jsx("span", { className: "trc-idchip", children: r.id }), _jsx("span", { style: { fontWeight: 600 }, children: r.pool }), _jsxs("span", { className: "trc-badge", style: S.badge(r.cls), children: [_jsx("span", { className: "trc-badge-dot" }), clsName] }), _jsx("span", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: (r.confidence || 0).toFixed(2) }), _jsx("span", { className: "trc-symptom", style: { color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)' }, children: sym })] }), _jsxs("div", { className: "trc-line2", children: [_jsx("span", { children: timeText(r.created_at) }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: SOURCE_LABEL[r.source || ''] || r.source }), _jsx("span", { children: "\u00B7" }), r.agent_retries !== undefined && (_jsx("span", { className: "trc-badge", style: { background: '#4d6bfe1a', color: '#4d6bfe', fontWeight: 600 }, children: "Agent\u94FE\u8DEF" })), _jsx("span", { children: r.alert_level ? 'AI视觉+知识库' : 'AI视觉' }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: durationText(r.total_duration_ms) }), _jsx("span", { children: "\u00B7" }), r.agent_retries !== undefined && r.agent_retries > 0 && (_jsxs("span", { children: ["\uD83D\uDD01 ", (r.agent_retry_tool || 'tool').replace(/^aquasense_/, ''), " \u00D7", r.agent_retries] })), _jsxs("span", { children: [tokenText(r.total_tokens), " tokens"] })] })] }, r.id));
+                                return (_jsxs("button", { type: "button", className: "trc-row", onClick: () => { void openDetail(r.id); }, children: [_jsxs("div", { className: "trc-line1", children: [_jsx("span", { className: "trc-dot", style: S.dot(r.cls) }), _jsx("span", { className: "trc-idchip", children: r.id }), _jsx("span", { style: { fontWeight: 600 }, children: r.pool }), _jsxs("span", { className: "trc-badge", style: S.badge(r.cls), children: [_jsx("span", { className: "trc-badge-dot" }), clsName] }), _jsx("span", { style: { color: 'var(--dsw-alias-label-secondary,#7b8088)', fontSize: 12 }, children: (r.confidence || 0).toFixed(2) }), _jsx("span", { className: "trc-symptom", style: { color: r.cls === 'disease' ? '#ff4d4f' : 'var(--dsw-alias-label-secondary,#7b8088)' }, children: sym })] }), _jsxs("div", { className: "trc-line2", children: [_jsx("span", { children: timeText(r.created_at) }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: SOURCE_LABEL[r.source || ''] || r.source }), _jsx("span", { children: "\u00B7" }), r.agent_retries !== undefined && (_jsx("span", { className: "trc-badge", style: { background: '#4d6bfe1a', color: '#4d6bfe', fontWeight: 600 }, children: "Agent\u94FE\u8DEF" })), r.agent_retries !== undefined && r.agent_retries > 0 && (_jsxs("span", { className: "trc-badge", style: { background: '#fff2f0', color: '#ff4d4f', fontWeight: 600 }, children: ["\u26A0\uFE0F ", (r.agent_retry_tool || 'tool').replace(/^aquasense_/, ''), " \u5931\u8D25 ", r.agent_retries, " \u6B21"] })), _jsx("span", { children: r.alert_level ? 'AI视觉+知识库' : 'AI视觉' }), _jsx("span", { children: "\u00B7" }), _jsx("span", { children: durationText(r.total_duration_ms) }), _jsx("span", { children: "\u00B7" }), r.agent_retries !== undefined && r.agent_retries > 0 && (_jsxs("span", { children: ["\uD83D\uDD01 ", (r.agent_retry_tool || 'tool').replace(/^aquasense_/, ''), " \u00D7", r.agent_retries] })), _jsxs("span", { children: [tokenText(r.total_tokens), " tokens"] })] })] }, r.id));
                             })] }, g.title))), hasMore && !loading && (_jsx("button", { type: "button", className: "trc-more-btn", onClick: () => { void fetchPage(false); }, children: "\u52A0\u8F7D\u66F4\u591A" })), loading && records.length > 0 && (_jsx("div", { className: "trc-empty", style: { padding: '20px 0' }, children: _jsx("span", { className: "trc-spin" }) }))] })] }));
 }
 export function TraceTrendView({ pool: initPool, apiBase = '/aquasense-reports', onBack }) {

@@ -24,6 +24,17 @@ export interface AquaSettings {
     pools: string[];
     /** 用户映射表:open_id → 姓名(用于台账自动填充上报人) */
     userMap: Record<string, string>;
+    /** 视觉模型配置 */
+    visionModel?: VisionModelConfig;
+}
+/** 视觉模型配置 */
+export interface VisionModelConfig {
+    /** DeepSeek API Key */
+    apiKey: string;
+    /** 视觉模型名称 */
+    modelName: string;
+    /** API 基础 URL */
+    baseUrl: string;
 }
 /**
  * 归一化池号列表(导出供测试与网关共用同一口径):
@@ -46,6 +57,14 @@ export declare function formatPoolIds(pools?: string[]): string;
 export declare function sanitizeUserMap(raw: unknown): Record<string, string>;
 /** 当前生效用户映射表(业务消费:台账自动填充上报人) */
 export declare function getUserMap(): Record<string, string>;
+/** 默认视觉模型名称 */
+export declare const DEFAULT_VISION_MODEL = "deepseek-flash";
+/** 默认 API 基础 URL */
+export declare const DEFAULT_BASE_URL = "https://api.deepseek.com";
+/** 归一化视觉模型配置 */
+export declare function sanitizeVisionModel(raw: unknown): VisionModelConfig | undefined;
+/** 当前生效视觉模型配置 */
+export declare function getVisionModelConfig(): VisionModelConfig | undefined;
 /** 根据 open_id 获取用户名(优先映射表,未命中返回空字符串)
  *
  * 匹配策略(应对 dsh-lark 消息桥截断 open_id 的情况):
@@ -62,4 +81,5 @@ export declare function getUserNameByOpenId(openId: string): string;
 export declare function saveAquaSettings(input: {
     pools: unknown;
     userMap?: Record<string, unknown>;
+    visionModel?: unknown;
 }): AquaSettings;

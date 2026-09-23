@@ -14,6 +14,7 @@ import z from '@deepseek-ai/schemastery';
 import { HttpError } from './remind-gateway.js';
 import { DEFAULT_POOLS, getAquaSettings, saveAquaSettings } from '../config/aqua-settings.js';
 import { getFeishuChatMembers } from '../feishu/token.js';
+import { DEFAULT_VISION_MODEL, DEFAULT_BASE_URL } from '../config/aqua-settings.js';
 // ========== 常量 ==========
 /** 设置页 API 路由前缀(同源 fetch;方法追加在其后,如 /get) */
 export const AQUA_SETTINGS_API_PREFIX = '/aquasense-settings/api';
@@ -51,7 +52,7 @@ export function registerAquaSettingsNamespace(ctx) {
 // ========== 请求校验 ==========
 /**
  * 校验并归一化「保存设置」请求体(导出供测试)。
- * body 形如 { settings: { pools: [...], userMap: { ... } } }。
+ * body 形如 { settings: { pools: [...], userMap: { ... }, visionModel: { ... } } }。
  */
 export function parseAquaSettingsInput(body) {
     const raw = body?.settings;
@@ -62,7 +63,7 @@ export function parseAquaSettingsInput(body) {
     if (!Array.isArray(input.pools)) {
         throw new HttpError(400, 'invalid-config', 'pools 必须为数组');
     }
-    return { pools: input.pools, userMap: input.userMap };
+    return { pools: input.pools, userMap: input.userMap, visionModel: input.visionModel };
 }
 /** 获取群成员请求体校验 */
 export function parseChatId(body) {
@@ -71,6 +72,22 @@ export function parseChatId(body) {
         throw new HttpError(400, 'invalid-chat-id', '请求体缺少 chat_id 字符串');
     }
     return raw.trim();
+}
+/** 视觉模型测试请求体校验 */
+export function parseVisionModelTestInput(body) {
+    const raw = body?.config;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new HttpError(400, 'invalid-config', '请求体缺少 config 对象');
+    }
+    const input = raw;
+    if (typeof input.apiKey !== 'string' || !input.apiKey.trim()) {
+        throw new HttpError(400, 'invalid-api-key', 'API Key 不能为空');
+    }
+    return {
+        apiKey: input.apiKey.trim(),
+        modelName: typeof input.modelName === 'string' ? input.modelName.trim() : DEFAULT_VISION_MODEL,
+        baseUrl: typeof input.baseUrl === 'string' ? input.baseUrl.trim() : DEFAULT_BASE_URL
+    };
 }
 // ========== API 分发 ==========
 /**
@@ -91,6 +108,11 @@ export function createAquaSettingsApi(deps) {
                     const chatId = parseChatId(body);
                     const members = await deps.listChatMembers(chatId);
                     return ok({ members });
+                }
+                case 'test-vision-model': {
+                    const config = parseVisionModelTestInput(body);
+                    const result = await deps.testVisionModel(config);
+                    return ok(result);
                 }
                 default:
                     return fail(404, 'unknown-method', `未知方法: ${method}`);
@@ -202,6 +224,45 @@ function fail(status, code, message) {
 function messageOf(error) {
     return error instanceof Error ? error.message : String(error);
 }
+// ========== 视觉模型测试 ==========
+/**
+ * 测试视觉模型配置(使用提供的配置调用 DeepSeek API)。
+ * 发送一个简单的文本请求来验证 API Key 和模型是否有效。
+ */
+async function testVisionModel(config) {
+    try {
+        const { apiKey, modelName, baseUrl } = config;
+        const model = modelName || DEFAULT_VISION_MODEL;
+        const url = baseUrl || DEFAULT_BASE_URL;
+        // 发送一个简单的文本请求来测试 API 连接
+        const response = await fetch(`${url}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model,
+                messages: [{ role: 'user', content: 'Hello, this is a test message.' }],
+                max_tokens: 10
+            })
+        });
+        if (!response.ok) {
+            const errBody = await response.text().catch(() => '');
+            return { success: false, message: `API 调用失败: HTTP ${response.status} - ${errBody}` };
+        }
+        const result = (await response.json());
+        if (result.choices && result.choices.length > 0) {
+            return { success: true, message: '视觉模型配置测试成功' };
+        }
+        else {
+            return { success: false, message: 'API 返回数据格式异常' };
+        }
+    }
+    catch (error) {
+        return { success: false, message: `测试失败: ${messageOf(error)}` };
+    }
+}
 // ========== 插件接线 ==========
 /**
  * 安装 AquaSense 设置 Web 面:settings 命名空间 + HTTP API 路由。
@@ -212,7 +273,8 @@ export function installAquaSettingsWeb(ctx) {
     const dispatch = createAquaSettingsApi({
         getSettings: getAquaSettings,
         saveSettings: saveAquaSettings,
-        listChatMembers: getFeishuChatMembers
+        listChatMembers: getFeishuChatMembers,
+        testVisionModel
     });
     ctx.inject(['webServer'], (sctx) => {
         sctx.effect(() => {

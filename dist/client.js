@@ -82,7 +82,8 @@ const remindApi = {
 const aquaSettingsApi = {
 	get: () => call(AQUA_SETTINGS_API_PREFIX, "get"),
 	save: (input) => call(AQUA_SETTINGS_API_PREFIX, "save", { settings: input }),
-	listChatMembers: (chatId) => call(AQUA_SETTINGS_API_PREFIX, "list-members", { chat_id: chatId })
+	listChatMembers: (chatId) => call(AQUA_SETTINGS_API_PREFIX, "list-members", { chat_id: chatId }),
+	testVisionModel: (config) => call(AQUA_SETTINGS_API_PREFIX, "test-vision-model", { config })
 };
 
 //#endregion
@@ -1070,10 +1071,29 @@ function WaterfallChart({ record }) {
 		})]
 	});
 }
+/** span 字段 → agent 工具名映射(upload/retrieve 无对应 agent 工具) */
+const SPAN_TO_AGENT_TOOL = {
+	span_analyze: "aquasense_analyze",
+	span_advice: "aquasense_advice",
+	span_ledger: "aquasense_ledger"
+};
+/** 查询 agent.calls 中某工具的失败信息(无 agent 或无失败时返回 null) */
+function agentFailureInfo(record, spanField) {
+	const toolName = SPAN_TO_AGENT_TOOL[spanField];
+	if (!toolName || !record.agent?.calls) return null;
+	const failedCalls = record.agent.calls.filter((c) => c.tool === toolName && c.status === "error");
+	if (failedCalls.length === 0) return null;
+	const errorCode = failedCalls.map((c) => c.error_code).filter(Boolean).join(", ") || "UNKNOWN";
+	return {
+		count: failedCalls.length,
+		errorCode
+	};
+}
 /** 单个步骤 Accordion */
 function StepAccordion({ def, record, isOpen, onToggle }) {
 	const data = record[def.field];
 	const dur = data?.duration_ms ?? 0;
+	const failure = !data ? agentFailureInfo(record, def.field) : null;
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		className: "trc-step",
 		children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
@@ -1093,8 +1113,8 @@ function StepAccordion({ def, record, isOpen, onToggle }) {
 				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 					className: "trc-step-right",
 					children: [
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: durationText(dur) }),
-						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: data?.error ? "❌" : dur > 0 ? "✅" : "—" }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: failure ? `失败${failure.count}次` : durationText(dur) }),
+						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: data?.error ? "❌" : failure ? "❌" : dur > 0 ? "✅" : "—" }),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 							className: "trc-step-arrow",
 							style: { transform: isOpen ? "rotate(90deg)" : void 0 },
@@ -1103,9 +1123,29 @@ function StepAccordion({ def, record, isOpen, onToggle }) {
 					]
 				})
 			]
-		}), isOpen && data && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+		}), isOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 			className: "trc-step-body",
-			children: renderStepContent(def.key, data, record)
+			children: data ? renderStepContent(def.key, data, record) : failure ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				className: "trc-step-field",
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+					className: "trc-step-label",
+					style: {
+						color: "#ff4d4f",
+						fontWeight: 600
+					},
+					children: "执行失败"
+				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+					className: "trc-step-value",
+					style: { color: "#ff4d4f" },
+					children: [
+						"该工具执行 ",
+						failure.count,
+						" 次均失败（",
+						failure.errorCode,
+						"）"
+					]
+				})]
+			}) : null
 		})]
 	});
 }
@@ -1183,6 +1223,24 @@ function renderAnalyzeStep(data, record) {
 	const outputTok = data.output_tokens ?? 0;
 	const raw = data.output_raw ?? "";
 	const err = data.error;
+	const completeness = data.data_completeness;
+	const expectedImgs = data.expected_image_count;
+	const completenessDisplay = completeness === "partial" ? {
+		color: "#d48806",
+		bg: "#fffbe6",
+		icon: "⚠️",
+		text: `图片不完整（期望 ${expectedImgs ?? "?"} 张），结论可能不可靠`
+	} : completeness === "empty" ? {
+		color: "#ff4d4f",
+		bg: "#fff2f0",
+		icon: "❌",
+		text: "全部图片丢失，结论不可信"
+	} : completeness === "complete" ? {
+		color: "#52c41a",
+		bg: "#f6ffed",
+		icon: "✓",
+		text: "图片齐全"
+	} : null;
 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 		className: "trc-step-field",
 		children: [
@@ -1206,6 +1264,28 @@ function renderAnalyzeStep(data, record) {
 					" chars) + 图片"
 				]
 			}),
+			completenessDisplay && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+				className: "trc-step-label",
+				style: {
+					color: completenessDisplay.color,
+					fontWeight: 600
+				},
+				children: "数据完整性"
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+				className: "trc-step-value",
+				style: {
+					color: completenessDisplay.color,
+					background: completenessDisplay.bg,
+					padding: "2px 8px",
+					borderRadius: 4,
+					fontWeight: 500
+				},
+				children: [
+					completenessDisplay.icon,
+					" ",
+					completenessDisplay.text
+				]
+			})] }),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 				className: "trc-step-label",
 				children: "输出"
@@ -1509,6 +1589,8 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 	const [error, setError] = (0, react.useState)(null);
 	const [pool, setPool] = (0, react.useState)("");
 	const [cls, setCls] = (0, react.useState)("");
+	const [lowConfidence, setLowConfidence] = (0, react.useState)(false);
+	const [hasError, setHasError] = (0, react.useState)(false);
 	/** 池号枚举(设置页「AquaSense 设置」配置;/api/pools 拉取失败时兜底默认 4 池) */
 	const [pools, setPools] = (0, react.useState)(FALLBACK_POOLS);
 	const [detailId, setDetailId] = (0, react.useState)(null);
@@ -1526,6 +1608,8 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 			let url = `${apiBase}/api/records?limit=${PAGE_LIMIT}&offset=${off}`;
 			if (pool) url += `&pool=${encodeURIComponent(pool)}`;
 			if (cls) url += `&cls=${encodeURIComponent(cls)}`;
+			if (lowConfidence) url += "&low_confidence=1";
+			if (hasError) url += "&has_error=1";
 			let resp;
 			try {
 				resp = await fetch(url);
@@ -1551,12 +1635,16 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 		offset,
 		pool,
 		cls,
+		lowConfidence,
+		hasError,
 		records,
 		apiBase
 	]);
 	const applyFilter = (0, react.useCallback)((newPool, newCls) => {
 		setPool(newPool);
 		setCls(newCls);
+		setLowConfidence(false);
+		setHasError(false);
 		setRecords([]);
 		setOffset(0);
 		setHasMore(false);
@@ -1566,7 +1654,12 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 	}, []);
 	(0, react.useEffect)(() => {
 		if (records.length === 0 && offset === 0 && !loading) fetchPage(true);
-	}, [pool, cls]);
+	}, [
+		pool,
+		cls,
+		lowConfidence,
+		hasError
+	]);
 	(0, react.useEffect)(() => {
 		fetchPage(true);
 	}, []);
@@ -1952,6 +2045,56 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 					children: "▾"
 				})]
 			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "trc-toggle",
+				style: {
+					padding: "4px 10px",
+					borderRadius: 8,
+					border: "1px solid var(--dsw-alias-border,#d9d9d9)",
+					background: lowConfidence ? "#fff7e6" : "var(--dsw-alias-bg-card,#fff)",
+					color: lowConfidence ? "#d48806" : "var(--dsw-alias-label-secondary,#7b8088)",
+					fontSize: 12,
+					fontWeight: lowConfidence ? 600 : 400,
+					cursor: "pointer",
+					whiteSpace: "nowrap"
+				},
+				onClick: () => {
+					setLowConfidence((v) => !v);
+					setRecords([]);
+					setOffset(0);
+					setHasMore(false);
+					setError(null);
+					setDetailId(null);
+					setDetailRecord(null);
+				},
+				children: lowConfidence ? "🔍 低置信度 ✓" : "🔍 低置信度"
+			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "trc-toggle",
+				style: {
+					padding: "4px 10px",
+					borderRadius: 8,
+					border: "1px solid var(--dsw-alias-border,#d9d9d9)",
+					background: hasError ? "#fff2f0" : "var(--dsw-alias-bg-card,#fff)",
+					color: hasError ? "#ff4d4f" : "var(--dsw-alias-label-secondary,#7b8088)",
+					fontSize: 12,
+					fontWeight: hasError ? 600 : 400,
+					cursor: "pointer",
+					whiteSpace: "nowrap"
+				},
+				onClick: () => {
+					setHasError((v) => !v);
+					setRecords([]);
+					setOffset(0);
+					setHasMore(false);
+					setError(null);
+					setDetailId(null);
+					setDetailRecord(null);
+				},
+				children: hasError ? "⚠️ 有错误 ✓" : "⚠️ 有错误"
+			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 				className: "trc-count",
 				children: [total, " 条记录"]
@@ -2064,6 +2207,21 @@ function TraceRecordList({ apiBase = "/aquasense-reports", onOpenTrend }) {
 									fontWeight: 600
 								},
 								children: "Agent链路"
+							}),
+							r.agent_retries !== void 0 && r.agent_retries > 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+								className: "trc-badge",
+								style: {
+									background: "#fff2f0",
+									color: "#ff4d4f",
+									fontWeight: 600
+								},
+								children: [
+									"⚠️ ",
+									(r.agent_retry_tool || "tool").replace(/^aquasense_/, ""),
+									" 失败 ",
+									r.agent_retries,
+									" 次"
+								]
 							}),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: r.alert_level ? "AI视觉+知识库" : "AI视觉" }),
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "·" }),
@@ -3100,7 +3258,10 @@ function useAquaSettings(api, t) {
 	const [draft, setDraft] = (0, react.useState)(null);
 	const [savedUserMap, setSavedUserMap] = (0, react.useState)(null);
 	const [draftUserMap, setDraftUserMap] = (0, react.useState)(null);
+	const [savedVisionModel, setSavedVisionModel] = (0, react.useState)(null);
+	const [draftVisionModel, setDraftVisionModel] = (0, react.useState)(null);
 	const [applyState, setApplyState] = (0, react.useState)({ kind: "idle" });
+	const [testState, setTestState] = (0, react.useState)({ kind: "idle" });
 	const [chatMembers, setChatMembers] = (0, react.useState)([]);
 	const [loadingMembers, setLoadingMembers] = (0, react.useState)(false);
 	const load = (0, react.useCallback)(async () => {
@@ -3109,11 +3270,15 @@ function useAquaSettings(api, t) {
 			const result = await api.get();
 			const pools = [...result.settings.pools];
 			const userMap = { ...result.settings.userMap };
+			const visionModel = result.settings.visionModel ? { ...result.settings.visionModel } : null;
 			setSaved(pools);
 			setDraft(pools);
 			setSavedUserMap(userMap);
 			setDraftUserMap(userMap);
+			setSavedVisionModel(visionModel);
+			setDraftVisionModel(visionModel);
 			setApplyState({ kind: "idle" });
+			setTestState({ kind: "idle" });
 			setPhase("ready");
 		} catch {
 			setPhase("unavailable");
@@ -3122,7 +3287,7 @@ function useAquaSettings(api, t) {
 	(0, react.useEffect)(() => {
 		load();
 	}, [load]);
-	const dirty = draft !== null && saved !== null && (JSON.stringify(draft) !== JSON.stringify(saved) || JSON.stringify(draftUserMap) !== JSON.stringify(savedUserMap));
+	const dirty = draft !== null && saved !== null && (JSON.stringify(draft) !== JSON.stringify(saved) || JSON.stringify(draftUserMap) !== JSON.stringify(savedUserMap) || JSON.stringify(draftVisionModel) !== JSON.stringify(savedVisionModel));
 	const saving = applyState.kind === "saving";
 	/** 编辑后回到 idle(清除「已保存」提示,由 dirty 徽标接管) */
 	const markEdited = () => {
@@ -3169,6 +3334,44 @@ function useAquaSettings(api, t) {
 			setLoadingMembers(false);
 		}
 	}, [api]);
+	const editVisionModel = (field, value) => {
+		setDraftVisionModel((current) => {
+			const next = current ? { ...current } : {
+				apiKey: "",
+				modelName: "",
+				baseUrl: ""
+			};
+			next[field] = value;
+			return next;
+		});
+		markEdited();
+	};
+	const testVisionModel = async () => {
+		if (!draftVisionModel || !draftVisionModel.apiKey.trim()) {
+			setTestState({
+				kind: "error",
+				message: "请先填写 API Key"
+			});
+			return;
+		}
+		setTestState({ kind: "testing" });
+		try {
+			const result = await api.testVisionModel(draftVisionModel);
+			if (result.success) setTestState({
+				kind: "success",
+				message: result.message
+			});
+			else setTestState({
+				kind: "error",
+				message: result.message
+			});
+		} catch (error) {
+			setTestState({
+				kind: "error",
+				message: messageOf(error)
+			});
+		}
+	};
 	const save = async () => {
 		if (!draft || saving) return;
 		const trimmed = draft.map((item) => item.trim());
@@ -3194,14 +3397,18 @@ function useAquaSettings(api, t) {
 		try {
 			const result = await api.save({
 				pools: trimmed,
-				userMap: draftUserMap || {}
+				userMap: draftUserMap || {},
+				visionModel: draftVisionModel || void 0
 			});
 			const pools = [...result.settings.pools];
 			const userMap = { ...result.settings.userMap };
+			const visionModel = result.settings.visionModel ? { ...result.settings.visionModel } : null;
 			setSaved(pools);
 			setDraft(pools);
 			setSavedUserMap(userMap);
 			setDraftUserMap(userMap);
+			setSavedVisionModel(visionModel);
+			setDraftVisionModel(visionModel);
 			setApplyState({ kind: "saved" });
 		} catch (error) {
 			setApplyState({
@@ -3213,7 +3420,9 @@ function useAquaSettings(api, t) {
 	const discard = () => {
 		setDraft(saved ? [...saved] : null);
 		setDraftUserMap(savedUserMap ? { ...savedUserMap } : null);
+		setDraftVisionModel(savedVisionModel ? { ...savedVisionModel } : null);
 		setApplyState({ kind: "idle" });
+		setTestState({ kind: "idle" });
 	};
 	return {
 		phase,
@@ -3221,8 +3430,11 @@ function useAquaSettings(api, t) {
 		draft,
 		savedUserMap,
 		draftUserMap,
+		savedVisionModel,
+		draftVisionModel,
 		dirty,
 		applyState,
+		testState,
 		chatMembers,
 		loadingMembers,
 		load,
@@ -3232,6 +3444,8 @@ function useAquaSettings(api, t) {
 		editUserMap,
 		removeUserMap,
 		loadChatMembers,
+		editVisionModel,
+		testVisionModel,
 		save,
 		discard
 	};
@@ -3403,6 +3617,90 @@ function PoolsForm({ model, t }) {
 					}, member.open_id))
 				})]
 			}),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", { style: dividerStyle }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: labelStyle,
+				children: t("field.visionModel.label")
+			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+				style: hintStyle,
+				children: t("field.visionModel.hint")
+			})] }),
+			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				style: { marginTop: 8 },
+				children: [
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: { marginBottom: 8 },
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							style: labelStyle,
+							children: t("field.visionModel.apiKey.label")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							style: inputStyle,
+							type: "password",
+							value: model.draftVisionModel?.apiKey || "",
+							placeholder: t("field.visionModel.apiKey.placeholder"),
+							onChange: (e) => model.editVisionModel("apiKey", e.target.value)
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: { marginBottom: 8 },
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							style: labelStyle,
+							children: t("field.visionModel.modelName.label")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							style: inputStyle,
+							value: model.draftVisionModel?.modelName || "",
+							placeholder: t("field.visionModel.modelName.placeholder"),
+							onChange: (e) => model.editVisionModel("modelName", e.target.value)
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: { marginBottom: 8 },
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							style: labelStyle,
+							children: t("field.visionModel.baseUrl.label")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+							style: inputStyle,
+							value: model.draftVisionModel?.baseUrl || "",
+							placeholder: t("field.visionModel.baseUrl.placeholder"),
+							onChange: (e) => model.editVisionModel("baseUrl", e.target.value)
+						})]
+					}),
+					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+						style: {
+							display: "flex",
+							alignItems: "center",
+							gap: 8,
+							marginTop: 8
+						},
+						children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+							type: "button",
+							style: addBtnStyle,
+							disabled: model.testState.kind === "testing",
+							onClick: () => void model.testVisionModel(),
+							children: model.testState.kind === "testing" ? t("field.visionModel.testing") : t("field.visionModel.test")
+						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+							style: hintStyle,
+							children: t("field.visionModel.testHint")
+						})]
+					}),
+					model.testState.kind === "success" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						style: {
+							...savedStyle,
+							marginTop: 8
+						},
+						role: "status",
+						children: model.testState.message
+					}),
+					model.testState.kind === "error" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
+						style: {
+							...errorStyle,
+							marginTop: 8
+						},
+						role: "status",
+						children: model.testState.message
+					})
+				]
+			}),
 			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: footerStyle,
 				children: [
@@ -3540,7 +3838,20 @@ const zh$1 = {
 	"field.userMap.nameLabel": "姓名",
 	"field.userMap.remove": "删除",
 	"field.userMap.empty": "暂无映射记录,请通过上方加载群成员或手动添加",
-	"field.userMap.chatMembersHint": "群内共 {count} 人,以下为未添加的成员:"
+	"field.userMap.chatMembersHint": "群内共 {count} 人,以下为未添加的成员:",
+	"field.visionModel.label": "视觉模型配置",
+	"field.visionModel.hint": "配置整个养鱼系统的视觉模型,用于图片分析",
+	"field.visionModel.apiKey.label": "API Key",
+	"field.visionModel.apiKey.placeholder": "输入 DeepSeek API Key",
+	"field.visionModel.modelName.label": "模型名称",
+	"field.visionModel.modelName.placeholder": "如:deepseek-flash",
+	"field.visionModel.baseUrl.label": "API 基础 URL",
+	"field.visionModel.baseUrl.placeholder": "如:https://api.deepseek.com",
+	"field.visionModel.test": "测试连接",
+	"field.visionModel.testing": "测试中…",
+	"field.visionModel.testSuccess": "视觉模型配置测试成功",
+	"field.visionModel.testFailed": "视觉模型配置测试失败:{message}",
+	"field.visionModel.testHint": "点击测试按钮验证 API Key 和模型配置是否正确"
 };
 /** 英文字典(与中文 key 一一对应) */
 const en$1 = {
@@ -3574,7 +3885,20 @@ const en$1 = {
 	"field.userMap.nameLabel": "Name",
 	"field.userMap.remove": "Remove",
 	"field.userMap.empty": "No mappings yet. Load members from chat or add manually above",
-	"field.userMap.chatMembersHint": "{count} members in chat. Unadded members shown below:"
+	"field.userMap.chatMembersHint": "{count} members in chat. Unadded members shown below:",
+	"field.visionModel.label": "Vision Model Configuration",
+	"field.visionModel.hint": "Configure the vision model for the entire aquaculture system, used for image analysis",
+	"field.visionModel.apiKey.label": "API Key",
+	"field.visionModel.apiKey.placeholder": "Enter DeepSeek API Key",
+	"field.visionModel.modelName.label": "Model Name",
+	"field.visionModel.modelName.placeholder": "e.g. deepseek-flash",
+	"field.visionModel.baseUrl.label": "API Base URL",
+	"field.visionModel.baseUrl.placeholder": "e.g. https://api.deepseek.com",
+	"field.visionModel.test": "Test Connection",
+	"field.visionModel.testing": "Testing…",
+	"field.visionModel.testSuccess": "Vision model configuration test successful",
+	"field.visionModel.testFailed": "Vision model configuration test failed: {message}",
+	"field.visionModel.testHint": "Click the test button to verify API Key and model configuration"
 };
 
 //#endregion

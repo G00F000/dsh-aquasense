@@ -331,7 +331,9 @@ export async function runReportPipeline(job, input, uploadDurationMs, depsOverri
                 severity: analysis.severity,
                 confidence: analysis.confidence,
                 scene_hint: analysis.scene_hint,
-                organs: analysis.organs
+                organs: analysis.organs,
+                data_completeness: analysis.data_completeness,
+                expected_image_count: input.images.length
             });
         }
         catch (error) {

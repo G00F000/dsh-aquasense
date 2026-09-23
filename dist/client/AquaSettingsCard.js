@@ -284,7 +284,10 @@ export function useAquaSettings(api, t) {
     const [draft, setDraft] = useState(null);
     const [savedUserMap, setSavedUserMap] = useState(null);
     const [draftUserMap, setDraftUserMap] = useState(null);
+    const [savedVisionModel, setSavedVisionModel] = useState(null);
+    const [draftVisionModel, setDraftVisionModel] = useState(null);
     const [applyState, setApplyState] = useState({ kind: 'idle' });
+    const [testState, setTestState] = useState({ kind: 'idle' });
     const [chatMembers, setChatMembers] = useState([]);
     const [loadingMembers, setLoadingMembers] = useState(false);
     const load = useCallback(async () => {
@@ -293,11 +296,15 @@ export function useAquaSettings(api, t) {
             const result = await api.get();
             const pools = [...result.settings.pools];
             const userMap = { ...result.settings.userMap };
+            const visionModel = result.settings.visionModel ? { ...result.settings.visionModel } : null;
             setSaved(pools);
             setDraft(pools);
             setSavedUserMap(userMap);
             setDraftUserMap(userMap);
+            setSavedVisionModel(visionModel);
+            setDraftVisionModel(visionModel);
             setApplyState({ kind: 'idle' });
+            setTestState({ kind: 'idle' });
             setPhase('ready');
         }
         catch {
@@ -307,7 +314,7 @@ export function useAquaSettings(api, t) {
     useEffect(() => {
         void load();
     }, [load]);
-    const dirty = draft !== null && saved !== null && (JSON.stringify(draft) !== JSON.stringify(saved) || JSON.stringify(draftUserMap) !== JSON.stringify(savedUserMap));
+    const dirty = draft !== null && saved !== null && (JSON.stringify(draft) !== JSON.stringify(saved) || JSON.stringify(draftUserMap) !== JSON.stringify(savedUserMap) || JSON.stringify(draftVisionModel) !== JSON.stringify(savedVisionModel));
     const saving = applyState.kind === 'saving';
     /** 编辑后回到 idle(清除「已保存」提示,由 dirty 徽标接管) */
     const markEdited = () => {
@@ -363,6 +370,33 @@ export function useAquaSettings(api, t) {
             setLoadingMembers(false);
         }
     }, [api]);
+    const editVisionModel = (field, value) => {
+        setDraftVisionModel((current) => {
+            const next = current ? { ...current } : { apiKey: '', modelName: '', baseUrl: '' };
+            next[field] = value;
+            return next;
+        });
+        markEdited();
+    };
+    const testVisionModel = async () => {
+        if (!draftVisionModel || !draftVisionModel.apiKey.trim()) {
+            setTestState({ kind: 'error', message: '请先填写 API Key' });
+            return;
+        }
+        setTestState({ kind: 'testing' });
+        try {
+            const result = await api.testVisionModel(draftVisionModel);
+            if (result.success) {
+                setTestState({ kind: 'success', message: result.message });
+            }
+            else {
+                setTestState({ kind: 'error', message: result.message });
+            }
+        }
+        catch (error) {
+            setTestState({ kind: 'error', message: messageOf(error) });
+        }
+    };
     const save = async () => {
         if (!draft || saving)
             return;
@@ -379,13 +413,16 @@ export function useAquaSettings(api, t) {
         }
         setApplyState({ kind: 'saving' });
         try {
-            const result = await api.save({ pools: trimmed, userMap: draftUserMap || {} });
+            const result = await api.save({ pools: trimmed, userMap: draftUserMap || {}, visionModel: draftVisionModel || undefined });
             const pools = [...result.settings.pools];
             const userMap = { ...result.settings.userMap };
+            const visionModel = result.settings.visionModel ? { ...result.settings.visionModel } : null;
             setSaved(pools);
             setDraft(pools);
             setSavedUserMap(userMap);
             setDraftUserMap(userMap);
+            setSavedVisionModel(visionModel);
+            setDraftVisionModel(visionModel);
             setApplyState({ kind: 'saved' });
         }
         catch (error) {
@@ -395,9 +432,11 @@ export function useAquaSettings(api, t) {
     const discard = () => {
         setDraft(saved ? [...saved] : null);
         setDraftUserMap(savedUserMap ? { ...savedUserMap } : null);
+        setDraftVisionModel(savedVisionModel ? { ...savedVisionModel } : null);
         setApplyState({ kind: 'idle' });
+        setTestState({ kind: 'idle' });
     };
-    return { phase, saved, draft, savedUserMap, draftUserMap, dirty, applyState, chatMembers, loadingMembers, load, editPool, addPool, removePool, editUserMap, removeUserMap, loadChatMembers, save, discard };
+    return { phase, saved, draft, savedUserMap, draftUserMap, savedVisionModel, draftVisionModel, dirty, applyState, testState, chatMembers, loadingMembers, load, editPool, addPool, removePool, editUserMap, removeUserMap, loadChatMembers, editVisionModel, testVisionModel, save, discard };
 }
 // ========== 表单组件 ==========
 /** 展开区表单:池号列表编辑 + 用户映射配置 + 底部操作区 */
@@ -411,7 +450,7 @@ function PoolsForm({ model, t }) {
     }
     return (_jsxs("div", { style: formStyle, children: [_jsxs("div", { children: [_jsx("p", { style: labelStyle, children: t('field.pools.label') }), _jsx("p", { style: hintStyle, children: t('field.pools.hint', { max: MAX_POOLS, len: MAX_POOL_LENGTH }) })] }), draft.map((value, index) => (_jsxs("div", { style: { ...rowStyle, marginTop: 8 }, children: [_jsx("input", { style: inputStyle, value: value, maxLength: MAX_POOL_LENGTH, placeholder: t('field.pools.placeholder'), "aria-label": `${t('field.pools.label')} ${index + 1}`, onChange: (e) => model.editPool(index, e.target.value) }), _jsx("button", { type: "button", style: removeBtnStyle, "aria-label": t('field.pools.remove'), title: t('field.pools.remove'), disabled: draft.length <= 1, onClick: () => model.removePool(index), children: "\u2715" })] }, index))), _jsx("div", { style: { marginTop: 8 }, children: _jsxs("button", { type: "button", style: addBtnStyle, disabled: draft.length >= MAX_POOLS, onClick: model.addPool, children: ["\uFF0B ", t('field.pools.add')] }) }), _jsx("div", { style: dividerStyle }), _jsxs("div", { children: [_jsx("p", { style: labelStyle, children: t('field.userMap.label') }), _jsx("p", { style: hintStyle, children: t('field.userMap.hint') })] }), _jsxs("div", { style: { ...userMapHeaderStyle, marginTop: 8 }, children: [_jsx("input", { style: chatIdInputStyle, value: chatId, placeholder: t('field.userMap.chatIdPlaceholder'), onChange: (e) => setChatId(e.target.value) }), _jsx("button", { type: "button", style: loadBtnStyle, disabled: model.loadingMembers || !chatId.trim(), onClick: () => void model.loadChatMembers(chatId), children: model.loadingMembers ? t('field.userMap.loading') : t('field.userMap.loadMembers') })] }), Object.keys(draftUserMap).length > 0 ? (_jsx("div", { style: { marginTop: 12 }, children: Object.entries(draftUserMap).map(([openId, name]) => (_jsxs("div", { style: userMapRowStyle, children: [_jsx("input", { style: openIdInputStyle, value: openId, readOnly: true, "aria-label": "open_id" }), _jsx("input", { style: nameInputStyle, value: name, maxLength: MAX_USER_NAME_LENGTH, placeholder: t('field.userMap.namePlaceholder'), "aria-label": t('field.userMap.nameLabel'), onChange: (e) => model.editUserMap(openId, e.target.value) }), _jsx("button", { type: "button", style: removeBtnStyle, "aria-label": t('field.userMap.remove'), title: t('field.userMap.remove'), onClick: () => model.removeUserMap(openId), children: "\u2715" })] }, openId))) })) : (_jsx("p", { style: { ...hintStyle, marginTop: 8 }, children: t('field.userMap.empty') })), model.chatMembers.length > 0 && (_jsxs("div", { style: { marginTop: 12 }, children: [_jsx("p", { style: hintStyle, children: t('field.userMap.chatMembersHint', { count: model.chatMembers.length }) }), _jsx("div", { style: { maxHeight: 150, overflowY: 'auto', marginTop: 4 }, children: model.chatMembers
                             .filter((m) => !draftUserMap[m.open_id])
-                            .map((member) => (_jsxs("div", { style: { ...userMapRowStyle, marginTop: 4 }, children: [_jsx("input", { style: openIdInputStyle, value: member.open_id, readOnly: true, "aria-label": "open_id" }), _jsx("input", { style: nameInputStyle, value: member.name, readOnly: true, "aria-label": t('field.userMap.nameLabel') }), _jsx("button", { type: "button", style: addBtnStyle, onClick: () => model.editUserMap(member.open_id, member.name), children: "\uFF0B" })] }, member.open_id))) })] })), _jsxs("div", { style: footerStyle, children: [model.applyState.kind === 'error' ? (_jsx("p", { style: errorStyle, role: "status", children: model.applyState.message })) : null, model.applyState.kind === 'saved' ? (_jsx("p", { style: savedStyle, role: "status", children: t('card.saved') })) : null, _jsx("button", { type: "button", style: ghostBtnStyle, disabled: !model.dirty || busy, onClick: model.discard, children: t('card.discard') }), _jsx("button", { type: "button", style: {
+                            .map((member) => (_jsxs("div", { style: { ...userMapRowStyle, marginTop: 4 }, children: [_jsx("input", { style: openIdInputStyle, value: member.open_id, readOnly: true, "aria-label": "open_id" }), _jsx("input", { style: nameInputStyle, value: member.name, readOnly: true, "aria-label": t('field.userMap.nameLabel') }), _jsx("button", { type: "button", style: addBtnStyle, onClick: () => model.editUserMap(member.open_id, member.name), children: "\uFF0B" })] }, member.open_id))) })] })), _jsx("div", { style: dividerStyle }), _jsxs("div", { children: [_jsx("p", { style: labelStyle, children: t('field.visionModel.label') }), _jsx("p", { style: hintStyle, children: t('field.visionModel.hint') })] }), _jsxs("div", { style: { marginTop: 8 }, children: [_jsxs("div", { style: { marginBottom: 8 }, children: [_jsx("p", { style: labelStyle, children: t('field.visionModel.apiKey.label') }), _jsx("input", { style: inputStyle, type: "password", value: model.draftVisionModel?.apiKey || '', placeholder: t('field.visionModel.apiKey.placeholder'), onChange: (e) => model.editVisionModel('apiKey', e.target.value) })] }), _jsxs("div", { style: { marginBottom: 8 }, children: [_jsx("p", { style: labelStyle, children: t('field.visionModel.modelName.label') }), _jsx("input", { style: inputStyle, value: model.draftVisionModel?.modelName || '', placeholder: t('field.visionModel.modelName.placeholder'), onChange: (e) => model.editVisionModel('modelName', e.target.value) })] }), _jsxs("div", { style: { marginBottom: 8 }, children: [_jsx("p", { style: labelStyle, children: t('field.visionModel.baseUrl.label') }), _jsx("input", { style: inputStyle, value: model.draftVisionModel?.baseUrl || '', placeholder: t('field.visionModel.baseUrl.placeholder'), onChange: (e) => model.editVisionModel('baseUrl', e.target.value) })] }), _jsxs("div", { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }, children: [_jsx("button", { type: "button", style: addBtnStyle, disabled: model.testState.kind === 'testing', onClick: () => void model.testVisionModel(), children: model.testState.kind === 'testing' ? t('field.visionModel.testing') : t('field.visionModel.test') }), _jsx("p", { style: hintStyle, children: t('field.visionModel.testHint') })] }), model.testState.kind === 'success' && (_jsx("p", { style: { ...savedStyle, marginTop: 8 }, role: "status", children: model.testState.message })), model.testState.kind === 'error' && (_jsx("p", { style: { ...errorStyle, marginTop: 8 }, role: "status", children: model.testState.message }))] }), _jsxs("div", { style: footerStyle, children: [model.applyState.kind === 'error' ? (_jsx("p", { style: errorStyle, role: "status", children: model.applyState.message })) : null, model.applyState.kind === 'saved' ? (_jsx("p", { style: savedStyle, role: "status", children: t('card.saved') })) : null, _jsx("button", { type: "button", style: ghostBtnStyle, disabled: !model.dirty || busy, onClick: model.discard, children: t('card.discard') }), _jsx("button", { type: "button", style: {
                             ...primaryBtnStyle,
                             opacity: !model.dirty || busy ? DISABLED_OPACITY : 1,
                             cursor: !model.dirty || busy ? 'default' : 'pointer'

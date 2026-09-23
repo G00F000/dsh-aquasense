@@ -38,7 +38,20 @@ export const zh = {
     'field.userMap.nameLabel': '姓名',
     'field.userMap.remove': '删除',
     'field.userMap.empty': '暂无映射记录,请通过上方加载群成员或手动添加',
-    'field.userMap.chatMembersHint': '群内共 {count} 人,以下为未添加的成员:'
+    'field.userMap.chatMembersHint': '群内共 {count} 人,以下为未添加的成员:',
+    'field.visionModel.label': '视觉模型配置',
+    'field.visionModel.hint': '配置整个养鱼系统的视觉模型,用于图片分析',
+    'field.visionModel.apiKey.label': 'API Key',
+    'field.visionModel.apiKey.placeholder': '输入 DeepSeek API Key',
+    'field.visionModel.modelName.label': '模型名称',
+    'field.visionModel.modelName.placeholder': '如:deepseek-flash',
+    'field.visionModel.baseUrl.label': 'API 基础 URL',
+    'field.visionModel.baseUrl.placeholder': '如:https://api.deepseek.com',
+    'field.visionModel.test': '测试连接',
+    'field.visionModel.testing': '测试中…',
+    'field.visionModel.testSuccess': '视觉模型配置测试成功',
+    'field.visionModel.testFailed': '视觉模型配置测试失败:{message}',
+    'field.visionModel.testHint': '点击测试按钮验证 API Key 和模型配置是否正确'
 };
 /** 英文字典(与中文 key 一一对应) */
 export const en = {
@@ -72,5 +85,18 @@ export const en = {
     'field.userMap.nameLabel': 'Name',
     'field.userMap.remove': 'Remove',
     'field.userMap.empty': 'No mappings yet. Load members from chat or add manually above',
-    'field.userMap.chatMembersHint': '{count} members in chat. Unadded members shown below:'
+    'field.userMap.chatMembersHint': '{count} members in chat. Unadded members shown below:',
+    'field.visionModel.label': 'Vision Model Configuration',
+    'field.visionModel.hint': 'Configure the vision model for the entire aquaculture system, used for image analysis',
+    'field.visionModel.apiKey.label': 'API Key',
+    'field.visionModel.apiKey.placeholder': 'Enter DeepSeek API Key',
+    'field.visionModel.modelName.label': 'Model Name',
+    'field.visionModel.modelName.placeholder': 'e.g. deepseek-flash',
+    'field.visionModel.baseUrl.label': 'API Base URL',
+    'field.visionModel.baseUrl.placeholder': 'e.g. https://api.deepseek.com',
+    'field.visionModel.test': 'Test Connection',
+    'field.visionModel.testing': 'Testing…',
+    'field.visionModel.testSuccess': 'Vision model configuration test successful',
+    'field.visionModel.testFailed': 'Vision model configuration test failed: {message}',
+    'field.visionModel.testHint': 'Click the test button to verify API Key and model configuration'
 };

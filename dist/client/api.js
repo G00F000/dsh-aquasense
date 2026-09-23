@@ -54,5 +54,6 @@ export const remindApi = {
 export const aquaSettingsApi = {
     get: () => call(AQUA_SETTINGS_API_PREFIX, 'get'),
     save: (input) => call(AQUA_SETTINGS_API_PREFIX, 'save', { settings: input }),
-    listChatMembers: (chatId) => call(AQUA_SETTINGS_API_PREFIX, 'list-members', { chat_id: chatId })
+    listChatMembers: (chatId) => call(AQUA_SETTINGS_API_PREFIX, 'list-members', { chat_id: chatId }),
+    testVisionModel: (config) => call(AQUA_SETTINGS_API_PREFIX, 'test-vision-model', { config })
 };

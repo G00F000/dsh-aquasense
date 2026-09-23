@@ -28,9 +28,10 @@ export interface FeishuChatMember {
 export declare function getFeishuChatMembers(chatId: string): Promise<FeishuChatMember[]>;
 /**
  * 上传图片 URL 到飞书云文档,返回 Bitable 附件格式
- * 支持两种输入:
+ * 支持三种输入:
  *  - data URL(H5 上传页场景,R8):直接解析 base64,不经网络;
- *  - HTTP(S) URL:下载为 buffer 后再上传。
+ *  - HTTP(S) URL:下载为 buffer 后再上传;
+ *  - 飞书内部URL:使用飞书API下载后上传。
  */
 export declare function uploadImageToFeishu(imageUrl: string): Promise<{
     file_token: string;
@@ -47,3 +48,39 @@ export declare function parseDataUrl(dataUrl: string): {
     buffer: Buffer;
     mimeType: string;
 } | null;
+/**
+ * 判断是否是飞书内部URL(非标准HTTP/HTTPS协议)
+ * 飞书内部URL格式示例:
+ *  - internal-file-service.internal
+ *  - feishu-internal://xxx
+ *  - lark://xxx
+ */
+export declare function isFeishuInternalUrl(url: string): boolean;
+/**
+ * 下载飞书内部URL的图片
+ * 使用飞书API下载消息中的图片资源
+ * @param messageKey 飞书消息ID或文件key
+ * @returns 图片数据(base64)和MIME类型，失败返回null
+ */
+export declare function downloadFeishuImage(messageKey: string): Promise<{
+    data: string;
+    mimeType: string;
+} | null>;
+/**
+ * 下载图片(支持HTTP/HTTPS URL和飞书内部URL)
+ * 带有回退逻辑：先尝试HTTP下载，失败后尝试飞书API下载
+ * @param url 图片URL
+ * @param retryCount 重试次数(默认1次)
+ * @returns 图片数据(base64)和MIME类型，失败返回null
+ */
+export declare function downloadImageWithFallback(url: string, retryCount?: number): Promise<{
+    data: string;
+    mimeType: string;
+} | null>;
+/**
+ * 检查图片URL是否可能已过期
+ * 飞书图片URL通常包含时间戳或有效期参数
+ * @param url 图片URL
+ * @returns 是否可能已过期
+ */
+export declare function isImageUrlExpired(url: string): boolean;

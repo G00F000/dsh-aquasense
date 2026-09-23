@@ -70,6 +70,17 @@ export interface AquaSettings {
     pools: string[];
     /** 用户映射表:open_id → 姓名 */
     userMap: Record<string, string>;
+    /** 视觉模型配置 */
+    visionModel?: VisionModelConfig;
+}
+/** 视觉模型配置 */
+export interface VisionModelConfig {
+    /** DeepSeek API Key */
+    apiKey: string;
+    /** 视觉模型名称 */
+    modelName: string;
+    /** API 基础 URL */
+    baseUrl: string;
 }
 /** 飞书群成员信息 */
 export interface FeishuChatMember {
@@ -87,6 +98,10 @@ export interface AquaSettingsApi {
     }>;
     listChatMembers(chatId: string): Promise<{
         members: FeishuChatMember[];
+    }>;
+    testVisionModel(config: VisionModelConfig): Promise<{
+        success: boolean;
+        message: string;
     }>;
 }
 /** 设置页 API 客户端 */
