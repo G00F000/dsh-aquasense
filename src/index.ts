@@ -36,12 +36,18 @@ import { installReportWeb } from './web/report-handler.js'
 import { installAquaSettingsWeb } from './web/aqua-settings-gateway.js'
 import { wrapLedgerWithTrace } from './web/trace-ledger-wrap.js'
 import { installSessionTraceBridge } from './web/session-trace-bridge.js'
+import { setAttachmentStore } from './tools/attachment-store.js'
 
 export const name = 'aquasense-plugin'
 export const inject = ['tools']
 
 export function apply(ctx: Context) {
   console.log('[aquasense] 加载水产养殖工具...')
+
+  // 注入 DSH Attachment store:供飞书图片直传(attachment-store 模块级引用)
+  // ctx.attachments 来自 @deepseek-ai/dsh-attachment 服务,宿主未挂载时为 undefined
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setAttachmentStore((ctx as any).attachments)
 
   // 注册 4 个业务工具
   ctx.tools.register(analyzeImage)

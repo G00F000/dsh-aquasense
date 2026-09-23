@@ -18,6 +18,16 @@ vi.stubGlobal('fetch', mockFetch)
 process.env.DEEPSEEK_API_KEY = 'test-api-key'
 process.env.DEEPSEEK_VISION_MODEL = 'deepseek-flash'
 
+// mock attachment store
+const mockReadImage = vi.fn()
+vi.mock('./attachment-store.js', () => ({
+  resolveAttachments: vi.fn(async (refs: unknown[]) => {
+    if (!refs || !Array.isArray(refs) || refs.length === 0) return []
+    return refs.map(() => ({ data: 'attBase64Data', mimeType: 'image/jpeg' }))
+  }),
+  getAttachmentStore: vi.fn(() => ({ readImage: mockReadImage }))
+}))
+
 // 导入工具(在 mock 之后)
 import { analyzeImage } from './analyze-image.js'
 
@@ -205,6 +215,73 @@ describe('aquasense_analyze', () => {
 
       expect(result.image_count).toBe(2)
       expect(mockFetch).toHaveBeenCalledTimes(3)
+    })
+  })
+
+  describe('DSH Attachment 直传入参', () => {
+    it('应优先使用 image_attachment 并调用 resolveAttachments', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: JSON.stringify({ abnormal: false, cls: 'normal', symptoms: [], severity: 'low', confidence: 0.9, scene_hint: 'inspection' }) } }]
+        })
+      })
+
+      const result = await analyzeImage.execute({
+        image_attachment: [{ attachmentId: 'att-001', mediaType: 'image/jpeg' }],
+        pool_id: '池1'
+      }, mockExec)
+
+      expect(result).toMatchObject({ abnormal: false, cls: 'normal', image_count: 1 })
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+      // 验证发送给视觉模型的是 base64 data URL(而非原始 attachmentId)
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+      const imageUrl = requestBody.messages[0].content[0].image_url.url
+      expect(imageUrl).toMatch(/^data:image\/jpeg;base64,attBase64Data$/)
+    })
+
+    it('应支持多张 DSH Attachment', async () => {
+      const { resolveAttachments } = await import('./attachment-store.js')
+      // 多张图 mock 为返回 3 张
+      vi.mocked(resolveAttachments).mockResolvedValueOnce([
+        { data: 'b64-1', mimeType: 'image/jpeg' },
+        { data: 'b64-2', mimeType: 'image/png' },
+        { data: 'b64-3', mimeType: 'image/jpeg' }
+      ])
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: JSON.stringify({ abnormal: true, cls: 'disease', symptoms: ['烂鳃'], severity: 'high', confidence: 0.85, scene_hint: 'inspection' }) } }]
+        })
+      })
+
+      const result = await analyzeImage.execute({
+        image_attachment: [
+          { attachmentId: 'att-1' },
+          { attachmentId: 'att-2' },
+          { attachmentId: 'att-3' }
+        ],
+        pool_id: '池1'
+      }, mockExec) as { image_count?: number }
+
+      expect(result.image_count).toBe(3)
+    })
+
+    it('attachment 解析失败时应跳过并降级', async () => {
+      const { resolveAttachments } = await import('./attachment-store.js')
+      // attachment 全部解析失败返回空数组
+      vi.mocked(resolveAttachments).mockResolvedValueOnce([])
+
+      const result = await analyzeImage.execute({
+        image_attachment: [{ attachmentId: 'att-fail' }],
+        pool_id: '池1'
+      }, mockExec)
+
+      expect(result).toMatchObject({
+        cls: 'unknown',
+        image_count: 0
+      })
     })
   })
 

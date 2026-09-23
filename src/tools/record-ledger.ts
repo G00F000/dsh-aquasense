@@ -11,9 +11,10 @@
  */
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { getFeishuToken, getFeishuUserName, uploadImageToFeishu } from '../feishu/token.js'
+import { getFeishuToken, getFeishuUserName, uploadImageToFeishu, uploadBufferToFeishu } from '../feishu/token.js'
 import { type Scene } from '../router/intent-router.js'
 import { formatPoolIds, getValidPoolIds, getUserNameByOpenId } from '../config/aqua-settings.js'
+import { resolveAttachmentBuffers, type AttachmentRefInput } from './attachment-store.js'
 
 /** 台账场景 = S1-S8 中所有落表场景(排除 S3 知识询问) */
 export type LedgerScene = Exclude<Scene, 'knowledge'>
@@ -86,6 +87,7 @@ export const recordLedger = defineTool({
       description: '表格字段,键为表格实际列名。inspection 场景可省略(自动按分析结果组装);其他场景必填'
     },
     images: { type: 'array', items: { type: 'string' }, description: '图片 URL 列表(支持多张,自动上传至飞书云文档写入图片列)' },
+    image_attachments: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'DSH Attachment 引用数组(飞书图片直传,与 images 二选一)。每项包含 attachmentId,可选 mediaType/bytes/width/height/name。' },
     analysis: { type: 'object', additionalProperties: true, description: 'aquasense_analyze 分析结果(inspection 自动组装用)' },
     advice: { type: 'object', additionalProperties: true, description: 'aquasense_advice 处置建议(inspection 自动组装用)' },
     reporter: { type: 'string', description: '上报人姓名(兜底):仅在拿不到消息发送者 open_id 时使用,禁止凭记忆/历史对话填写' },
@@ -114,11 +116,13 @@ export const recordLedger = defineTool({
     const bitableToken = process.env.FEISHU_BITABLE_APP_TOKEN
     const tableId = process.env[SCENE_TABLE_ENV[scene]]
 
-    // inspection 场景需要图片进行分析:缺失时返回追问
-    if (scene === 'inspection' && (!args.images || args.images.length === 0)) {
+    // inspection 场景需要图片进行分析:images(URL)或 image_attachments(DSH Attachment)至少提供一个
+    const hasUrlImages = args.images && args.images.length > 0
+    const hasAttachmentImages = args.image_attachments && (args.image_attachments as unknown[]).length > 0
+    if (scene === 'inspection' && !hasUrlImages && !hasAttachmentImages) {
       return {
         success: false,
-        message: 'inspection 场景需要图片进行分析,请补充图片后重试',
+        message: 'inspection 场景需要图片进行分析,请补充图片后重试(支持直接发送飞书图片或提供 HTTP URL)',
         missing: ['image'],
         questions: ['请发送巡检照片(支持拍照后直接发送)']
       }
@@ -374,6 +378,7 @@ interface LedgerArgs {
   reporter?: string
   open_id?: string
   images?: string[]
+  image_attachments?: unknown[]
   fields?: Record<string, unknown>
   analysis?: Record<string, unknown>
   advice?: Record<string, unknown>
@@ -434,6 +439,31 @@ async function uploadImages(urls: string[]): Promise<Array<{ file_token: string 
   }
   if (succeeded.length < urls.length) {
     console.warn(`[aquasense] image upload summary: ${succeeded.length}/${urls.length} succeeded`)
+  }
+  return succeeded
+}
+
+/**
+ * 批量上传 DSH Attachment 图片到飞书云文档,返回 Bitable 附件格式数组
+ * 逐张容错:单张失败不影响其余图片写入
+ */
+async function uploadAttachmentImages(refs: AttachmentRefInput[]): Promise<Array<{ file_token: string }>> {
+  const resolved = await resolveAttachmentBuffers(refs)
+  const results = await Promise.allSettled(
+    resolved.map((img) => uploadBufferToFeishu(img.buffer, img.name, img.mimeType))
+  )
+  const succeeded: Array<{ file_token: string }> = []
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i]
+    if (r.status === 'fulfilled' && r.value !== null) {
+      succeeded.push(r.value)
+    } else {
+      const reason = r.status === 'rejected' ? (r.reason?.message ?? String(r.reason)) : 'uploadBufferToFeishu returned null'
+      console.error(`[aquasense] attachment image[${i}] upload failed, skipped: ${reason}`)
+    }
+  }
+  if (succeeded.length < resolved.length) {
+    console.warn(`[aquasense] attachment image upload summary: ${succeeded.length}/${resolved.length} succeeded`)
   }
   return succeeded
 }
@@ -545,9 +575,15 @@ async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string,
       }
     }
 
-    // 自动填充「图片」字段(未显式提供时)
-    if (!('图片' in fields) && args.images?.length) {
-      fields['图片'] = await uploadImages(args.images)
+    // 自动填充「图片」字段(未显式提供时):优先 DSH Attachment,回退 URL
+    if (!('图片' in fields)) {
+      const urlImages = args.images?.length ? args.images : []
+      const attImages = args.image_attachments?.length ? args.image_attachments as AttachmentRefInput[] : []
+      if (urlImages.length > 0) {
+        fields['图片'] = await uploadImages(urlImages)
+      } else if (attImages.length > 0) {
+        fields['图片'] = await uploadAttachmentImages(attImages)
+      }
     }
 
     // AI 诊断文本自动落入对应列(未显式提供时)
@@ -559,7 +595,13 @@ async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string,
   }
 
   // inspection 便捷路径:按分析结果自动组装
-  const imageAttachments = args.images?.length ? await uploadImages(args.images) : []
+  const urlImages = args.images?.length ? args.images : []
+  const attImages = args.image_attachments?.length ? args.image_attachments as AttachmentRefInput[] : []
+  const imageAttachments = urlImages.length > 0
+    ? await uploadImages(urlImages)
+    : attImages.length > 0
+      ? await uploadAttachmentImages(attImages)
+      : []
   return {
     '池号': poolId,
     '巡检时间': Date.now(),

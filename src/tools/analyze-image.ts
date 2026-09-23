@@ -11,6 +11,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { pushAbnormalAlert } from '../scheduler/s9-reminder.js'
 import { downloadImageWithFallback, isImageUrlExpired, isFeishuInternalUrl } from '../feishu/token.js'
 import { getVisionModelConfig } from '../config/aqua-settings.js'
+import { resolveAttachments, type AttachmentRefInput } from './attachment-store.js'
 
 export type SceneHint = 'inspection' | 'death' | 'water_quality' | 'medication' | 'feeding' | 'temperature' | 'dissection'
 
@@ -35,7 +36,7 @@ export interface AnalysisResult {
 
 export const analyzeImage = defineTool({
   name: 'aquasense_analyze',
-  description: '分析鲈鱼养殖现场照片,识别异常症状。支持单图或多图(多图时视觉模型同时分析所有图片)。支持两种图片来源:base64 数据(优先)或 HTTP URL。',
+  description: '分析鲈鱼养殖现场照片,识别异常症状。支持单图或多图(多图时视觉模型同时分析所有图片)。支持三种图片来源:DSH Attachment(飞书直传,优先)、base64 数据、HTTP URL。',
   parameters: {
     image_url: {
       type: 'string',
@@ -49,6 +50,11 @@ export const analyzeImage = defineTool({
     expected_image_count: {
       type: 'number',
       description: '工人本次发送的图片总数(用于检测图片丢失:实际分析数 < 期望数时标记 data_completeness=partial)'
+    },
+    image_attachment: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: true },
+      description: 'DSH Attachment 引用数组(飞书图片直传,优先级最高)。每项包含 attachmentId,可选 mediaType/bytes/width/height/name。Agent 从消息上下文的 image 块中提取 attachment 字段传入。'
     },
     image_data: {
       type: 'string',
@@ -97,26 +103,33 @@ export const analyzeImage = defineTool({
   },
   async execute(args) {
     // 参数缺失由 defineTool 按 required 校验拦截,此处直接执行
-    // 1. 收集图片:优先 base64 数据,回退 HTTP URL
+    // 1. 收集图片:优先 DSH Attachment(飞书直传),回退 base64,再回退 HTTP URL
     const images: ImageDownloadResult[] = []
     // 期望图片数:由 Agent 传入,用于检测 harness 层丢图
     const expectedCount = typeof args.expected_image_count === 'number' && args.expected_image_count > 0
       ? Math.floor(args.expected_image_count) : undefined
 
-    // 路径 A:base64 数据(优先,不依赖网络)
-    if (Array.isArray(args.image_data_list) && args.image_data_list.length > 0) {
-      const mime = args.image_mime || 'image/jpeg'
+    // 路径 A-0:DSH Attachment(最高优先级,飞书图片直传,不依赖网络)
+    if (Array.isArray(args.image_attachment) && args.image_attachment.length > 0) {
+      const resolved = await resolveAttachments(args.image_attachment as unknown as AttachmentRefInput[])
+      for (const img of resolved) {
+        images.push({ data: img.data, mimeType: img.mimeType })
+      }
+    }
+    // 路径 A:base64 数据(次优先级,不依赖网络)
+    else if (Array.isArray(args.image_data_list) && args.image_data_list.length > 0) {
+      const mime = String(args.image_mime || 'image/jpeg')
       for (const b64 of args.image_data_list) {
-        images.push({ data: b64, mimeType: mime })
+        images.push({ data: String(b64), mimeType: mime })
       }
     } else if (typeof args.image_data === 'string' && args.image_data) {
-      const mime = args.image_mime || 'image/jpeg'
+      const mime = String(args.image_mime || 'image/jpeg')
       images.push({ data: args.image_data, mimeType: mime })
     }
     // 路径 B:HTTP URL(回退) — 使用 Promise.allSettled 逐张容错,
     // 单张下载失败不阻断其余图片分析
     else if (Array.isArray(args.image_urls) && args.image_urls.length > 0) {
-      const results = await Promise.allSettled(args.image_urls.map((url) => downloadImage(url)))
+      const results = await Promise.allSettled(args.image_urls.map((url) => downloadImage(String(url))))
       for (let i = 0; i < results.length; i++) {
         const r = results[i]
         if (r.status === 'fulfilled') {
@@ -163,7 +176,7 @@ export const analyzeImage = defineTool({
     }
 
     // 2. 构建提示词并调用视觉模型(描述不进入视觉prompt,只供场景路由用)
-    const prompt = buildPrompt(args.pool_id)
+    const prompt = buildPrompt(args.pool_id ? String(args.pool_id) : undefined)
     const response = await callVisionModel(images, prompt)
 
     // 3. 解析结果(失败降级 normal,不阻断巡检流程)
@@ -191,7 +204,7 @@ export const analyzeImage = defineTool({
     // 不阻断主链路:异步推送,失败仅记录日志(pushAbnormalAlert 内部全量捕获)
     if (result.abnormal && (result.cls === 'early' || result.cls === 'disease')) {
       void pushAbnormalAlert({
-        poolId: args.pool_id,
+        poolId: args.pool_id ? String(args.pool_id) : undefined,
         cls: result.cls,
         symptoms: result.symptoms,
         severity: result.severity
