@@ -30,6 +30,7 @@
  */
 
 import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { stripUndefinedDeep } from './json-safe.js'
 
 /** Agent/session 的最小面(防御式读取,不依赖 dsh-agent 品牌类型) */
 interface AgentMinimal {
@@ -176,7 +177,9 @@ export function withAttachmentInject(tool: ToolDefinition, paramName: string): T
     ...tool,
     async execute(args: unknown, exec: ToolRunContext): Promise<unknown> {
       const merged = mergeAttachmentsFromSession(args, exec?.agent, paramName)
-      return tool.execute(merged, exec)
+      const out = await tool.execute(merged, exec)
+      // 防御兜底:递归剥离产出中的 undefined 字段,避免 DSH lossless JSON 校验失败(ToolOutputError)
+      return stripUndefinedDeep(out)
     }
   }
 }

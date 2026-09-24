@@ -271,7 +271,10 @@ export const recordLedger = defineTool({
       return {
         success: false,
         message: error instanceof Error ? error.message : String(error),
-        questions: scene === 'inspection' ? ['AI 分析结果无效,请先让工人拍摄清晰照片并重新分析后再落表。'] : undefined
+        // questions 仅 inspection 场景需要,其余场景省略键(undefined 会触发 lossless JSON 校验失败)
+        ...(scene === 'inspection'
+          ? { questions: ['AI 分析结果无效,请先让工人拍摄清晰照片并重新分析后再落表。'] }
+          : {})
       }
     }
 

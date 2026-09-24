@@ -12,6 +12,7 @@ import { pushAbnormalAlert } from '../scheduler/s9-reminder.js'
 import { downloadImageWithFallback, isImageUrlExpired, isFeishuInternalUrl } from '../feishu/token.js'
 import { getVisionModelConfig } from '../config/aqua-settings.js'
 import { resolveAttachments, type AttachmentRefInput } from './attachment-store.js'
+import { stripUndefinedDeep } from './json-safe.js'
 import { evaluateDataCompleteness, applyMissedDiagnosisGuard, decideNextSteps } from '../policy/analysis-policy.js'
 
 export type SceneHint = 'inspection' | 'death' | 'water_quality' | 'medication' | 'feeding' | 'temperature' | 'dissection'
@@ -157,7 +158,9 @@ export const analyzeImage = defineTool({
     if (images.length === 0) {
       // 返回降级结果而非抛异常,避免上层将图片下载失败放大为 fatal
       console.error('[aquasense] 未获取到任何可用图片,返回 unknown 降级结果')
-      return {
+      // expected_image_count 仅在 Agent 传入时为数字,否则省略键(undefined 会触发 lossless JSON 校验失败)
+      // stripUndefinedDeep 兜底:递归剥离任何残留的 undefined 字段
+      return stripUndefinedDeep({
         abnormal: false,
         cls: 'unknown' as const,
         symptoms: ['全部图片下载失败,无法分析,请重发图片'],
@@ -166,9 +169,9 @@ export const analyzeImage = defineTool({
         scene_hint: 'inspection' as SceneHint,
         organs: [],
         image_count: 0,
-        expected_image_count: expectedCount,
+        ...(expectedCount !== undefined ? { expected_image_count: expectedCount } : {}),
         data_completeness: 'empty' as const
-      }
+      })
     }
 
     // 2. 构建提示词并调用视觉模型(描述不进入视觉prompt,只供场景路由用)
@@ -178,7 +181,10 @@ export const analyzeImage = defineTool({
     // 3. 解析结果(失败降级 unknown,不阻断巡检流程;内部做宽松二次解析,不重新调用模型)
     let result = parseAnalysisResponse(response)
     result.image_count = receivedCount
-    result.expected_image_count = expectedCount
+    // 仅在 Agent 传入 expected_image_count 时写入,避免 undefined 进入返回对象(lossless JSON 不允许)
+    if (expectedCount !== undefined) {
+      result.expected_image_count = expectedCount
+    }
     result.data_completeness = dataCompleteness
 
     // 防漏诊:图片不齐全时,如果视觉模型给出 normal 结论,降级为 unknown 并注入警告(委托策略层)
@@ -200,7 +206,8 @@ export const analyzeImage = defineTool({
       })
     }
 
-    return result
+    // stripUndefinedDeep 防御兜底:即使未来新增可选字段被赋 undefined 也不会触发 lossless JSON 校验失败
+    return stripUndefinedDeep(result)
   }
 })
 

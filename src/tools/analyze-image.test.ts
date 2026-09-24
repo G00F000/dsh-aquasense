@@ -317,4 +317,60 @@ describe('aquasense_analyze', () => {
       })
     })
   })
+
+  describe('lossless JSON 兼容(不含 undefined 字段)', () => {
+    it('降级路径:未传 expected_image_count 时返回值不应含该键', async () => {
+      const result = await analyzeImage.execute({ pool_id: '池1' }, mockExec) as Record<string, unknown>
+
+      // undefined 字段必须"省略键"而非"赋 undefined",否则 DSH lossless JSON 校验失败
+      expect('expected_image_count' in result).toBe(false)
+      // 所有 enumerable own property 的值都不是 undefined
+      expect(Object.values(result).every((v) => v !== undefined)).toBe(true)
+    })
+
+    it('成功路径:未传 expected_image_count 时返回值不应含该键', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: JSON.stringify({ abnormal: false, cls: 'normal', symptoms: [], severity: 'low', confidence: 0.9, scene_hint: 'inspection' }) } }]
+        })
+      })
+
+      const result = await analyzeImage.execute({
+        image_data: 'base64data',
+        image_mime: 'image/jpeg',
+        pool_id: '池1'
+      }, mockExec) as Record<string, unknown>
+
+      expect('expected_image_count' in result).toBe(false)
+      expect(Object.values(result).every((v) => v !== undefined)).toBe(true)
+    })
+
+    it('传入 expected_image_count 时应正常写入该字段', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: JSON.stringify({ abnormal: false, cls: 'normal', symptoms: [], severity: 'low', confidence: 0.9, scene_hint: 'inspection' }) } }]
+        })
+      })
+
+      const result = await analyzeImage.execute({
+        image_data: 'base64data',
+        image_mime: 'image/jpeg',
+        expected_image_count: 1,
+        pool_id: '池1'
+      }, mockExec) as Record<string, unknown>
+
+      expect(result.expected_image_count).toBe(1)
+      expect(Object.values(result).every((v) => v !== undefined)).toBe(true)
+    })
+
+    it('返回值可被 JSON 无损序列化(不含 undefined)', async () => {
+      const result = await analyzeImage.execute({ pool_id: '池1' }, mockExec) as Record<string, unknown>
+      // lossless JSON 拒绝 undefined;JSON.stringify 会静默丢弃 undefined 键,
+      // 因此对比"键集合"是否一致来间接验证不含 undefined
+      const roundTripped = JSON.parse(JSON.stringify(result)) as Record<string, unknown>
+      expect(Object.keys(roundTripped).sort()).toEqual(Object.keys(result).sort())
+    })
+  })
 })
