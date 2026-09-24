@@ -22,6 +22,7 @@ import { HttpError, type ApiEnvelope } from './remind-gateway.js'
 import { formatPoolIds, getPoolIds, getValidPoolIds } from '../config/aqua-settings.js'
 import { AnalysisTracer, MAX_OUTPUT_RAW, type TracerParams } from './trace-recorder.js'
 import { pushAbnormalAlert } from '../scheduler/s9-reminder.js'
+import { decideNextSteps } from '../policy/analysis-policy.js'
 import {
   buildPrompt,
   callVisionModelWithUsage,
@@ -507,11 +508,12 @@ export async function runReportPipeline(
     setProgress(job, 40, `AI 视觉分析完成(${CLS_NAME[analysis.cls] ?? analysis.cls})`)
 
     // 异常预警(卡片 C,与群聊主链路一致;失败不阻断)
-    if (analysis.cls === 'early' || analysis.cls === 'disease') {
+    const nextSteps = decideNextSteps(analysis)
+    if (nextSteps.pushAlert) {
       try {
         deps.pushAlert({
           pool_id: input.pool,
-          cls: analysis.cls,
+          cls: analysis.cls as 'early' | 'disease',
           symptoms: analysis.symptoms,
           severity: analysis.severity
         })
@@ -522,7 +524,7 @@ export async function runReportPipeline(
 
     // ── Span 3 + 4: retrieve + advice(仅 early/disease)
     let advice: AdviceResult | null = null
-    if (analysis.cls === 'early' || analysis.cls === 'disease') {
+    if (nextSteps.retrieve) {
       tracer.startSpan('retrieve')
       const retrieval = await deps.retrieve(analysis)
       tracer.endSpan('retrieve', {

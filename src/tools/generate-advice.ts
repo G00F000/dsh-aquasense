@@ -19,6 +19,7 @@ import {
   type KnowledgeItem
 } from '../ima/ima-api.js'
 import { normalizeOcrText } from '../ima/pdf-content-search.js'
+import { decideNextSteps } from '../policy/analysis-policy.js'
 
 export interface AnalysisInput {
   abnormal?: boolean
@@ -236,7 +237,9 @@ export async function generateAdviceInternal(
   // ========== 步骤 4:用药建议(知识库仅作参考,具体处方须兽医确认) ==========
   let medication = '暂不需要用药'
 
-  if (analysis.cls === 'disease') {
+  // 条件判定委托策略层(仅 disease 时给出用药建议)
+  const steps = decideNextSteps({ cls: analysis.cls ?? 'unknown' })
+  if (steps.medication) {
     // 优先引用正文中治疗/用药相关片段(正文层);无可用正文时退化为标题+摘要参考
     const treatment = excerpts.find((e) => /用药|药浴|泼洒|拌料|消毒|治疗/.test(e.text))
     const hits = knowledge?.items ?? []

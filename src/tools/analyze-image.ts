@@ -12,6 +12,7 @@ import { pushAbnormalAlert } from '../scheduler/s9-reminder.js'
 import { downloadImageWithFallback, isImageUrlExpired, isFeishuInternalUrl } from '../feishu/token.js'
 import { getVisionModelConfig } from '../config/aqua-settings.js'
 import { resolveAttachments, type AttachmentRefInput } from './attachment-store.js'
+import { evaluateDataCompleteness, applyMissedDiagnosisGuard, decideNextSteps } from '../policy/analysis-policy.js'
 
 export type SceneHint = 'inspection' | 'death' | 'water_quality' | 'medication' | 'feeding' | 'temperature' | 'dissection'
 
@@ -146,16 +147,11 @@ export const analyzeImage = defineTool({
       }
     }
 
-    // 计算数据完整性
+    // 计算数据完整性(委托策略层)
     const receivedCount = images.length
-    let dataCompleteness: 'complete' | 'partial' | 'empty'
-    if (receivedCount === 0) {
-      dataCompleteness = 'empty'
-    } else if (expectedCount !== undefined && receivedCount < expectedCount) {
-      dataCompleteness = 'partial'
-      console.warn(`[aquasense] 数据不完整:工人发送 ${expectedCount} 张图片,实际获取 ${receivedCount} 张(${expectedCount - receivedCount} 张丢失)`) 
-    } else {
-      dataCompleteness = 'complete'
+    const dataCompleteness = evaluateDataCompleteness(expectedCount, receivedCount)
+    if (dataCompleteness === 'partial') {
+      console.warn(`[aquasense] 数据不完整:工人发送 ${expectedCount} 张图片,实际获取 ${receivedCount} 张(${(expectedCount ?? 0) - receivedCount} 张丢失)`)
     }
 
     if (images.length === 0) {
@@ -179,33 +175,26 @@ export const analyzeImage = defineTool({
     const prompt = buildPrompt(args.pool_id ? String(args.pool_id) : undefined)
     const response = await callVisionModel(images, prompt)
 
-    // 3. 解析结果(失败降级 normal,不阻断巡检流程)
-    const result = parseAnalysisResponse(response)
+    // 3. 解析结果(失败降级 unknown,不阻断巡检流程;内部做宽松二次解析,不重新调用模型)
+    let result = parseAnalysisResponse(response)
     result.image_count = receivedCount
     result.expected_image_count = expectedCount
     result.data_completeness = dataCompleteness
 
-    // 防漏诊:图片不齐全时,如果视觉模型给出 normal 结论,降级为 unknown 并注入警告
-    // 理由:仅看到部分图片就下"正常"结论是危险的——遗漏的图可能包含病灶
-    if (dataCompleteness === 'partial' && result.cls === 'normal') {
-      console.warn(`[aquasense] 防漏诊:仅收到 ${receivedCount}/${expectedCount} 张图,视觉模型判定 normal — 降级为 unknown 防止台账记录错误结论`)
-      result.cls = 'unknown'
-      result.abnormal = false
-      result.symptoms = [
-        `图片不完整:工人发送 ${expectedCount} 张,仅获取 ${receivedCount} 张`,
-        '部分图片可能包含关键病灶信息,当前结论不可靠',
-        '请人工现场复核后决定是否落表'
-      ]
-      result.severity = 'low'
-      result.confidence = 0.3
+    // 防漏诊:图片不齐全时,如果视觉模型给出 normal 结论,降级为 unknown 并注入警告(委托策略层)
+    const guardResult = applyMissedDiagnosisGuard(result, dataCompleteness)
+    if (guardResult.downgraded) {
+      console.warn(`[aquasense] ${guardResult.reason}`)
     }
+    result = guardResult.analysis
 
     // 异常自动预警(S9 卡片 C,见 docs/s9-daily-reminder-architecture.md §4.3)
     // 不阻断主链路:异步推送,失败仅记录日志(pushAbnormalAlert 内部全量捕获)
-    if (result.abnormal && (result.cls === 'early' || result.cls === 'disease')) {
+    const nextSteps = decideNextSteps(result)
+    if (nextSteps.pushAlert) {
       void pushAbnormalAlert({
         poolId: args.pool_id ? String(args.pool_id) : undefined,
-        cls: result.cls,
+        cls: result.cls as 'early' | 'disease',
         symptoms: result.symptoms,
         severity: result.severity
       })
@@ -290,18 +279,6 @@ export function buildPrompt(poolId?: string): string {
 }
 
 /**
- * 清理工人描述(仅用于日志审计,不进入视觉模型)
- */
-function sanitizeDescription(desc: string): string {
-  const MAX_DESC_LEN = 200
-  const trimmed = desc.trim().slice(0, MAX_DESC_LEN)
-  if (desc.trim().length > MAX_DESC_LEN) {
-    console.warn(`[aquasense] 工人描述超过${MAX_DESC_LEN}字,已截断。原始长度:${desc.trim().length}`)
-  }
-  return trimmed
-}
-
-/**
  * 调用 DeepSeek 视觉模型(兼容 OpenAI chat completions 图片输入),仅返回文本。
  */
 async function callVisionModel(images: ImageDownloadResult[], prompt: string): Promise<string> {
@@ -330,6 +307,10 @@ export async function callVisionModelWithUsage(images: ImageDownloadResult[], pr
   }))
   content.push({ type: 'text', text: prompt })
 
+  // temperature:从视觉模型配置读取(当前 VisionModelConfig 未暴露该字段,保持 0.1 默认值)
+  const cfgRecord = visionConfig as Record<string, unknown> | undefined
+  const temperature = typeof cfgRecord?.temperature === 'number' ? cfgRecord.temperature : 0.1
+
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -340,7 +321,7 @@ export async function callVisionModelWithUsage(images: ImageDownloadResult[], pr
       model,
       messages: [{ role: 'user', content }],
       max_tokens: 4096,
-      temperature: 0.1
+      temperature
     })
   })
 
@@ -397,16 +378,62 @@ function normalizeCls(raw: unknown): 'normal' | 'early' | 'disease' | 'unknown' 
   return 'normal'
 }
 
+/** 解析失败时的降级占位症状文本(共享常量,避免 fallback 构造与检测逻辑隐式耦合) */
+export const PARSE_FALLBACK_SYMPTOM = 'AI分析失败,请人工复核'
+
+/**
+ * 从模型响应文本中提取 JSON 对象字符串(加固:兼容 ```json 代码围栏与前后缀噪声)
+ */
+function extractJsonBlock(response: string): string | null {
+  // 优先:```json ... ``` 或 ``` ... ``` 代码围栏
+  const fenceMatch = response.match(/```(?:json)?\s*\n?([\s\S]*?)```/)
+  if (fenceMatch?.[1]) {
+    const inner = fenceMatch[1].trim()
+    const jsonInFence = inner.match(/\{[\s\S]*\}/)?.[0]
+    if (jsonInFence) return jsonInFence
+    if (inner.startsWith('{')) return inner
+  }
+
+  // 回退:直接从全文提取(贪婪匹配首个 { 到最后一个 })
+  const directMatch = response.match(/\{[\s\S]*\}/)?.[0]
+  return directMatch ?? null
+}
+
+/**
+ * 宽松二次提取:平衡花括号算法提取首个完整 JSON 对象(去除前后缀噪声)。
+ * 仅在 extractJsonBlock + JSON.parse 均失败时调用,不发起任何网络请求。
+ */
+function extractJsonBalanced(text: string): string | null {
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  let inString = false
+  let escape = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (escape) { escape = false; continue }
+    if (ch === '\\' && inString) { escape = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return null
+}
+
 /**
  * 解析模型输出 JSON(容错:提取首个 JSON 对象并按白名单归一,失败降级 unknown)
  * 归一化保证输出始终满足 output.schema(enum/类型/多余键),避免注册表校验失败
  */
 export function parseAnalysisResponse(response: string): AnalysisResult {
-  const fallback: AnalysisResult = { abnormal: false, cls: 'unknown', symptoms: ['AI分析失败,请人工复核'], severity: 'low', confidence: 0.3, scene_hint: 'inspection', organs: [] }
+  const fallback: AnalysisResult = { abnormal: false, cls: 'unknown', symptoms: [PARSE_FALLBACK_SYMPTOM], severity: 'low', confidence: 0.3, scene_hint: 'inspection', organs: [] }
 
   let raw: Record<string, unknown>
   try {
-    const json = response.match(/\{[\s\S]*\}/)?.[0]
+    const json = extractJsonBlock(response)
     if (!json) {
       console.error('[aquasense] 视觉模型返回空内容,降级为 unknown')
       return fallback
@@ -414,11 +441,28 @@ export function parseAnalysisResponse(response: string): AnalysisResult {
     const parsed: unknown = JSON.parse(json)
     raw = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
   } catch {
+    // 二次解析:平衡花括号提取(仅对已获取的响应文本做更宽松解析,不重新调用模型)
+    const balanced = extractJsonBalanced(response)
+    if (balanced) {
+      try {
+        const parsed2: unknown = JSON.parse(balanced)
+        if (parsed2 && typeof parsed2 === 'object') {
+          raw = parsed2 as Record<string, unknown>
+          // 二次解析成功,跳过降级
+          return normalizeAnalysisRaw(raw)
+        }
+      } catch { /* 仍失败,走降级 */ }
+    }
     console.error('[aquasense] 视觉模型返回无法解析的 JSON,降级为 unknown')
     return fallback
   }
 
   // 分类值模糊归一化(模型输出 "sick"/"疑似水霉病"/" DISEASE" 等变体均可识别)
+  return normalizeAnalysisRaw(raw)
+}
+
+/** 将原始 JSON 对象归一化为合法 AnalysisResult(白名单枚举/类型/多余键) */
+function normalizeAnalysisRaw(raw: Record<string, unknown>): AnalysisResult {
   const cls = normalizeCls(raw.cls)
   const severity = raw.severity === 'low' || raw.severity === 'medium' || raw.severity === 'high' || raw.severity === 'critical'
     ? raw.severity

@@ -15,6 +15,7 @@ import { getFeishuToken, getFeishuUserName, uploadImageToFeishu, uploadBufferToF
 import { type Scene } from '../router/intent-router.js'
 import { formatPoolIds, getValidPoolIds, getUserNameByOpenId } from '../config/aqua-settings.js'
 import { resolveAttachmentBuffers, type AttachmentRefInput } from './attachment-store.js'
+import { canRecordLedger, type DataCompleteness } from '../policy/analysis-policy.js'
 
 /** 台账场景 = S1-S8 中所有落表场景(排除 S3 知识询问) */
 export type LedgerScene = Exclude<Scene, 'knowledge'>
@@ -503,23 +504,11 @@ async function buildFields(scene: LedgerScene, args: LedgerArgs, poolId: string,
   const advice = args.advice as { diagnosis_summary?: string; immediate_actions?: string[]; knowledge_refs?: string[]; alert_level?: string } | undefined
   const fields: Record<string, unknown> = {}
 
-  // inspection 场景:analysis 缺失或 cls 为 unknown 时拒绝落表(避免将未分析记录伪装成健康记录)
+  // inspection 场景:落表前置校验(委托策略层)
   if (scene === 'inspection') {
-    if (!analysis || analysis.cls === 'unknown') {
-      throw new Error('inspection 场景缺少有效 AI 分析结果(analysis.cls 为 unknown 或未提供),无法写入台账。请先调用 aquasense_analyze 获取分析结果。')
-    }
-
-    // 防漏诊:图片数据不完整时,禁止将 normal 结论写入台账
-    // 场景:工人发了 N 张图,harness 丢了 M 张,视觉模型只看到 N-M 张就判定 normal
-    // 此时 normal 结论不可靠——丢失的图可能包含病灶(已有实际案例:5 张图丢了 4 张,实际为 disease)
-    const dataComplete = analysis.data_completeness
-    if (dataComplete === 'partial' || dataComplete === 'empty') {
-      const received = analysis.image_count ?? 0
-      const expected = analysis.expected_image_count ?? '?'
-      throw new Error(
-        `图片数据不完整(获取 ${received}/${expected} 张),无法给出可靠的诊断结论。` +
-        `当前基于部分图片的分析结果不可作为落表依据。请等待图片补全或人工现场复核后再落表。`
-      )
+    const guard = canRecordLedger(analysis, analysis?.data_completeness as DataCompleteness | undefined)
+    if (!guard.allowed) {
+      throw new Error(guard.reason!)
     }
   }
 
