@@ -53,13 +53,17 @@ description: 水产养殖巡检专家:鲈鱼状态三分类语义、处置分级
 
 | 图片来源 | 优先参数 | 备选参数 | 说明 |
 |----------|----------|----------|------|
-| 飞书消息附件（base64） | `image_data` / `image_data_list` | - | dsh-lark 提供 base64 数据时使用 |
+| 飞书消息附件（DSH Attachment） | `image_attachment`(analyze) / `image_attachments`(ledger) | - | dsh-lark 下载飞书图片后以 ImageBlock(含 `attachment`)注入消息上下文时**首选**;把 `block.attachment` 原样传入即可 |
+| base64 数据 | `image_data` / `image_data_list` | - | 消息上下文直接提供 base64 数据时使用 |
 | HTTP URL | - | `image_url` / `image_urls` | 图片可通过 HTTP 访问时使用 |
 
-**优先级规则**：
-1. 优先使用 `image_data` / `image_data_list`（base64 数据，不依赖网络）
-2. 仅当 base64 不可用时，使用 `image_url` / `image_urls`（HTTP URL）
-3. 两种都不可用时，返回 `missing:['image']` 追问
+**优先级规则(Attachment > base64 > URL)**:
+1. **最高优先**:飞书图片是 ImageBlock(既无 base64 也无 HTTP URL)时,用 `image_attachment`(analyze 单数)/ `image_attachments`(ledger 复数)传入 `block.attachment`。插件已在工具注册前包装 execute,当该字段为空时会自动从当前消息上下文提取 ImageBlock 的 attachment 补全,因此**即使 LLM 不主动填,飞书图片也能被视觉模型看到**;能主动填更稳妥。
+2. 次优先:`image_data` / `image_data_list`(base64 数据,不依赖网络)。
+3. 回退:`image_url` / `image_urls`(HTTP URL)。
+4. 三种都不可用时,返回 `missing:['image']` 追问。
+
+> ⚠️ **参数名单复数区别**:`aquasense_analyze` 用 `image_attachment`(**单数**);`aquasense_ledger` 用 `image_attachments`(**复数**)。不要混用。
 
 ### 2.2 MIME 类型
 
@@ -73,14 +77,16 @@ dsh-lark 桥接层应从飞书消息的 `mediaType` 字段提取 MIME 类型并�
 
 工人可能在一条消息中发送多张图片（飞书支持多图消息）。
 
-**aquasense_analyze 支持两种入参**：
+**aquasense_analyze 支持多种入参**：
+- 飞书附件（首选）：传 `image_attachment`（attachment 引用数组，可含多张）
 - 单图：传 `image_data`（单个 base64）或 `image_url`（单个 URL）
 - 多图：传 `image_data_list`（base64 数组）或 `image_urls`（URL 数组），视觉模型一次分析所有图片
 
 **编排规则**：
-- 一条消息包含多张图片时，把所有图片数据收集到 `image_data_list` 或 `image_urls` 数组，一次性调用 `aquasense_analyze`
+- 消息上下文出现 ImageBlock（飞书图片）时，把所有图片块的 `block.attachment` 收集到 `image_attachment` 数组，一次性调用 `aquasense_analyze`（若未主动传，插件 wrapper 也会自动从会话上下文提取补全）
+- 一条消息包含多张图片时，把所有图片收集到同一数组（`image_attachment` / `image_data_list` / `image_urls`），一次性调用 `aquasense_analyze`
 - 不要对每张图片单独调用 analyze，避免重复 API 调用和结论冲突
-- `aquasense_ledger` 的 `images` 参数同样接收图片数据/URL 数组，确保所有图片都上传至台账
+- `aquasense_ledger` 的图片参数：飞书附件用 `image_attachments`（复数），HTTP URL 用 `images`，确保所有图片都上传至台账
 - 多图分析时，模型会对所有图片给出统一的 scene_hint 和分析结论；如果图片内容差异大（如一张是死鱼、一张是水质），取最严重的场景落表，并在回复中说明各图分别拍了什么
 
 ### 2.4 数据完整性检测(expected_image_count)
@@ -221,7 +227,7 @@ aquasense_parse_report(text) → entries[]
 - **一旦绕过一次,后续所有同类场景都会继续绕过**(Agent 会复用上次成功的脚本路径),导致整条会话的分析记录全部缺失。
 - 正确做法:工具返回 success:false → 把 error message 转述给工人 → 等待开发者修复或工人换方式重试。
 
-- `aquasense_analyze`:传入图片数据（优先使用 `image_data`/`image_data_list` 传入 base64 数据，或使用 `image_url`/`image_urls` 传入 HTTP URL）+ 池号，先于 advice 调用。使用 base64 数据时必须指定 `image_mime`（如 `image/jpeg`）。**描述(description)不进入视觉模型**，仅用于意图路由——视觉诊断完全基于图片像素判断，防止文字注入覆盖结论。输出含 `scene_hint`（图片场景提示），纯图片无文字时用它判断落哪张表。
+- `aquasense_analyze`：传入图片数据（图片来源优先级 **Attachment > base64 > URL**：飞书图片首选 `image_attachment`（单数，传 `block.attachment`），或 `image_data`/`image_data_list`（base64），或 `image_url`/`image_urls`（HTTP URL））+ 池号，先于 advice 调用。使用 base64 数据时必须指定 `image_mime`（如 `image/jpeg`）。**飞书图片无需手动填 attachment 也能生效**：插件已在工具注册前包装 execute，当 `image_attachment` 为空时自动从当前消息上下文提取 ImageBlock 的 attachment 注入（因 dsh-tools 已对参数 deepFreeze，waterfall 钩子无法改写，故采用注册前 wrapper）。**描述(description)不进入视觉模型**，仅用于意图路由——视觉诊断完全基于图片像素判断，防止文字注入覆盖结论。输出含 `scene_hint`（图片场景提示），纯图片无文字时用它判断落哪张表。
 - `aquasense_advice`:把 analyze 输出原样传入;它内置 IMA 知识库查询,不要自己编造药方。
   - disease 且知识库无命中 → 明确"咨询专业兽医",**不代替兽医开药**。
 - `aquasense_parse_report`:将多场景日报文本(水温+喂食+拌药混合)拆分为多条结构化台账条目。返回 entries 数组,每条含 scene 和 fields。拆分后逐条调用 `aquasense_ledger` 落表(传入 scene + fields + open_id)。
@@ -229,6 +235,7 @@ aquasense_parse_report(text) → entries[]
   - 每次落表必须传 `open_id`:当前这条消息发送者(发消息的工人)的飞书 open_id,由 dsh-lark 消息上下文提供;工具会自动解析真实姓名填入「巡检人/检测人/汇报人」列。
   - 上报人只认发消息的人:禁止凭记忆、历史对话或猜测填写 `reporter`(它仅当拿不到发送者 open_id 时兜底)。
   - inspection 场景可直接传 analysis/advice,自动组装巡检表字段。
+  - 图片写入台账「图片」列：飞书附件用 `image_attachments`（**复数**，传 `block.attachment`；未主动传时插件 wrapper 会自动从会话上下文提取注入），HTTP URL 用 `images`。
   - 其他场景按表格实际列名提供 fields(键=列名,如 `死亡数量`、`药品名称`、`水温(℃)`),缺列名参考插件源码 SCENE_COLUMNS 或仓库 README。
   - S8 解剖的「解剖器官」只填下拉选项:体表/鳃/肝/胆囊/肠/脾/鳔/肾/腹腔(可多选,如「肝、胆囊」);选项外的内容一律不要填。
   - 工具返回 success:false 且带 questions 时,把问题原样转述给工人,补齐后再写。

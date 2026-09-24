@@ -37,7 +37,7 @@ import { installAquaSettingsWeb } from './web/aqua-settings-gateway.js'
 import { wrapLedgerWithTrace } from './web/trace-ledger-wrap.js'
 import { installSessionTraceBridge } from './web/session-trace-bridge.js'
 import { setAttachmentStore } from './tools/attachment-store.js'
-import { attachmentInjectPreExecute } from './tools/attachment-inject.js'
+import { withAttachmentInject } from './tools/attachment-inject.js'
 
 export const name = 'aquasense-plugin'
 export const inject = ['tools']
@@ -49,24 +49,23 @@ export function apply(ctx: Context) {
   // ctx.get() 不需要 inject 声明,宿主未挂载 dsh-attachment 时安全返回 undefined
   setAttachmentStore(ctx.get('attachments'))
 
-  // 图片附件自动注入:拦截 aquasense_analyze 的 tools/pre-execute,
-  // 当 Agent 未传 image_attachment 时从会话上下文中自动提取填入
-  // (解决 LLM 看到 [image] 但不知道 attachmentId 导致图片参数为空的问题)
-  ctx.effect(() => {
-    const host = ctx as unknown as { on?: (name: string, cb: (...args: unknown[]) => unknown) => (() => void) }
-    if (typeof host.on !== 'function') return () => {}
-    const off = host.on('tools/pre-execute', attachmentInjectPreExecute as (...args: unknown[]) => unknown)
-    console.log('[aquasense] 图片附件自动注入已注册(tools/pre-execute)')
-    return () => { off() }
-  }, 'aquasense-attachment-inject')
-
   // 注册 4 个业务工具
-  ctx.tools.register(analyzeImage)
+  //
+  // 图片附件自动注入(wrapper 模式):飞书图片以 ImageBlock(含 attachment)进入会话上下文,
+  // 但 LLM 不知道 attachmentId,调用工具时不会填 image_attachment(s),导致视觉模型看不到图片。
+  // 注入点必须在 ctx.tools.register 之前包装工具定义:dsh-tools 在触发 tools/pre-execute
+  // 之前已对 arguments 做 deepFreeze(且契约禁止改写 arguments),故 waterfall 钩子无法注入;
+  // withAttachmentInject 在 execute 内构造新的参数对象(含注入字段),绝不改写冻结的原始 args。
+  //  - analyzeImage 用 image_attachment(单数,与 analyze-image.ts 参数名一致)
+  //  - ledger 工具用 image_attachments(复数,与 record-ledger.ts 参数名一致)
+  ctx.tools.register(withAttachmentInject(analyzeImage, 'image_attachment'))
   ctx.tools.register(generateAdvice)
-  // 台账工具经 R8 trace 包装:写入成功后自动后置收集简化分析记录(群聊场景)
-  ctx.tools.register(wrapLedgerWithTrace(recordLedger))
+  // 台账工具经 R8 trace 包装:写入成功后自动后置收集简化分析记录(群聊场景);
+  // 再套 attachment 注入 wrapper(最外层),使注入后的 image_attachments 透传进 recordLedger
+  ctx.tools.register(withAttachmentInject(wrapLedgerWithTrace(recordLedger), 'image_attachments'))
   // 多场景日报文本拆分:将混合文本(水温+喂食+拌药)拆分为多条台账记录
   ctx.tools.register(parseReport)
+  console.log('[aquasense] 图片附件自动注入已启用(wrapper 模式:analyze=image_attachment, ledger=image_attachments)')
 
   // S9 每日任务提醒(插件内调度,enabled=false 时内部直接跳过)
   setupS9Reminder(ctx)
